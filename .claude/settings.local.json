@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(cargo --version)",
+      "PowerShell(rustc --version)",
+      "PowerShell(Test-Path \"$env:USERPROFILE\\\\.cargo\\\\bin\\\\cargo.exe\"; Get-Command rustup -ErrorAction SilentlyContinue | Select-Object Source; winget --version)",
+      "PowerShell($env:Path += \";$env:USERPROFILE\\\\.cargo\\\\bin\"; & \"$env:USERPROFILE\\\\.cargo\\\\bin\\\\rustup.exe\" default stable 2>&1 | Select-Object -Last 5; & \"$env:USERPROFILE\\\\.cargo\\\\bin\\\\cargo.exe\" --version)",
+      "PowerShell(Set-Location D:\\\\dev\\\\puppy-home; $p = Start-Process -FilePath \".\\\\target\\\\debug\\\\puppy-home.exe\" -PassThru; Start-Sleep -Seconds 4; $alive = Get-Process -Id $p.Id -ErrorAction SilentlyContinue; if \\($alive\\) { \"RUNNING pid=$\\($p.Id\\) title='$\\($alive.MainWindowTitle\\)'\" } else { \"EXITED early \\(exit code $\\($p.ExitCode\\)\\)\" })",
+      "WebFetch(domain:github.com)",
+      "Bash(ls messaging/)",
+      "Bash(ls agents/)",
+      "Bash(ls -la \"D:\\\\dev\\\\code_puppy\\\\\")",
+      "Bash(grep \"\\\\.py$\")",
+      "Bash(grep -E \"agent_.*\\\\.py$\")",
+      "Bash(grep -E \"\\\\.py$\")",
+      "Bash(uv sync *)",
+      "Bash(/d/dev/code_puppy/.venv/Scripts/python.exe sidecar/sidecar.py)",
+      "Bash(echo \"---exit $?---\")",
+      "Bash(/d/dev/code_puppy/.venv/Scripts/python.exe sidecar/_drive_test.py)",
+      "Bash(/d/dev/code_puppy/.venv/Scripts/python.exe sidecar/_cmd_test.py)",
+      "Bash(/d/dev/code_puppy/.venv/Scripts/python.exe sidecar/_comp_test.py)"
+    ]
+  }
+}

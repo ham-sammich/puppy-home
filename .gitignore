@@ -1,0 +1,4 @@
+/target
+# scratch artifacts from dev/screenshot verification
+/_*.png
+/_*.log
