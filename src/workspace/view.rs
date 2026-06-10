@@ -111,6 +111,7 @@ impl Workspace {
             };
 
             let mut open_file: Option<PathBuf> = None;
+            let mut to_delete: Option<PathBuf> = None;
             let mut click_diff: Option<usize> = None;
             let mut click_git: Option<(String, char)> = None;
             let mut do_refresh = false;
@@ -201,7 +202,7 @@ impl Workspace {
                         .auto_shrink([false, false])
                         .id_salt(("tree-scroll", id))
                         .show(ui, |ui| {
-                            render_dir(ui, &self.root, &markers, &mut clicked);
+                            render_dir(ui, &self.root, &markers, &mut clicked, &mut to_delete);
                         });
                     if let Some(path) = clicked {
                         open_file = Some(path);
@@ -213,6 +214,10 @@ impl Workspace {
             }
             if let Some(path) = open_file {
                 self.open_editor_file(path);
+            }
+            if let Some(path) = to_delete {
+                self.pending_delete = Some(path);
+                self.delete_error = None;
             }
             if let Some(i) = click_diff {
                 self.load_diff_index(i);
@@ -264,6 +269,9 @@ impl Workspace {
         }
 
         // Interactive question modal floats above everything for this workspace.
+        if self.pending_delete.is_some() {
+            self.render_delete_modal(ui.ctx());
+        }
         if self.pending_ask.is_some() {
             self.render_ask_modal(ui.ctx());
         }

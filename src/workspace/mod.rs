@@ -143,6 +143,10 @@ pub struct Workspace {
     editor_side: crate::workspace::state::EditorSide,
     /// Last CDP endpoint written to `.puppy/browser.json` (avoids rewriting).
     browser_cdp_written: Option<String>,
+    /// A file/folder pending delete confirmation (from the tree context menu).
+    pending_delete: Option<PathBuf>,
+    /// Error from the most recent delete attempt (shown in the confirm modal).
+    delete_error: Option<String>,
     // Git view (Source Control page + commit/blame tabs)
     git_view: Option<GitView>,
     /// All-branches commits for the graph view (newest first, with parents/refs).
@@ -238,6 +242,8 @@ impl Workspace {
             editor_active: 0,
             editor_side: crate::workspace::state::EditorSide::default(),
             browser_cdp_written: None,
+            pending_delete: None,
+            delete_error: None,
             git_view: None,
             git_graph_commits: Vec::new(),
             git_show_graph: true,

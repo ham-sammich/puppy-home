@@ -75,6 +75,88 @@ impl Workspace {
         }
     }
 
+    /// Confirm + perform a delete requested from the file-tree context menu.
+    pub(crate) fn render_delete_modal(&mut self, ctx: &egui::Context) {
+        let Some(path) = self.pending_delete.clone() else {
+            return;
+        };
+        let is_dir = path.is_dir();
+        let name = path
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string_lossy().into_owned());
+
+        // 0 = nothing, 1 = delete, 2 = cancel.
+        let mut action = 0u8;
+        egui::Window::new("Delete")
+            .id(egui::Id::new(("delete-modal", self.id.0)))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_max_width(420.0);
+                if is_dir {
+                    ui.label(format!(
+                        "Delete the folder \u{201c}{name}\u{201d} and everything inside it?"
+                    ));
+                } else {
+                    ui.label(format!("Delete \u{201c}{name}\u{201d}?"));
+                }
+                ui.colored_label(ui.visuals().warn_fg_color, "This can't be undone.");
+                if let Some(err) = &self.delete_error {
+                    ui.colored_label(ui.visuals().error_fg_color, err);
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        action = 2;
+                    }
+                    let btn = egui::Button::new(egui::RichText::new("Delete").strong())
+                        .fill(egui::Color32::from_rgb(170, 60, 60));
+                    if ui.add(btn).clicked() {
+                        action = 1;
+                    }
+                });
+            });
+
+        match action {
+            1 => match self.delete_path(&path, is_dir) {
+                Ok(()) => {
+                    self.pending_delete = None;
+                    self.delete_error = None;
+                }
+                Err(e) => self.delete_error = Some(e),
+            },
+            2 => {
+                self.pending_delete = None;
+                self.delete_error = None;
+            }
+            _ => {}
+        }
+    }
+
+    /// Remove a file/folder from disk and close any editor tabs/buffers for it.
+    fn delete_path(&mut self, path: &Path, is_dir: bool) -> Result<(), String> {
+        if is_dir {
+            std::fs::remove_dir_all(path).map_err(|e| e.to_string())?;
+        } else {
+            std::fs::remove_file(path).map_err(|e| e.to_string())?;
+        }
+        // Forget any open buffers / editor tabs for the path (or its children).
+        self.open_files
+            .retain(|p, _| !(p == path || p.starts_with(path)));
+        self.editor_open.retain(|it| match it {
+            EditorItem::File(p) => !(p == path || p.starts_with(path)),
+            _ => true,
+        });
+        if self.editor_active >= self.editor_open.len() {
+            self.editor_active = self.editor_open.len().saturating_sub(1);
+        }
+        // Nudge the git/tree state to refresh now that the tree changed.
+        self.git_refresh_at = std::time::Instant::now();
+        Ok(())
+    }
+
     pub(crate) fn focus_or_open(&mut self, item: EditorItem) {
         match self.editor_open.iter().position(|t| *t == item) {
             Some(i) => self.editor_active = i,

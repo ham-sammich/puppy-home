@@ -113,6 +113,7 @@ pub(crate) fn render_dir(
     dir: &Path,
     markers: &HashMap<PathBuf, char>,
     clicked: &mut Option<PathBuf>,
+    to_delete: &mut Option<PathBuf>,
 ) {
     let Ok(read) = std::fs::read_dir(dir) else {
         return;
@@ -140,9 +141,20 @@ pub(crate) fn render_dir(
 
     for (is_dir, path, name) in entries {
         if is_dir {
-            egui::CollapsingHeader::new(format!("📁 {name}"))
+            let header = egui::CollapsingHeader::new(format!("📁 {name}"))
                 .id_salt(&path)
-                .show(ui, |ui| render_dir(ui, &path, markers, clicked));
+                .show(ui, |ui| render_dir(ui, &path, markers, clicked, to_delete));
+            header.header_response.context_menu(|ui| {
+                if ui.button("Copy path").clicked() {
+                    ui.ctx().copy_text(path.to_string_lossy().into_owned());
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Delete folder").clicked() {
+                    *to_delete = Some(path.clone());
+                    ui.close();
+                }
+            });
         } else {
             let marker = markers.get(&path).copied();
             let resp = ui
@@ -157,8 +169,23 @@ pub(crate) fn render_dir(
                 })
                 .inner;
             if resp.clicked() {
-                *clicked = Some(path);
+                *clicked = Some(path.clone());
             }
+            resp.context_menu(|ui| {
+                if ui.button("Open").clicked() {
+                    *clicked = Some(path.clone());
+                    ui.close();
+                }
+                if ui.button("Copy path").clicked() {
+                    ui.ctx().copy_text(path.to_string_lossy().into_owned());
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Delete").clicked() {
+                    *to_delete = Some(path.clone());
+                    ui.close();
+                }
+            });
         }
     }
 }
