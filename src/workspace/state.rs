@@ -98,6 +98,8 @@ pub(crate) struct PendingRename {
     pub(crate) path: PathBuf,
     pub(crate) name: String,
     pub(crate) error: Option<String>,
+    /// One-shot: focus the name field the first frame the modal shows.
+    pub(crate) focus: bool,
 }
 
 /// A pending "new file/folder" inside `parent`, edited in a modal.
@@ -106,6 +108,8 @@ pub(crate) struct PendingNew {
     pub(crate) is_dir: bool,
     pub(crate) name: String,
     pub(crate) error: Option<String>,
+    /// One-shot: focus the name field the first frame the modal shows.
+    pub(crate) focus: bool,
 }
 
 /// Where the editor area (files / git / browser) sits relative to the chat.

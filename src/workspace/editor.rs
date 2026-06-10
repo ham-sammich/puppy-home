@@ -167,6 +167,7 @@ impl Workspace {
             path,
             name,
             error: None,
+            focus: true,
         });
     }
 
@@ -177,6 +178,7 @@ impl Workspace {
             is_dir,
             name: String::new(),
             error: None,
+            focus: true,
         });
     }
 
@@ -195,6 +197,10 @@ impl Workspace {
                 ui.set_max_width(420.0);
                 ui.label("New name:");
                 let resp = ui.text_edit_singleline(&mut state.name);
+                if state.focus {
+                    resp.request_focus();
+                    state.focus = false;
+                }
                 if let Some(err) = &state.error {
                     ui.colored_label(ui.visuals().error_fg_color, err);
                 }
@@ -241,6 +247,10 @@ impl Workspace {
                 ui.set_max_width(420.0);
                 ui.label(format!("New {kind} name:"));
                 let resp = ui.text_edit_singleline(&mut state.name);
+                if state.focus {
+                    resp.request_focus();
+                    state.focus = false;
+                }
                 if let Some(err) = &state.error {
                     ui.colored_label(ui.visuals().error_fg_color, err);
                 }

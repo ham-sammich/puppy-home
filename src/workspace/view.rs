@@ -191,19 +191,32 @@ impl Workspace {
                                 });
                         });
 
-                    // File tree fills the remaining (top) space.
+                    // File tree fills the remaining (top) space. Header carries
+                    // explicit New-file/folder buttons (right-click menus on the
+                    // folders below work too, but buttons are discoverable).
                     ui.add_space(4.0);
-                    ui.label(egui::RichText::new(format!("🗂 {}", self.name)).strong())
-                        .context_menu(|ui| {
-                            if ui.button("New file").clicked() {
-                                acts.new_in = Some((self.root.clone(), false));
-                                ui.close();
-                            }
-                            if ui.button("New folder").clicked() {
-                                acts.new_in = Some((self.root.clone(), true));
-                                ui.close();
-                            }
-                        });
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("🗂 {}", self.name)).strong());
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                if ui
+                                    .small_button("+ Folder")
+                                    .on_hover_text("New folder in the project root")
+                                    .clicked()
+                                {
+                                    acts.new_in = Some((self.root.clone(), true));
+                                }
+                                if ui
+                                    .small_button("+ File")
+                                    .on_hover_text("New file in the project root")
+                                    .clicked()
+                                {
+                                    acts.new_in = Some((self.root.clone(), false));
+                                }
+                            },
+                        );
+                    });
                     ui.separator();
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
