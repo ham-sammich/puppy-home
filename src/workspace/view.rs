@@ -659,8 +659,12 @@ impl Workspace {
                     let _ = std::fs::write(&gi, "*\n");
                 }
             }
+            // Ready-made CDP helper path (JSON-escape Windows backslashes).
+            let helper = crate::browser::ensure_cdp_helper()
+                .map(|p| p.display().to_string().replace('\\', "\\\\"))
+                .unwrap_or_default();
             let body = format!(
-                "{{\n  \"cdp\": \"{cdp}\",\n  \"url\": \"{url}\",\n  \"hint\": \"Chrome DevTools Protocol. GET {cdp}/json/list for targets and webSocketDebuggerUrl, then drive CDP over that websocket.\"\n}}\n"
+                "{{\n  \"cdp\": \"{cdp}\",\n  \"url\": \"{url}\",\n  \"helper\": \"{helper}\",\n  \"hint\": \"Run the helper to inspect the page: python <helper> {cdp} console|eval|screenshot. Or drive CDP directly: GET {cdp}/json/list for webSocketDebuggerUrl.\"\n}}\n"
             );
             if std::fs::write(dir.join("browser.json"), body).is_ok() {
                 self.browser_cdp_written = Some(cdp.to_string());

@@ -23,6 +23,28 @@ use host::BrowserHost;
 /// The plugin id this manager drives.
 const BROWSER_PLUGIN_ID: &str = "browser";
 
+/// A dependency-free CDP client, embedded so we can hand Code Puppy a ready
+/// tool instead of it writing one into the user's project.
+const CDP_HELPER_PY: &str = include_str!("../../sidecar/cdp_helper.py");
+
+/// Materialize the CDP helper into app-data (never the project) and return its
+/// path. Rewritten only when the embedded content changes.
+pub fn ensure_cdp_helper() -> Option<std::path::PathBuf> {
+    let dir = std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("puppy-home");
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join("cdp.py");
+    let stale = std::fs::read_to_string(&path)
+        .map(|c| c != CDP_HELPER_PY)
+        .unwrap_or(true);
+    if stale {
+        std::fs::write(&path, CDP_HELPER_PY).ok()?;
+    }
+    Some(path)
+}
+
 /// Identifies one open browser tab.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BrowserId(pub u64);

@@ -887,17 +887,33 @@ class Bridge:
             if not cdp:
                 return ""
             url = data.get("url", "")
+            helper = data.get("helper", "")
             where = f" showing {url}" if url else ""
-            return (
-                f"[context] The in-app browser is open{where}. Its Chrome DevTools "
-                f"Protocol endpoint is {cdp}. If I ask about the page \u2014 its "
-                "console, errors, network, DOM, or to run JavaScript in it \u2014 "
-                f"attach over CDP: GET {cdp}/json/list for a target's "
-                "webSocketDebuggerUrl, connect that websocket, and issue CDP methods "
-                "(Runtime.evaluate, Log.enable, Runtime.consoleAPICalled, "
-                "Page.captureScreenshot, Network.*). Use your shell/python tools. "
-                "Ignore this note if my request is unrelated to the browser."
+            note = f"[context] The in-app browser is open{where}. CDP endpoint: {cdp}. "
+            if helper:
+                note += (
+                    "A ready-made, dependency-free CDP helper is already on disk at "
+                    f'"{helper}". RUN IT \u2014 do NOT write your own script into the '
+                    "project. "
+                    f'`python "{helper}" {cdp} console` dumps recent console '
+                    "logs/errors; "
+                    f'`python "{helper}" {cdp} eval "<js>"` runs JavaScript in the '
+                    "page; "
+                    f'`python "{helper}" {cdp} screenshot <out.png>` grabs a shot. '
+                )
+            else:
+                note += (
+                    "To inspect it, attach over CDP: GET "
+                    f"{cdp}/json/list for a target's webSocketDebuggerUrl, connect that "
+                    "websocket, and issue CDP methods (Runtime.evaluate, Log.enable, "
+                    "Page.captureScreenshot). "
+                )
+            note += (
+                "Do NOT create files in my project for this (use the helper, or a temp "
+                "dir you clean up). Ignore this note if my request is unrelated to the "
+                "browser."
             )
+            return note
         except Exception:
             return ""
 
