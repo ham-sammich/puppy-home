@@ -1,0 +1,428 @@
+//! The chat tab shell: top bar, file tree + changes sidebar, editor-area tab
+//! bar, transcript body, bottom menu bar, and the embedded terminal.
+
+use std::path::PathBuf;
+use std::time::Instant;
+
+use eframe::egui;
+
+use super::Workspace;
+use super::diff::{file_name, marker_color};
+use super::render::{render_dir, render_entry};
+use super::state::EditorItem;
+
+impl Workspace {
+    pub fn render_chat(&mut self, ui: &mut egui::Ui) {
+        let id = self.id.0;
+        self.poll_git(ui.ctx());
+
+        let mut open_git = false;
+        egui::Panel::top(egui::Id::new(("ws-top", id))).show_inside(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.toggle_value(&mut self.show_tree, "🗂 Tree")
+                    .on_hover_text("Toggle the file tree");
+                if self.git_repo
+                    && ui
+                        .button("🌿 Git")
+                        .on_hover_text("Source control")
+                        .clicked()
+                {
+                    open_git = true;
+                }
+                ui.separator();
+                self.render_puppy_name(ui);
+                ui.separator();
+                ui.label(egui::RichText::new(&self.status_line).weak());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.toggle_value(&mut self.show_logs, "logs");
+                    if self.running {
+                        if self.paused {
+                            ui.colored_label(egui::Color32::from_rgb(220, 190, 110), "⏸ paused");
+                        } else {
+                            ui.spinner();
+                        }
+                    }
+                });
+            });
+        });
+
+        if open_git {
+            self.show_git();
+        }
+
+        // File tree sidebar (toggleable) — explorer (top) + Changes (bottom).
+        if self.show_tree {
+            let markers = self.tree_markers();
+            // Snapshot the change list so the closures don't borrow self.
+            let git_repo = self.git_repo;
+            let git_list: Vec<(String, char)> = if git_repo {
+                self.git_changes
+                    .iter()
+                    .map(|c| (c.path.clone(), c.marker))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let diff_list = if git_repo {
+                Vec::new()
+            } else {
+                self.diff_changed_files()
+            };
+            let count = if git_repo {
+                git_list.len()
+            } else {
+                diff_list.len()
+            };
+
+            let mut open_file: Option<PathBuf> = None;
+            let mut click_diff: Option<usize> = None;
+            let mut click_git: Option<(String, char)> = None;
+            let mut do_refresh = false;
+
+            egui::Panel::left(egui::Id::new(("ws-tree", id)))
+                .resizable(true)
+                .default_size(240.0)
+                .show_inside(ui, |ui| {
+                    // Source-control style Changes panel, pinned to the bottom.
+                    egui::Panel::bottom(egui::Id::new(("ws-changes", id)))
+                        .resizable(true)
+                        .default_size(160.0)
+                        .show_inside(ui, |ui| {
+                            ui.add_space(2.0);
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("Changes ({count})")).strong(),
+                                );
+                                if git_repo {
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui
+                                                .small_button("⟳")
+                                                .on_hover_text("Refresh")
+                                                .clicked()
+                                            {
+                                                do_refresh = true;
+                                            }
+                                        },
+                                    );
+                                }
+                            });
+                            ui.separator();
+                            egui::ScrollArea::vertical()
+                                .auto_shrink([false, false])
+                                .id_salt(("changes-scroll", id))
+                                .show(ui, |ui| {
+                                    if count == 0 {
+                                        ui.weak(if git_repo {
+                                            "Working tree clean."
+                                        } else {
+                                            "No changes yet."
+                                        });
+                                    }
+                                    if git_repo {
+                                        for (path, marker) in &git_list {
+                                            ui.horizontal(|ui| {
+                                                ui.colored_label(
+                                                    marker_color(*marker),
+                                                    marker.to_string(),
+                                                );
+                                                if ui
+                                                    .selectable_label(false, file_name(path))
+                                                    .on_hover_text(path)
+                                                    .clicked()
+                                                {
+                                                    click_git = Some((path.clone(), *marker));
+                                                }
+                                            });
+                                        }
+                                    } else {
+                                        for (idx, path, marker) in &diff_list {
+                                            ui.horizontal(|ui| {
+                                                ui.colored_label(
+                                                    marker_color(*marker),
+                                                    marker.to_string(),
+                                                );
+                                                if ui
+                                                    .selectable_label(false, file_name(path))
+                                                    .on_hover_text(path)
+                                                    .clicked()
+                                                {
+                                                    click_diff = Some(*idx);
+                                                }
+                                            });
+                                        }
+                                    }
+                                });
+                        });
+
+                    // File tree fills the remaining (top) space.
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(format!("🗂 {}", self.name)).strong());
+                    ui.separator();
+                    let mut clicked: Option<PathBuf> = None;
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .id_salt(("tree-scroll", id))
+                        .show(ui, |ui| {
+                            render_dir(ui, &self.root, &markers, &mut clicked);
+                        });
+                    if let Some(path) = clicked {
+                        open_file = Some(path);
+                    }
+                });
+
+            if do_refresh {
+                self.git_refresh_at = Instant::now();
+            }
+            if let Some(path) = open_file {
+                self.open_editor_file(path);
+            }
+            if let Some(i) = click_diff {
+                self.load_diff_index(i);
+            }
+            if let Some((path, marker)) = click_git {
+                self.load_git_diff(&path, marker);
+            }
+        }
+
+        // Layout: with files/changes open, the editor fills the top and the
+        // chat is pushed into a resizable bottom panel (IDE style). With nothing
+        // open, the chat fills the whole area.
+        if self.editor_open.is_empty() {
+            self.render_chat_body(ui);
+        } else {
+            egui::Panel::bottom(egui::Id::new(("ws-chat", id)))
+                .resizable(true)
+                .default_size(280.0)
+                .show_inside(ui, |ui| {
+                    self.render_chat_body(ui);
+                });
+            self.render_editor_area(ui);
+        }
+
+        // Interactive question modal floats above everything for this workspace.
+        if self.pending_ask.is_some() {
+            self.render_ask_modal(ui.ctx());
+        }
+        if self.show_sessions {
+            self.render_sessions_modal(ui.ctx());
+        }
+    }
+
+    /// The chat region: transcript (scrolling) with the composer pinned to the
+    /// bottom and the optional logs panel above it.
+    pub(crate) fn render_chat_body(&mut self, ui: &mut egui::Ui) {
+        let id = self.id.0;
+
+        // Bottom-pinned controls: the chat composer (chat mode only) plus the
+        // always-visible bottom menu bar (terminal toggle + agent + model).
+        egui::Panel::bottom(egui::Id::new(("ws-composer", id))).show_inside(ui, |ui| {
+            ui.add_space(4.0);
+            if !self.show_terminal {
+                if self.pending.is_some() {
+                    self.render_pending(ui);
+                } else {
+                    self.render_composer(ui);
+                }
+                ui.add_space(2.0);
+            }
+            self.render_bottom_bar(ui);
+            ui.add_space(4.0);
+        });
+
+        if self.show_logs {
+            egui::Panel::bottom(egui::Id::new(("ws-logs", id)))
+                .resizable(true)
+                .default_size(120.0)
+                .show_inside(ui, |ui| {
+                    ui.label(egui::RichText::new("sidecar logs").weak());
+                    egui::ScrollArea::vertical()
+                        .stick_to_bottom(true)
+                        .auto_shrink([false, false])
+                        .id_salt(("ws-logs-scroll", id))
+                        .show(ui, |ui| {
+                            for line in &self.logs {
+                                ui.label(egui::RichText::new(line).monospace().small());
+                            }
+                        });
+                });
+        }
+
+        // Main area: the embedded terminal, or the chat transcript.
+        if self.show_terminal {
+            self.render_terminal(ui);
+        } else {
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .stick_to_bottom(true)
+                .id_salt(("ws-transcript", id))
+                .show(ui, |ui| {
+                    if self.transcript_collapsed > 0 {
+                        ui.weak(format!(
+                            "{} earlier message(s) trimmed to keep the UI responsive.",
+                            self.transcript_collapsed
+                        ));
+                    }
+                    if self.transcript.is_empty() {
+                        ui.weak(format!(
+                            "Ask {} to build, edit, or explain code.",
+                            self.puppy_name
+                        ));
+                    }
+                    // Namespace each entry's widget ids (commonmark tables use a
+                    // Grid) so repeated/duplicate content doesn't clash.
+                    for (i, entry) in self.transcript.iter().enumerate() {
+                        ui.push_id(("entry", i), |ui| {
+                            render_entry(ui, entry, &mut self.md_cache, &self.puppy_name);
+                        });
+                    }
+                });
+        }
+    }
+
+    /// The editor area: a tab bar of open files / Changes, then the active one.
+    pub(crate) fn render_editor_area(&mut self, ui: &mut egui::Ui) {
+        let id = self.id.0;
+        let mut switch_to: Option<usize> = None;
+        let mut close: Option<usize> = None;
+
+        egui::Panel::top(egui::Id::new(("ws-editortabs", id))).show_inside(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (i, item) in self.editor_open.iter().enumerate() {
+                    let selected = i == self.editor_active;
+                    let label = match item {
+                        EditorItem::Changes => "📝 Changes".to_string(),
+                        EditorItem::Git => "🌿 Git".to_string(),
+                        EditorItem::Commit { short, .. } => format!("⎇ {short}"),
+                        EditorItem::File(p) => {
+                            let dirty = self.open_files.get(p).map(|b| b.dirty).unwrap_or(false);
+                            let name = p
+                                .file_name()
+                                .map(|s| s.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| p.to_string_lossy().into_owned());
+                            format!("{}{name}", if dirty { "● " } else { "" })
+                        }
+                    };
+                    ui.scope(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        if ui.selectable_label(selected, label).clicked() {
+                            switch_to = Some(i);
+                        }
+                        if ui.small_button("✕").clicked() {
+                            close = Some(i);
+                        }
+                        ui.separator();
+                    });
+                }
+            });
+        });
+
+        if let Some(i) = switch_to {
+            self.editor_active = i;
+        }
+        if let Some(i) = close {
+            self.close_editor(i);
+        }
+
+        if let Some(item) = self.editor_open.get(self.editor_active).cloned() {
+            match item {
+                EditorItem::Changes => self.render_diffs(ui),
+                EditorItem::File(p) => self.render_file(ui, &p),
+                EditorItem::Git => self.render_git(ui),
+                EditorItem::Commit { hash, .. } => self.render_commit(ui, &hash),
+            }
+        }
+    }
+
+    /// The bottom menu bar (always shown): terminal toggle + agent + model.
+    pub(crate) fn render_bottom_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            let term_live = self.terminal.as_ref().map(|t| t.alive).unwrap_or(false);
+            let label = if self.show_terminal {
+                "🖥 Terminal ▾"
+            } else {
+                "🖥 Terminal"
+            };
+            let resp = ui
+                .selectable_label(self.show_terminal, label)
+                .on_hover_text("Toggle an embedded shell in the chat area");
+            if resp.clicked() {
+                self.show_terminal = !self.show_terminal;
+                if self.show_terminal && self.terminal.is_none() {
+                    self.spawn_terminal(ui.ctx().clone());
+                }
+            }
+            if self.show_terminal && !term_live && self.terminal.is_some() {
+                ui.colored_label(egui::Color32::from_gray(150), "(exited)");
+            }
+            if ui
+                .selectable_label(self.show_sessions, "🗂 Sessions")
+                .on_hover_text("Browse & resume saved Code Puppy conversations")
+                .clicked()
+            {
+                self.show_sessions = !self.show_sessions;
+                if self.show_sessions
+                    && let Some(backend) = &self.backend
+                {
+                    backend.list_sessions();
+                }
+            }
+            ui.separator();
+            self.render_agent_picker(ui);
+            self.render_model_picker(ui);
+        });
+    }
+
+    /// Lazily spawn (or respawn) the workspace shell.
+    pub(crate) fn spawn_terminal(&mut self, ctx: egui::Context) {
+        match crate::terminal::Terminal::spawn(&self.root, ctx) {
+            Ok(t) => self.terminal = Some(t),
+            Err(e) => self.status_line = format!("Couldn't start terminal: {e}"),
+        }
+    }
+
+    /// The embedded PTY terminal: a thin status bar + the live cell grid.
+    pub(crate) fn render_terminal(&mut self, ui: &mut egui::Ui) {
+        let id = self.id.0;
+        let mut do_restart = false;
+        egui::Panel::top(egui::Id::new(("ws-term-bar", id))).show_inside(ui, |ui| {
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                let alive = self.terminal.as_ref().map(|t| t.alive).unwrap_or(false);
+                ui.label(egui::RichText::new("🖥 terminal").weak().small());
+                if alive {
+                    ui.label(
+                        egui::RichText::new("click to focus · Ctrl+C interrupts")
+                            .weak()
+                            .small(),
+                    );
+                } else if self.terminal.is_some() {
+                    ui.colored_label(egui::Color32::from_gray(160), "shell exited");
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button("⟳")
+                        .on_hover_text("Restart the shell")
+                        .clicked()
+                    {
+                        do_restart = true;
+                    }
+                });
+            });
+            ui.add_space(2.0);
+        });
+
+        if do_restart {
+            self.spawn_terminal(ui.ctx().clone());
+        }
+
+        if let Some(term) = self.terminal.as_mut() {
+            term.ui(ui);
+        } else {
+            ui.centered_and_justified(|ui| {
+                ui.weak("starting shell…");
+            });
+        }
+    }
+}

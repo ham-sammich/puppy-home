@@ -1,4 +1,4 @@
-# puppy-home!adsf
+# puppy-home
 
 A native **windowed** AI agent application written in Rust — an IDE-like shell
 around **Code Puppy**
@@ -110,6 +110,16 @@ Code Puppy's commands work natively, so CLI users feel at home:
 - **Commands ▾ menu** (top bar) — the full categorized catalog for browsing;
   picking one drops it into the composer.
 
+Commands work identically whether typed (`/help`) or picked from the menu (the menu
+just drops arg-taking commands into the composer for you). `/resume` (and
+`/autosave_load`) open the **Sessions** browser instead of a terminal-only picker.
+
+## Your puppy
+
+You interact with **your own puppy, which has a name** (Code Puppy's global
+`puppy_name`). The chat shows it everywhere — `🐶 <name>:` on replies, the composer
+hint, and a **🐶 <name>** button in the toolbar you can click to **rename** it.
+
 **Agent** and **model** have native dropdowns in each chat's toolbar (no need
 for the terminal-only `/agent` / `/model` pickers). The **Commands** menu is
 "smart": arg-less commands run on click; commands that need input are dropped
@@ -133,16 +143,32 @@ in the composer.
 Each workspace tab is a small IDE:
 
 ```
-┌ toolbar: 🗂 Tree · 🌿 Git · Agent ▾ · Model ▾ · status · logs ┐
+┌ toolbar: 🗂 Tree · 🌿 Git · status · logs ┐
 ├──────────┬──────────────────────────────────────────────────────────────────┤
 │  🗂 file  │  [main.rs ✕] [Cargo.toml ✕] [📝 Changes]      ← editor tabs        │
 │   tree   │  path · 💾 Save                                                    │
 │  (left,  │  …editable code / colored diff…                ← editor (top)      │
 │ toggle)  ├──────────────────────────────────────────────────────────────────┤
 │          │  …chat transcript…                             ← chat (bottom,     │
-│          │  Message Code Puppy…                    [Send]    resizable)       │
+│          │  ⌘ Commands ▾  Message Code Puppy…       [Send]    resizable)       │
+│          │  🖥 Terminal · 🐶 Agent ▾ · Model ▾             ← bottom menu bar   │
+│          │  (terminal on = a full PTY grid fills the chat area)               │
 └──────────┴──────────────────────────────────────────────────────────────────┘
 ```
+
+The **🖥 Terminal** toggle (bottom bar) swaps the chat area for a **full
+pseudo-terminal** — a real `powershell` (or `$SHELL`) on a PTY (ConPTY on
+Windows) rooted at the workspace folder. Output runs through a `vt100` screen
+parser and is drawn as a real cell grid, so **colors, cursor movement, and
+curses-style TUIs (vim, top, htop) work**. Click to focus and type straight into
+it (Ctrl+C interrupts, arrows/Tab/etc. are forwarded); mouse-wheel scrolls
+back through history; **⟳** restarts it; it auto-resizes to the panel. The shell
+is `powershell` on Windows and `$SHELL` (zsh/bash) on macOS/Linux — override with
+`PUPPY_HOME_SHELL`.
+
+> **Cross-platform:** puppy-home targets Windows, macOS, and Linux. The terminal
+> uses a native PTY (ConPTY / openpty) and the UI loads per-OS system fonts at
+> runtime, so nothing is hard-coded to one platform.
 
 - **🗂 Tree** (toggleable) lists the workspace folder; noisy dirs
   (`target`/`.git`/`node_modules`/…) are hidden, folders lazy-expand. Changed
@@ -196,9 +222,11 @@ with **syntax highlighting**.
 - [x] **Git view** — a Source Control page (toolbar **🌿 Git**, in a git
       workspace): current branch + ahead/behind, a commit box, staged vs unstaged
       lists with per-file and bulk stage/unstage, **Commit**, and a clickable
-      history (each commit opens its patch). Plus **🔍 Blame** in the file editor
-      (per-line commit/author/date). Backed by [`src/git.rs`](src/git.rs)
-      shell-outs; working-tree status + diffs already drive the Changes panel.
+      history (each commit opens its patch). Plus a **🔍 Blame** toggle that
+      annotates the file you're viewing in place — each line gets its commit /
+      author / date in a gutter, syntax-highlighted and read-only, toggled back
+      off to edit. Backed by [`src/git.rs`](src/git.rs) shell-outs; working-tree
+      status + diffs already drive the Changes panel.
 - [x] **Dashboard: tokens & sub-agent rows** (via a `status` op) — while a turn
       runs the GUI polls a `status` op (~every 1.2 s) and the dashboard shows the
       token-generation rate, conversation stats (avg TTFT / throughput, on hover),
@@ -213,5 +241,16 @@ with **syntax highlighting**.
       model call (even between tool calls), *queue* lands after the current turn.
       Drives Code Puppy's own `PauseController` + steer history-processor.
 - [ ] Color emoji (image-based, e.g. egui-twemoji) instead of monochrome.
-- [ ] Persist/restore workspaces & sessions.
+- [x] **Persist/restore workspaces & sessions** — the folders you have open (with
+      each one's agent, model, **and Code Puppy autosave session**) are saved to a
+      per-user `session.json` and reopened on the next launch, **resuming each
+      workspace's conversation** where you left off. (`PUPPY_HOME_OPEN` still
+      force-opens an extra folder for dev.)
+- [x] **Session browser** — a **🗂 Sessions** button (bottom bar; also `/resume`)
+      opens an interactive two-pane picker: a list of every saved Code Puppy
+      conversation (autosave + named contexts, with message/token counts) on the
+      left, and a **read-only preview of the selected session's conversation** on
+      the right. **Resume this** loads it into the current workspace (the agent
+      reloads that history; the transcript is reconstructed). Each workspace stays
+      tied to its autosave session, so new turns keep extending it across runs.
 ```

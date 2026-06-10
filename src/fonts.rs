@@ -30,47 +30,84 @@ fn load(fonts: &mut FontDefinitions, key: &str, path: &str) -> bool {
     }
 }
 
+/// Best-effort system font paths for symbols + CJK, per OS. Missing files are
+/// skipped, so any subset present still improves coverage. (`cfg!` keeps every
+/// branch compiling on every target.)
+fn system_font_candidates() -> Vec<&'static str> {
+    if cfg!(target_os = "windows") {
+        vec![
+            r"C:\Windows\Fonts\seguisym.ttf", // symbols
+            r"C:\Windows\Fonts\msyh.ttc",     // Simplified Chinese
+            r"C:\Windows\Fonts\YuGothR.ttc",  // Japanese
+            r"C:\Windows\Fonts\malgun.ttf",   // Korean
+        ]
+    } else if cfg!(target_os = "macos") {
+        vec![
+            "/System/Library/Fonts/Apple Symbols.ttf",
+            "/System/Library/Fonts/PingFang.ttc", // CJK (SC/TC/JP)
+            "/System/Library/Fonts/Hiragino Sans GB.ttc", // Chinese/Japanese
+            "/Library/Fonts/Arial Unicode.ttf",   // broad coverage if present
+        ]
+    } else {
+        // Linux/BSD: common Noto / DejaVu install locations across distros.
+        vec![
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        ]
+    }
+}
+
+/// A nicer primary proportional font to prefer over egui's default, if present.
+fn primary_font() -> Option<&'static str> {
+    if cfg!(target_os = "windows") {
+        Some(r"C:\Windows\Fonts\segoeui.ttf")
+    } else if cfg!(target_os = "macos") {
+        Some("/System/Library/Fonts/SFNS.ttf")
+    } else {
+        None // egui's bundled Latin font is fine on Linux
+    }
+}
+
 pub fn configure(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
 
     // Bundled full emoji (monochrome).
-    fonts
-        .font_data
-        .insert("noto-emoji".to_owned(), Arc::new(FontData::from_static(NOTO_EMOJI)));
+    fonts.font_data.insert(
+        "noto-emoji".to_owned(),
+        Arc::new(FontData::from_static(NOTO_EMOJI)),
+    );
 
-    // Windows system fonts (best-effort; `.ttc` collections load face 0).
-    let segoe = load(&mut fonts, "segoe-ui", r"C:\Windows\Fonts\segoeui.ttf");
-    let symbol = load(&mut fonts, "segoe-symbol", r"C:\Windows\Fonts\seguisym.ttf");
-    let zh = load(&mut fonts, "cjk-sc", r"C:\Windows\Fonts\msyh.ttc"); // Simplified Chinese
-    let ja = load(&mut fonts, "cjk-ja", r"C:\Windows\Fonts\YuGothR.ttc"); // Japanese
-    let ko = load(&mut fonts, "cjk-ko", r"C:\Windows\Fonts\malgun.ttf"); // Korean
+    // Load whatever system symbol/CJK fonts exist on this OS as fallbacks.
+    let mut fallback_keys: Vec<String> = Vec::new();
+    for (i, path) in system_font_candidates().into_iter().enumerate() {
+        let key = format!("sys-{i}");
+        if load(&mut fonts, &key, path) {
+            fallback_keys.push(key);
+        }
+    }
 
-    // Fallback order: primary text first, then emoji, symbols, and CJK so any
-    // glyph the earlier fonts lack still resolves.
-    let fallbacks = |fam: &mut Vec<String>| {
+    // Optional nicer primary Latin font for this OS.
+    let primary = primary_font().is_some_and(|p| load(&mut fonts, "primary", p));
+
+    // Fallback order: primary text first, then emoji, then system CJK/symbols.
+    let add_fallbacks = |fam: &mut Vec<String>| {
         fam.push("noto-emoji".to_owned());
-        if symbol {
-            fam.push("segoe-symbol".to_owned());
-        }
-        if ja {
-            fam.push("cjk-ja".to_owned());
-        }
-        if zh {
-            fam.push("cjk-sc".to_owned());
-        }
-        if ko {
-            fam.push("cjk-ko".to_owned());
+        for key in &fallback_keys {
+            fam.push(key.clone());
         }
     };
 
     if let Some(prop) = fonts.families.get_mut(&FontFamily::Proportional) {
-        if segoe {
-            prop.insert(0, "segoe-ui".to_owned());
+        if primary {
+            prop.insert(0, "primary".to_owned());
         }
-        fallbacks(prop);
+        add_fallbacks(prop);
     }
     if let Some(mono) = fonts.families.get_mut(&FontFamily::Monospace) {
-        fallbacks(mono);
+        add_fallbacks(mono);
     }
 
     ctx.set_fonts(fonts);

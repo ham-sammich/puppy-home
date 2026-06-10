@@ -67,9 +67,9 @@ impl Supervisor {
 
     /// True while any workspace is mid-turn (drives elapsed-timer repaints).
     pub fn any_busy(&self) -> bool {
-        self.workspaces.values().any(|w| {
-            !matches!(w.status, InstanceStatus::Idle | InstanceStatus::Dead)
-        })
+        self.workspaces
+            .values()
+            .any(|w| !matches!(w.status, InstanceStatus::Idle | InstanceStatus::Dead))
     }
 
     /// How many workspaces are blocked waiting for user input.

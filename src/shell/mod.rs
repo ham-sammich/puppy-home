@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 
 use eframe::egui;
-use egui_dock::widgets::tab_viewer::OnCloseResponse;
 use egui_dock::TabViewer;
+use egui_dock::widgets::tab_viewer::OnCloseResponse;
 
 use crate::supervisor::Supervisor;
 use crate::views;
@@ -19,6 +19,7 @@ pub enum Tab {
 
 /// Structural changes requested during rendering, applied after the dock draws.
 pub enum ShellAction {
+    #[allow(dead_code)] // reserved action (matched in app.rs); not yet emitted
     OpenFolder(PathBuf),
     Close(WorkspaceId),
     FocusChat(WorkspaceId),

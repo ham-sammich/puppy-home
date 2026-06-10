@@ -11,8 +11,10 @@ mod app;
 mod backend;
 mod fonts;
 mod git;
+mod session;
 mod shell;
 mod supervisor;
+mod terminal;
 mod views;
 mod workspace;
 

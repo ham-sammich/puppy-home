@@ -1,0 +1,538 @@
+//! A full pseudo-terminal scoped to a workspace folder.
+//!
+//! Spawns the platform shell on a real PTY (ConPTY on Windows, openpty on
+//! Unix), feeds its output through a `vt100` screen parser, and renders the
+//! resulting cell grid with egui's painter — so colors, cursor movement, and
+//! curses-style TUIs (vim, top, htop) work like a real terminal. Keyboard input
+//! is translated to terminal byte sequences and written back to the PTY.
+
+use std::io::{Read, Write};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+use eframe::egui;
+use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
+
+const SCROLLBACK: usize = 5000;
+const FONT_SIZE: f32 = 13.0;
+
+type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
+
+/// Does `haystack` contain the byte sequence `needle`?
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    needle.len() <= haystack.len() && haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+pub struct Terminal {
+    parser: Arc<Mutex<vt100::Parser>>,
+    writer: SharedWriter,
+    master: Box<dyn MasterPty + Send>,
+    // Keep the slave alive: on Windows it owns the ConPTY handle, so dropping it
+    // tears down the pseudo-console and the shell's output stops flowing.
+    _slave: Box<dyn portable_pty::SlavePty + Send>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+    rows: u16,
+    cols: u16,
+    scrollback: usize,
+    /// Grab keyboard focus the first time the grid is shown.
+    focus_pending: bool,
+    pub alive: bool,
+}
+
+/// `(exe, args)` for the shell. Overridable via `PUPPY_HOME_SHELL`.
+fn shell() -> (String, Vec<String>) {
+    if let Ok(custom) = std::env::var("PUPPY_HOME_SHELL") {
+        let mut parts = custom.split_whitespace();
+        if let Some(exe) = parts.next() {
+            return (exe.to_string(), parts.map(str::to_string).collect());
+        }
+    }
+    #[cfg(windows)]
+    {
+        ("powershell.exe".to_string(), vec!["-NoLogo".to_string()])
+    }
+    #[cfg(not(windows))]
+    {
+        let sh = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+        (sh, vec!["-i".to_string()])
+    }
+}
+
+impl Terminal {
+    /// Spawn a shell on a fresh PTY rooted at `cwd`. `ctx` wakes the UI on output.
+    pub fn spawn(cwd: &Path, ctx: egui::Context) -> Result<Self, String> {
+        let (rows, cols) = (24u16, 80u16);
+        let pty = native_pty_system();
+        let pair = pty
+            .openpty(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| e.to_string())?;
+
+        let (exe, args) = shell();
+        let mut cmd = CommandBuilder::new(&exe);
+        for a in &args {
+            cmd.arg(a);
+        }
+        cmd.cwd(cwd);
+        cmd.env("TERM", "xterm-256color");
+        let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+
+        let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+        let writer: SharedWriter = Arc::new(Mutex::new(
+            pair.master.take_writer().map_err(|e| e.to_string())?,
+        ));
+        let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, SCROLLBACK)));
+
+        {
+            let parser = parser.clone();
+            let writer = writer.clone();
+            thread::spawn(move || {
+                let mut buf = [0u8; 8192];
+                loop {
+                    match reader.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            let chunk = &buf[..n];
+                            // Process, then answer any terminal queries the program
+                            // sent. ConPTY's conhost BLOCKS on the cursor-position
+                            // report (ESC[6n) at startup — without a reply the shell
+                            // prompt never renders.
+                            let mut reply: Vec<u8> = Vec::new();
+                            if let Ok(mut p) = parser.lock() {
+                                p.process(chunk);
+                                if contains(chunk, b"\x1b[6n") {
+                                    let (r, c) = p.screen().cursor_position();
+                                    reply.extend_from_slice(
+                                        format!("\x1b[{};{}R", r + 1, c + 1).as_bytes(),
+                                    );
+                                }
+                            }
+                            if contains(chunk, b"\x1b[5n") {
+                                reply.extend_from_slice(b"\x1b[0n"); // status: OK
+                            }
+                            if contains(chunk, b"\x1b[c") || contains(chunk, b"\x1b[0c") {
+                                reply.extend_from_slice(b"\x1b[?1;2c"); // primary DA: VT100
+                            }
+                            if !reply.is_empty()
+                                && let Ok(mut w) = writer.lock()
+                            {
+                                let _ = w.write_all(&reply);
+                                let _ = w.flush();
+                            }
+                            ctx.request_repaint();
+                        }
+                    }
+                }
+            });
+        }
+
+        Ok(Self {
+            parser,
+            writer,
+            master: pair.master,
+            _slave: pair.slave,
+            child,
+            rows,
+            cols,
+            scrollback: 0,
+            focus_pending: true,
+            alive: true,
+        })
+    }
+
+    /// Detect process exit. Call once per frame.
+    pub fn pump(&mut self) {
+        if self.alive
+            && let Ok(Some(_)) = self.child.try_wait()
+        {
+            self.alive = false;
+        }
+    }
+
+    fn resize(&mut self, rows: u16, cols: u16) {
+        if rows == self.rows && cols == self.cols {
+            return;
+        }
+        self.rows = rows;
+        self.cols = cols;
+        let _ = self.master.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
+        if let Ok(mut p) = self.parser.lock() {
+            p.screen_mut().set_size(rows, cols);
+        }
+    }
+
+    fn write_bytes(&mut self, bytes: &[u8]) {
+        if !self.alive || bytes.is_empty() {
+            return;
+        }
+        match self.writer.lock() {
+            Ok(mut w) => {
+                if w.write_all(bytes).and_then(|()| w.flush()).is_err() {
+                    self.alive = false;
+                }
+            }
+            Err(_) => self.alive = false,
+        }
+    }
+
+    /// Render the terminal grid + handle keyboard/scroll. Fills `ui`.
+    pub fn ui(&mut self, ui: &mut egui::Ui) {
+        let font = egui::FontId::monospace(FONT_SIZE);
+        let (cell_w, cell_h) = ui.fonts_mut(|f| (f.glyph_width(&font, 'M'), f.row_height(&font)));
+        if cell_w <= 0.0 || cell_h <= 0.0 {
+            return;
+        }
+
+        let avail = ui.available_size();
+        let cols = ((avail.x / cell_w).floor() as u16).max(1);
+        let rows = ((avail.y / cell_h).floor() as u16).max(1);
+        self.resize(rows, cols);
+
+        // Reserve the area, then interact with a STABLE id so keyboard focus
+        // persists across frames (auto-generated painter ids can drift).
+        let (rect, _) = ui.allocate_exact_size(avail, egui::Sense::hover());
+        let term_id = ui.id().with("pty-grid");
+        let resp = ui.interact(rect, term_id, egui::Sense::click_and_drag());
+        let painter = ui.painter_at(rect);
+
+        if self.focus_pending {
+            resp.request_focus();
+            self.focus_pending = false;
+        }
+        if resp.clicked() {
+            resp.request_focus();
+        }
+        let focused = resp.has_focus();
+        if focused {
+            // Deliver Tab / arrows / Esc to the terminal instead of using them
+            // for egui focus navigation.
+            ui.memory_mut(|m| {
+                m.set_focus_lock_filter(
+                    term_id,
+                    egui::EventFilter {
+                        tab: true,
+                        horizontal_arrows: true,
+                        vertical_arrows: true,
+                        escape: true,
+                    },
+                );
+            });
+        }
+        let origin = rect.min;
+
+        let default_fg = egui::Color32::from_rgb(0xcc, 0xcc, 0xcc);
+        let default_bg = egui::Color32::from_rgb(0x1e, 0x1e, 0x24);
+
+        // Mouse-wheel scrollback (when hovered and not on the alternate screen).
+        if resp.hovered() {
+            let dy = ui.input(|i| i.smooth_scroll_delta.y);
+            if dy.abs() > 0.5 {
+                let delta = (dy / cell_h).round() as i32;
+                let new = (self.scrollback as i32 + delta).clamp(0, SCROLLBACK as i32) as usize;
+                if new != self.scrollback {
+                    self.scrollback = new;
+                    if let Ok(mut p) = self.parser.lock() {
+                        p.screen_mut().set_scrollback(self.scrollback);
+                    }
+                }
+            }
+        }
+
+        painter.rect_filled(resp.rect, 0.0, default_bg);
+
+        if let Ok(parser) = self.parser.lock() {
+            let screen = parser.screen();
+            for row in 0..rows {
+                for col in 0..cols {
+                    let Some(cell) = screen.cell(row, col) else {
+                        continue;
+                    };
+                    let mut fg = to_color(cell.fgcolor(), default_fg);
+                    let mut bg = to_color(cell.bgcolor(), default_bg);
+                    if cell.inverse() {
+                        std::mem::swap(&mut fg, &mut bg);
+                    }
+                    let x = origin.x + col as f32 * cell_w;
+                    let y = origin.y + row as f32 * cell_h;
+                    let rect =
+                        egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(cell_w, cell_h));
+                    if bg != default_bg {
+                        painter.rect_filled(rect, 0.0, bg);
+                    }
+                    let contents = cell.contents();
+                    if !contents.is_empty() && contents != " " {
+                        painter.text(rect.min, egui::Align2::LEFT_TOP, contents, font.clone(), fg);
+                    }
+                    if cell.underline() {
+                        painter.hline(x..=x + cell_w, y + cell_h - 1.0, egui::Stroke::new(1.0, fg));
+                    }
+                }
+            }
+
+            // Cursor (only when live on the most recent screen).
+            if self.scrollback == 0 && !screen.hide_cursor() {
+                let (cr, cc) = screen.cursor_position();
+                if cr < rows && cc < cols {
+                    let x = origin.x + cc as f32 * cell_w;
+                    let y = origin.y + cr as f32 * cell_h;
+                    let rect =
+                        egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(cell_w, cell_h));
+                    let cursor = egui::Color32::from_rgb(0xd0, 0xd0, 0x70);
+                    if focused {
+                        painter.rect_filled(rect, 0.0, cursor.gamma_multiply(0.55));
+                    } else {
+                        painter.rect_stroke(
+                            rect,
+                            0.0,
+                            egui::Stroke::new(1.0, cursor),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                }
+            }
+        }
+
+        if self.scrollback > 0 {
+            painter.text(
+                resp.rect.right_top() + egui::vec2(-6.0, 4.0),
+                egui::Align2::RIGHT_TOP,
+                format!("↑ {} (scroll to bottom to resume)", self.scrollback),
+                egui::FontId::proportional(11.0),
+                egui::Color32::from_rgb(0xd0, 0xc0, 0x60),
+            );
+        }
+
+        if focused {
+            painter.rect_stroke(
+                resp.rect,
+                0.0,
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(90, 90, 120)),
+                egui::StrokeKind::Inside,
+            );
+            let bytes = self.collect_input(ui);
+            if !bytes.is_empty() {
+                if self.scrollback != 0 {
+                    self.scrollback = 0;
+                    if let Ok(mut p) = self.parser.lock() {
+                        p.screen_mut().set_scrollback(0);
+                    }
+                }
+                self.write_bytes(&bytes);
+            }
+        }
+    }
+
+    /// Translate this frame's key/text events into terminal bytes.
+    fn collect_input(&self, ui: &mut egui::Ui) -> Vec<u8> {
+        let mut out = Vec::new();
+        ui.input(|i| {
+            for ev in &i.events {
+                match ev {
+                    egui::Event::Text(t) => out.extend_from_slice(t.as_bytes()),
+                    egui::Event::Paste(t) => out.extend_from_slice(t.as_bytes()),
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } => {
+                        if let Some(seq) = key_seq(*key, *modifiers) {
+                            out.extend_from_slice(&seq);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+        out
+    }
+}
+
+impl Drop for Terminal {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+    }
+}
+
+/// Map a key press (with modifiers) to a terminal input sequence, or `None` if
+/// it's an ordinary printable char already delivered via `Event::Text`.
+fn key_seq(key: egui::Key, mods: egui::Modifiers) -> Option<Vec<u8>> {
+    use egui::Key;
+    let seq: &[u8] = match key {
+        Key::Enter => b"\r",
+        Key::Backspace => b"\x7f",
+        Key::Tab => b"\t",
+        Key::Escape => b"\x1b",
+        Key::ArrowUp => b"\x1b[A",
+        Key::ArrowDown => b"\x1b[B",
+        Key::ArrowRight => b"\x1b[C",
+        Key::ArrowLeft => b"\x1b[D",
+        Key::Home => b"\x1b[H",
+        Key::End => b"\x1b[F",
+        Key::Delete => b"\x1b[3~",
+        Key::Insert => b"\x1b[2~",
+        Key::PageUp => b"\x1b[5~",
+        Key::PageDown => b"\x1b[6~",
+        _ => {
+            // Ctrl+<letter> → control byte (Ctrl+A = 0x01 … Ctrl+Z = 0x1a).
+            if mods.ctrl
+                && let Some(c) = letter(key)
+            {
+                return Some(vec![(c as u8) & 0x1f]);
+            }
+            return None;
+        }
+    };
+    Some(seq.to_vec())
+}
+
+/// The lowercase letter for an A–Z key, else `None`.
+fn letter(key: egui::Key) -> Option<char> {
+    use egui::Key::*;
+    Some(match key {
+        A => 'a',
+        B => 'b',
+        C => 'c',
+        D => 'd',
+        E => 'e',
+        F => 'f',
+        G => 'g',
+        H => 'h',
+        I => 'i',
+        J => 'j',
+        K => 'k',
+        L => 'l',
+        M => 'm',
+        N => 'n',
+        O => 'o',
+        P => 'p',
+        Q => 'q',
+        R => 'r',
+        S => 's',
+        T => 't',
+        U => 'u',
+        V => 'v',
+        W => 'w',
+        X => 'x',
+        Y => 'y',
+        Z => 'z',
+        _ => return None,
+    })
+}
+
+/// Convert a vt100 color to an egui color (256-color palette for indexed).
+fn to_color(c: vt100::Color, default: egui::Color32) -> egui::Color32 {
+    match c {
+        vt100::Color::Default => default,
+        vt100::Color::Rgb(r, g, b) => egui::Color32::from_rgb(r, g, b),
+        vt100::Color::Idx(i) => ansi_256(i),
+    }
+}
+
+fn ansi_256(i: u8) -> egui::Color32 {
+    use egui::Color32;
+    match i {
+        0 => Color32::from_rgb(0, 0, 0),
+        1 => Color32::from_rgb(205, 49, 49),
+        2 => Color32::from_rgb(13, 188, 121),
+        3 => Color32::from_rgb(229, 229, 16),
+        4 => Color32::from_rgb(36, 114, 200),
+        5 => Color32::from_rgb(188, 63, 188),
+        6 => Color32::from_rgb(17, 168, 205),
+        7 => Color32::from_rgb(229, 229, 229),
+        8 => Color32::from_rgb(102, 102, 102),
+        9 => Color32::from_rgb(241, 76, 76),
+        10 => Color32::from_rgb(35, 209, 139),
+        11 => Color32::from_rgb(245, 245, 67),
+        12 => Color32::from_rgb(59, 142, 234),
+        13 => Color32::from_rgb(214, 112, 214),
+        14 => Color32::from_rgb(41, 184, 219),
+        15 => Color32::from_rgb(255, 255, 255),
+        16..=231 => {
+            let i = i - 16;
+            let r = i / 36;
+            let g = (i % 36) / 6;
+            let b = i % 6;
+            let conv = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
+            Color32::from_rgb(conv(r), conv(g), conv(b))
+        }
+        232..=255 => {
+            let v = 8 + (i - 232) * 10;
+            Color32::from_rgb(v, v, v)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Key, Modifiers};
+
+    fn ctrl() -> Modifiers {
+        Modifiers {
+            ctrl: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn key_sequences() {
+        assert_eq!(
+            key_seq(Key::Enter, Modifiers::NONE).as_deref(),
+            Some(&b"\r"[..])
+        );
+        assert_eq!(
+            key_seq(Key::Backspace, Modifiers::NONE).as_deref(),
+            Some(&b"\x7f"[..])
+        );
+        assert_eq!(
+            key_seq(Key::ArrowUp, Modifiers::NONE).as_deref(),
+            Some(&b"\x1b[A"[..])
+        );
+        assert_eq!(
+            key_seq(Key::ArrowLeft, Modifiers::NONE).as_deref(),
+            Some(&b"\x1b[D"[..])
+        );
+        assert_eq!(
+            key_seq(Key::Home, Modifiers::NONE).as_deref(),
+            Some(&b"\x1b[H"[..])
+        );
+        // Ctrl+C → 0x03 (SIGINT), Ctrl+D → 0x04.
+        assert_eq!(key_seq(Key::C, ctrl()).as_deref(), Some(&[0x03u8][..]));
+        assert_eq!(key_seq(Key::D, ctrl()).as_deref(), Some(&[0x04u8][..]));
+        // Plain letters are delivered via Event::Text, not key_seq.
+        assert_eq!(key_seq(Key::A, Modifiers::NONE), None);
+    }
+
+    #[test]
+    fn ansi_palette() {
+        assert_eq!(ansi_256(1), egui::Color32::from_rgb(205, 49, 49)); // red
+        assert_eq!(ansi_256(16), egui::Color32::from_rgb(0, 0, 0)); // cube origin
+        assert_eq!(ansi_256(231), egui::Color32::from_rgb(255, 255, 255)); // cube max
+        assert_eq!(ansi_256(232), egui::Color32::from_rgb(8, 8, 8)); // grayscale start
+    }
+
+    #[test]
+    fn color_conversion() {
+        let def = egui::Color32::from_rgb(1, 2, 3);
+        assert_eq!(to_color(vt100::Color::Default, def), def);
+        assert_eq!(
+            to_color(vt100::Color::Rgb(10, 20, 30), def),
+            egui::Color32::from_rgb(10, 20, 30)
+        );
+        assert_eq!(
+            to_color(vt100::Color::Idx(1), def),
+            egui::Color32::from_rgb(205, 49, 49)
+        );
+    }
+}

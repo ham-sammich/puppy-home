@@ -123,17 +123,24 @@ pub fn head_info(root: &Path) -> RepoInfo {
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|_| "HEAD".to_string());
     // "<behind>\t<ahead>": left = upstream-only commits, right = HEAD-only.
-    let (upstream, behind, ahead) =
-        match run(root, &["rev-list", "--left-right", "--count", "@{u}...HEAD"]) {
-            Ok(s) => {
-                let mut it = s.split_whitespace();
-                let behind = it.next().and_then(|n| n.parse().ok()).unwrap_or(0);
-                let ahead = it.next().and_then(|n| n.parse().ok()).unwrap_or(0);
-                (true, behind, ahead)
-            }
-            Err(_) => (false, 0, 0),
-        };
-    RepoInfo { branch, upstream, ahead, behind }
+    let (upstream, behind, ahead) = match run(
+        root,
+        &["rev-list", "--left-right", "--count", "@{u}...HEAD"],
+    ) {
+        Ok(s) => {
+            let mut it = s.split_whitespace();
+            let behind = it.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+            let ahead = it.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+            (true, behind, ahead)
+        }
+        Err(_) => (false, 0, 0),
+    };
+    RepoInfo {
+        branch,
+        upstream,
+        ahead,
+        behind,
+    }
 }
 
 /// One commit in the history list.
@@ -231,7 +238,11 @@ pub fn status_full(root: &Path) -> Vec<GitStatusEntry> {
             .unwrap_or(rest)
             .trim_matches('"')
             .to_string();
-        entries.push(GitStatusEntry { path, index, worktree });
+        entries.push(GitStatusEntry {
+            path,
+            index,
+            worktree,
+        });
     }
     entries
 }

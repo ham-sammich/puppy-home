@@ -13,13 +13,15 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Mutex;
 
 use eframe::egui;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
+
+mod protocol;
 
 /// The sidecar source, embedded so the executable is self-contained.
 const SIDECAR_PY: &str = include_str!("../../sidecar/sidecar.py");
@@ -35,6 +37,7 @@ pub struct CommandInfo {
     #[serde(default)]
     pub category: String,
     #[serde(default)]
+    #[allow(dead_code)] // part of the wire contract; not yet surfaced in the UI
     pub aliases: Vec<String>,
 }
 
@@ -76,6 +79,30 @@ pub struct ModelInfo {
     pub description: String,
     #[serde(default)]
     pub current: bool,
+}
+
+/// A saved Code Puppy session (autosave conversation or named context).
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionInfo {
+    pub name: String,
+    #[serde(default)]
+    pub source: String, // "autosave" | "context"
+    #[serde(default)]
+    #[allow(dead_code)] // part of the wire contract; not yet surfaced in the UI
+    pub timestamp: String,
+    #[serde(default)]
+    pub messages: u64,
+    #[serde(default)]
+    pub tokens: u64,
+}
+
+/// One reconstructed transcript row from a loaded session.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionEntry {
+    #[serde(default)]
+    pub role: String, // "user" | "agent"
+    #[serde(default)]
+    pub text: String,
 }
 
 /// A concurrent sub-agent Code Puppy spawned via `invoke_agent` (dashboard row).
@@ -127,6 +154,7 @@ pub struct AskAnswer {
 /// A structured message forwarded from one of Code Puppy's messaging systems.
 #[derive(Debug, Clone)]
 pub struct BackendMessage {
+    #[allow(dead_code)] // which Code Puppy messaging system emitted this
     pub source: String,
     pub kind: String,
     pub category: String,
@@ -143,6 +171,9 @@ pub enum UiEvent {
         model: String,
         cp_version: String,
         cwd: String,
+        autosave: String,
+        puppy_name: String,
+        owner_name: String,
     },
     /// A streamed message from the agent (assistant text, tool output, etc.).
     Message(BackendMessage),
@@ -155,13 +186,28 @@ pub enum UiEvent {
     /// Completion candidates for a `request_completion` (correlated by `id`).
     Completions { id: u64, items: Vec<CompletionItem> },
     /// An interactive question — answer via `ask_response` / `ask_cancel`.
-    Ask { id: String, questions: Vec<AskQuestion> },
+    Ask {
+        id: String,
+        questions: Vec<AskQuestion>,
+    },
     /// A user turn finished; `output` is the agent's final response.
-    Result { id: u64, output: String },
+    Result {
+        #[allow(dead_code)] // correlation id; results apply to the active turn
+        id: u64,
+        output: String,
+    },
     /// A slash command finished (`handled` = whether the dispatcher claimed it).
-    CommandDone { id: u64, handled: bool },
+    CommandDone {
+        #[allow(dead_code)]
+        id: u64,
+        handled: bool,
+    },
     /// An error tied to a turn (`id`) or the bridge itself (`id = None`).
-    Error { id: Option<u64>, message: String },
+    Error {
+        #[allow(dead_code)]
+        id: Option<u64>,
+        message: String,
+    },
     /// Diagnostic log line (sidecar stderr or internal notices).
     Log(String),
     /// Live run metrics snapshot (answer to `request_status`).
@@ -172,6 +218,26 @@ pub enum UiEvent {
     },
     /// The running turn was paused (`true`) or resumed (`false`).
     Paused(bool),
+    /// The catalog of saved Code Puppy sessions (answer to `list_sessions`).
+    /// `open` requests the GUI to pop the picker (from `/resume`).
+    Sessions {
+        items: Vec<SessionInfo>,
+        current: String,
+        open: bool,
+    },
+    /// A session was loaded; `entries` is the reconstructed transcript.
+    SessionLoaded {
+        name: String,
+        messages: u64,
+        entries: Vec<SessionEntry>,
+    },
+    /// A read-only preview of a session's conversation (not loaded into the agent).
+    SessionPreview {
+        name: String,
+        #[allow(dead_code)]
+        messages: u64,
+        entries: Vec<SessionEntry>,
+    },
     /// The sidecar process exited.
     Exited { code: Option<i32> },
 }
@@ -189,6 +255,12 @@ enum Wire {
         cp_version: String,
         #[serde(default)]
         cwd: String,
+        #[serde(default)]
+        autosave: String,
+        #[serde(default)]
+        puppy_name: String,
+        #[serde(default)]
+        owner_name: String,
     },
     Message {
         #[serde(default)]
@@ -260,6 +332,30 @@ enum Wire {
         #[serde(default)]
         paused: bool,
     },
+    Sessions {
+        #[serde(default)]
+        items: Vec<SessionInfo>,
+        #[serde(default)]
+        current: String,
+        #[serde(default)]
+        open: bool,
+    },
+    SessionLoaded {
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        messages: u64,
+        #[serde(default)]
+        entries: Vec<SessionEntry>,
+    },
+    SessionPreview {
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        messages: u64,
+        #[serde(default)]
+        entries: Vec<SessionEntry>,
+    },
 }
 
 impl From<Wire> for UiEvent {
@@ -270,11 +366,17 @@ impl From<Wire> for UiEvent {
                 model,
                 cp_version,
                 cwd,
+                autosave,
+                puppy_name,
+                owner_name,
             } => UiEvent::Ready {
                 agent,
                 model,
                 cp_version,
                 cwd,
+                autosave,
+                puppy_name,
+                owner_name,
             },
             Wire::Message {
                 source,
@@ -298,12 +400,43 @@ impl From<Wire> for UiEvent {
             Wire::CommandDone { id, handled } => UiEvent::CommandDone { id, handled },
             Wire::Error { id, message } => UiEvent::Error { id, message },
             Wire::Log { text } => UiEvent::Log(text),
-            Wire::Status { stats, token_rate, sub_agents } => UiEvent::Status {
+            Wire::Status {
+                stats,
+                token_rate,
+                sub_agents,
+            } => UiEvent::Status {
                 stats,
                 token_rate,
                 sub_agents,
             },
             Wire::Paused { paused } => UiEvent::Paused(paused),
+            Wire::Sessions {
+                items,
+                current,
+                open,
+            } => UiEvent::Sessions {
+                items,
+                current,
+                open,
+            },
+            Wire::SessionLoaded {
+                name,
+                messages,
+                entries,
+            } => UiEvent::SessionLoaded {
+                name,
+                messages,
+                entries,
+            },
+            Wire::SessionPreview {
+                name,
+                messages,
+                entries,
+            } => UiEvent::SessionPreview {
+                name,
+                messages,
+                entries,
+            },
         }
     }
 }
@@ -370,125 +503,133 @@ impl CodePuppy {
     }
 
     /// Send a user turn. Returns the id used to correlate the eventual result.
-    pub fn send_prompt(&self, text: &str) -> u64 {
+    pub fn send_prompt(&self, text: &str, images: &[String]) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        self.write(json!({"op": "prompt", "id": id, "text": text}));
+        self.write(protocol::prompt(id, text, images));
         id
     }
 
     /// Cancel the currently running agent turn.
     pub fn cancel(&self) {
-        self.write(json!({"op": "cancel"}));
+        self.write(protocol::cancel());
     }
 
     /// Send a slash command (`/...`). Returns the correlation id.
     pub fn send_command(&self, text: &str) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        self.write(json!({"op": "command", "id": id, "text": text}));
+        self.write(protocol::command(id, text));
         id
     }
 
     /// Ask the sidecar to re-send the command catalog.
+    #[allow(dead_code)] // protocol op mirror; catalogs currently arrive on `ready`
     pub fn list_commands(&self) {
-        self.write(json!({"op": "list_commands"}));
+        self.write(protocol::list_commands());
     }
 
     /// Ask the sidecar to re-send the agent catalog.
+    #[allow(dead_code)] // protocol op mirror; catalogs currently arrive on `ready`
     pub fn list_agents(&self) {
-        self.write(json!({"op": "list_agents"}));
+        self.write(protocol::list_agents());
     }
 
     /// Ask the sidecar to re-send the model catalog.
+    #[allow(dead_code)] // protocol op mirror; catalogs currently arrive on `ready`
     pub fn list_models(&self) {
-        self.write(json!({"op": "list_models"}));
+        self.write(protocol::list_models());
     }
 
     /// Switch the active model (sidecar reloads the agent and re-announces).
     pub fn set_model(&self, name: &str) {
-        self.write(json!({"op": "set_model", "name": name}));
+        self.write(protocol::set_model(name));
     }
 
     /// Request a live run-metrics snapshot (answered by a `Status` event).
     pub fn request_status(&self) {
-        self.write(json!({"op": "status"}));
+        self.write(protocol::status());
+    }
+
+    /// Ask the sidecar for the catalog of saved sessions (`Sessions` event).
+    pub fn list_sessions(&self) {
+        self.write(protocol::list_sessions());
+    }
+
+    /// Load a saved session into the agent (`source` = "autosave" | "context").
+    pub fn load_session(&self, name: &str, source: &str) {
+        self.write(protocol::load_session(name, source));
+    }
+
+    /// Request a read-only preview of a session's conversation (`SessionPreview`).
+    pub fn preview_session(&self, name: &str, source: &str) {
+        self.write(protocol::preview_session(name, source));
+    }
+
+    /// Rename the puppy (global Code Puppy config); sidecar re-announces `Ready`.
+    pub fn set_puppy_name(&self, name: &str) {
+        self.write(protocol::set_puppy_name(name));
     }
 
     /// Pause the running turn at the next safe boundary.
     pub fn pause(&self) {
-        self.write(json!({"op": "pause"}));
+        self.write(protocol::pause());
     }
 
     /// Resume a paused turn.
     pub fn resume(&self) {
-        self.write(json!({"op": "resume"}));
+        self.write(protocol::resume());
     }
 
     /// Steer the running turn: `mode` is "now" (mid-turn) or "queue" (next turn).
     pub fn steer(&self, text: &str, mode: &str) {
-        self.write(json!({"op": "steer", "text": text, "mode": mode}));
+        self.write(protocol::steer(text, mode));
     }
 
     /// Request completions for `text` with the caret at char index `cursor`.
     /// Returns the correlation id (use it to ignore stale responses).
     pub fn request_completion(&self, text: &str, cursor: usize) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        self.write(json!({"op": "complete", "id": id, "text": text, "cursor": cursor}));
+        self.write(protocol::complete(id, text, cursor));
         id
     }
 
     /// Answer an interactive question (`Ask`).
     pub fn ask_response(&self, id: &str, answers: &[AskAnswer]) {
-        let answers = serde_json::to_value(answers).unwrap_or(Value::Array(vec![]));
-        self.write(json!({
-            "op": "ask_response", "id": id, "cancelled": false, "answers": answers,
-        }));
+        self.write(protocol::ask_response(id, answers));
     }
 
     /// Cancel an interactive question.
     pub fn ask_cancel(&self, id: &str) {
-        self.write(json!({"op": "ask_response", "id": id, "cancelled": true}));
+        self.write(protocol::ask_cancel(id));
     }
 
     pub fn respond_input(&self, prompt_id: &str, value: &str) {
-        self.write(json!({"op": "respond_input", "prompt_id": prompt_id, "value": value}));
+        self.write(protocol::respond_input(prompt_id, value));
     }
 
     pub fn respond_confirmation(&self, prompt_id: &str, confirmed: bool, feedback: Option<&str>) {
-        self.write(json!({
-            "op": "respond_confirmation",
-            "prompt_id": prompt_id,
-            "confirmed": confirmed,
-            "feedback": feedback,
-        }));
+        self.write(protocol::respond_confirmation(
+            prompt_id, confirmed, feedback,
+        ));
     }
 
     pub fn respond_selection(&self, prompt_id: &str, index: i64, value: &str) {
-        self.write(json!({
-            "op": "respond_selection",
-            "prompt_id": prompt_id,
-            "selected_index": index,
-            "selected_value": value,
-        }));
+        self.write(protocol::respond_selection(prompt_id, index, value));
     }
 
     pub fn set_agent(&self, name: &str) {
-        self.write(json!({"op": "set_agent", "name": name}));
+        self.write(protocol::set_agent(name));
     }
 }
 
 impl Drop for CodePuppy {
     fn drop(&mut self) {
-        self.write(json!({"op": "shutdown"}));
+        self.write(protocol::shutdown());
         // Don't block app shutdown on a hung child.
         let _ = self.child.kill();
     }
 }
 
-fn spawn_stdout_reader(
-    stdout: std::process::ChildStdout,
-    tx: Sender<UiEvent>,
-    ctx: egui::Context,
-) {
+fn spawn_stdout_reader(stdout: std::process::ChildStdout, tx: Sender<UiEvent>, ctx: egui::Context) {
     std::thread::Builder::new()
         .name("cp-stdout".into())
         .spawn(move || {
@@ -513,11 +654,7 @@ fn spawn_stdout_reader(
         .expect("spawn stdout reader");
 }
 
-fn spawn_stderr_reader(
-    stderr: std::process::ChildStderr,
-    tx: Sender<UiEvent>,
-    ctx: egui::Context,
-) {
+fn spawn_stderr_reader(stderr: std::process::ChildStderr, tx: Sender<UiEvent>, ctx: egui::Context) {
     std::thread::Builder::new()
         .name("cp-stderr".into())
         .spawn(move || {
@@ -585,9 +722,11 @@ fn resolve_launch(sidecar: &std::path::Path) -> Result<Command, String> {
         return Ok(cmd);
     }
 
-    Err("No Code Puppy environment found and `uv` is not installed. \
+    Err(
+        "No Code Puppy environment found and `uv` is not installed. \
          Install uv (https://docs.astral.sh/uv/) or set PUPPY_HOME_CP_CMD."
-        .to_string())
+            .to_string(),
+    )
 }
 
 /// Does `<python> -c "import code_puppy"` succeed?
@@ -612,4 +751,169 @@ fn program_exists(prog: &str) -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Mirror the stdout reader's decode path: JSON line -> Wire -> UiEvent.
+    fn decode(line: &str) -> UiEvent {
+        serde_json::from_str::<Wire>(line)
+            .map(UiEvent::from)
+            .unwrap_or_else(|e| panic!("decode failed: {e}: {line}"))
+    }
+
+    #[test]
+    fn ready_event_roundtrips() {
+        let ev = decode(
+            r#"{"event":"ready","agent":"code-puppy","model":"gpt","cp_version":"1.2","cwd":"/tmp","autosave":"auto_session_x","puppy_name":"Rufus","owner_name":"Jacob"}"#,
+        );
+        match ev {
+            UiEvent::Ready {
+                agent,
+                model,
+                puppy_name,
+                owner_name,
+                ..
+            } => {
+                assert_eq!(agent, "code-puppy");
+                assert_eq!(model, "gpt");
+                assert_eq!(puppy_name, "Rufus");
+                assert_eq!(owner_name, "Jacob");
+            }
+            other => panic!("expected Ready, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn message_event_carries_payload() {
+        let ev = decode(
+            r#"{"event":"message","source":"bus","kind":"DiffMessage","category":"tool_output","text":"edited","payload":{"path":"a.rs"}}"#,
+        );
+        match ev {
+            UiEvent::Message(m) => {
+                assert_eq!(m.kind, "DiffMessage");
+                assert_eq!(m.category, "tool_output");
+                assert_eq!(m.payload["path"], "a.rs");
+            }
+            other => panic!("expected Message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn result_event() {
+        match decode(r#"{"event":"result","id":7,"output":"done"}"#) {
+            UiEvent::Result { id, output } => {
+                assert_eq!(id, 7);
+                assert_eq!(output, "done");
+            }
+            other => panic!("expected Result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn error_event_allows_null_id() {
+        match decode(r#"{"event":"error","id":null,"message":"boom"}"#) {
+            UiEvent::Error { id, message } => {
+                assert_eq!(id, None);
+                assert_eq!(message, "boom");
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn paused_event() {
+        assert!(matches!(
+            decode(r#"{"event":"paused","paused":true}"#),
+            UiEvent::Paused(true)
+        ));
+    }
+
+    #[test]
+    fn status_event_with_sub_agents() {
+        let ev = decode(
+            r#"{"event":"status","stats":"3 msgs","token_rate":12.5,"sub_agents":[{"agent_name":"helper","status":"running"}]}"#,
+        );
+        match ev {
+            UiEvent::Status {
+                stats,
+                token_rate,
+                sub_agents,
+            } => {
+                assert_eq!(stats, "3 msgs");
+                assert!((token_rate - 12.5).abs() < f64::EPSILON);
+                assert_eq!(sub_agents.len(), 1);
+                assert_eq!(sub_agents[0].agent_name, "helper");
+            }
+            other => panic!("expected Status, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn completions_correlate_by_id() {
+        let ev = decode(
+            r#"{"event":"completions","id":42,"items":[{"text":"/help","display":"/help"}]}"#,
+        );
+        match ev {
+            UiEvent::Completions { id, items } => {
+                assert_eq!(id, 42);
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].text, "/help");
+            }
+            other => panic!("expected Completions, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sessions_event_defaults_optional_fields() {
+        let ev = decode(r#"{"event":"sessions","items":[{"name":"auto_session_1"}]}"#);
+        match ev {
+            UiEvent::Sessions {
+                items,
+                current,
+                open,
+            } => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].name, "auto_session_1");
+                assert_eq!(current, "");
+                assert!(!open);
+            }
+            other => panic!("expected Sessions, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ask_event_questions() {
+        let ev = decode(
+            r#"{"event":"ask","id":"q1","questions":[{"header":"Pick","question":"which?","options":[{"label":"A"},{"label":"B"}]}]}"#,
+        );
+        match ev {
+            UiEvent::Ask { id, questions } => {
+                assert_eq!(id, "q1");
+                assert_eq!(questions.len(), 1);
+                assert_eq!(questions[0].options.len(), 2);
+            }
+            other => panic!("expected Ask, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ask_answer_serializes_for_the_wire() {
+        let a = AskAnswer {
+            question_header: "Pick".into(),
+            selected_options: vec!["A".into()],
+            other_text: None,
+        };
+        let v = serde_json::to_value(&a).unwrap();
+        assert_eq!(v["question_header"], "Pick");
+        assert_eq!(v["selected_options"][0], "A");
+        assert!(v["other_text"].is_null());
+    }
+
+    #[test]
+    fn unknown_event_tag_fails_to_parse() {
+        assert!(serde_json::from_str::<Wire>(r#"{"event":"nonsense"}"#).is_err());
+    }
 }

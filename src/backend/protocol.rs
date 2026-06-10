@@ -1,0 +1,236 @@
+//! Pure builders for GUI -> sidecar protocol ops.
+//!
+//! Each function returns the JSON `Value` envelope for one op. Keeping the
+//! encoding separate from the transport ([`super::CodePuppy::write`]) means
+//! every op shape is unit-testable without spawning a process — this is the
+//! Rust side of the Rust<->Python protocol contract.
+
+use serde_json::{Value, json};
+
+use super::AskAnswer;
+
+pub(super) fn prompt(id: u64, text: &str, images: &[String]) -> Value {
+    let mut op = json!({ "op": "prompt", "id": id, "text": text });
+    // Only carry `images` when there are some, so plain text prompts stay tidy.
+    if !images.is_empty() {
+        op["images"] = json!(images);
+    }
+    op
+}
+
+pub(super) fn cancel() -> Value {
+    json!({ "op": "cancel" })
+}
+
+pub(super) fn command(id: u64, text: &str) -> Value {
+    json!({ "op": "command", "id": id, "text": text })
+}
+
+pub(super) fn list_commands() -> Value {
+    json!({ "op": "list_commands" })
+}
+
+pub(super) fn list_agents() -> Value {
+    json!({ "op": "list_agents" })
+}
+
+pub(super) fn list_models() -> Value {
+    json!({ "op": "list_models" })
+}
+
+pub(super) fn set_model(name: &str) -> Value {
+    json!({ "op": "set_model", "name": name })
+}
+
+pub(super) fn status() -> Value {
+    json!({ "op": "status" })
+}
+
+pub(super) fn list_sessions() -> Value {
+    json!({ "op": "list_sessions" })
+}
+
+pub(super) fn load_session(name: &str, source: &str) -> Value {
+    json!({ "op": "load_session", "name": name, "source": source })
+}
+
+pub(super) fn preview_session(name: &str, source: &str) -> Value {
+    json!({ "op": "preview_session", "name": name, "source": source })
+}
+
+pub(super) fn set_puppy_name(name: &str) -> Value {
+    json!({ "op": "set_puppy_name", "name": name })
+}
+
+pub(super) fn pause() -> Value {
+    json!({ "op": "pause" })
+}
+
+pub(super) fn resume() -> Value {
+    json!({ "op": "resume" })
+}
+
+pub(super) fn steer(text: &str, mode: &str) -> Value {
+    json!({ "op": "steer", "text": text, "mode": mode })
+}
+
+pub(super) fn complete(id: u64, text: &str, cursor: usize) -> Value {
+    json!({ "op": "complete", "id": id, "text": text, "cursor": cursor })
+}
+
+pub(super) fn ask_response(id: &str, answers: &[AskAnswer]) -> Value {
+    let answers = serde_json::to_value(answers).unwrap_or(Value::Array(vec![]));
+    json!({ "op": "ask_response", "id": id, "cancelled": false, "answers": answers })
+}
+
+pub(super) fn ask_cancel(id: &str) -> Value {
+    json!({ "op": "ask_response", "id": id, "cancelled": true })
+}
+
+pub(super) fn respond_input(prompt_id: &str, value: &str) -> Value {
+    json!({ "op": "respond_input", "prompt_id": prompt_id, "value": value })
+}
+
+pub(super) fn respond_confirmation(
+    prompt_id: &str,
+    confirmed: bool,
+    feedback: Option<&str>,
+) -> Value {
+    json!({
+        "op": "respond_confirmation",
+        "prompt_id": prompt_id,
+        "confirmed": confirmed,
+        "feedback": feedback,
+    })
+}
+
+pub(super) fn respond_selection(prompt_id: &str, index: i64, value: &str) -> Value {
+    json!({
+        "op": "respond_selection",
+        "prompt_id": prompt_id,
+        "selected_index": index,
+        "selected_value": value,
+    })
+}
+
+pub(super) fn set_agent(name: &str) -> Value {
+    json!({ "op": "set_agent", "name": name })
+}
+
+pub(super) fn shutdown() -> Value {
+    json!({ "op": "shutdown" })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_arg_ops() {
+        assert_eq!(cancel(), json!({"op": "cancel"}));
+        assert_eq!(list_commands(), json!({"op": "list_commands"}));
+        assert_eq!(list_agents(), json!({"op": "list_agents"}));
+        assert_eq!(list_models(), json!({"op": "list_models"}));
+        assert_eq!(status(), json!({"op": "status"}));
+        assert_eq!(list_sessions(), json!({"op": "list_sessions"}));
+        assert_eq!(pause(), json!({"op": "pause"}));
+        assert_eq!(resume(), json!({"op": "resume"}));
+        assert_eq!(shutdown(), json!({"op": "shutdown"}));
+    }
+
+    #[test]
+    fn turn_ops_carry_id_and_text() {
+        assert_eq!(
+            prompt(3, "hi", &[]),
+            json!({"op": "prompt", "id": 3, "text": "hi"})
+        );
+        let imgs = vec!["BASE64PNG".to_string()];
+        assert_eq!(
+            prompt(5, "look", &imgs),
+            json!({"op": "prompt", "id": 5, "text": "look", "images": ["BASE64PNG"]})
+        );
+        assert_eq!(
+            command(4, "/clear"),
+            json!({"op": "command", "id": 4, "text": "/clear"})
+        );
+        assert_eq!(
+            complete(7, "/re", 3),
+            json!({"op": "complete", "id": 7, "text": "/re", "cursor": 3})
+        );
+        assert_eq!(
+            steer("focus tests", "now"),
+            json!({"op": "steer", "text": "focus tests", "mode": "now"})
+        );
+    }
+
+    #[test]
+    fn config_ops() {
+        assert_eq!(set_model("gpt"), json!({"op": "set_model", "name": "gpt"}));
+        assert_eq!(
+            set_agent("code-puppy"),
+            json!({"op": "set_agent", "name": "code-puppy"})
+        );
+        assert_eq!(
+            set_puppy_name("Rufus"),
+            json!({"op": "set_puppy_name", "name": "Rufus"})
+        );
+    }
+
+    #[test]
+    fn session_ops() {
+        assert_eq!(
+            load_session("auto_session_1", "autosave"),
+            json!({"op": "load_session", "name": "auto_session_1", "source": "autosave"})
+        );
+        assert_eq!(
+            preview_session("ctx", "context"),
+            json!({"op": "preview_session", "name": "ctx", "source": "context"})
+        );
+    }
+
+    #[test]
+    fn ask_ops_use_one_op_with_cancelled_flag() {
+        let answers = [AskAnswer {
+            question_header: "Pick".into(),
+            selected_options: vec!["A".into()],
+            other_text: None,
+        }];
+        assert_eq!(
+            ask_response("q1", &answers),
+            json!({
+                "op": "ask_response",
+                "id": "q1",
+                "cancelled": false,
+                "answers": [{
+                    "question_header": "Pick",
+                    "selected_options": ["A"],
+                    "other_text": null
+                }]
+            })
+        );
+        assert_eq!(
+            ask_cancel("q1"),
+            json!({"op": "ask_response", "id": "q1", "cancelled": true})
+        );
+    }
+
+    #[test]
+    fn pending_response_ops() {
+        assert_eq!(
+            respond_input("p1", "yes"),
+            json!({"op": "respond_input", "prompt_id": "p1", "value": "yes"})
+        );
+        assert_eq!(
+            respond_confirmation("p2", true, None),
+            json!({"op": "respond_confirmation", "prompt_id": "p2", "confirmed": true, "feedback": null})
+        );
+        assert_eq!(
+            respond_confirmation("p2", false, Some("nope")),
+            json!({"op": "respond_confirmation", "prompt_id": "p2", "confirmed": false, "feedback": "nope"})
+        );
+        assert_eq!(
+            respond_selection("p3", 2, "blue"),
+            json!({"op": "respond_selection", "prompt_id": "p3", "selected_index": 2, "selected_value": "blue"})
+        );
+    }
+}

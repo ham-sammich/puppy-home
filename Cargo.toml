@@ -13,5 +13,14 @@ egui_extras = { version = "0.34", features = ["syntect"] }
 rfd = "0.17.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+# Full PTY terminal: a real pseudo-terminal (ConPTY on Windows) + a VT100/ANSI
+# screen parser so curses-style TUIs (vim, top), colors, and cursor control work.
+portable-pty = "0.9"
+vt100 = "0.16"
+# Clipboard image paste: read the OS clipboard image (egui only does text),
+# encode it to PNG, and base64 it for the sidecar's multimodal attachments.
+arboard = "3.4"
+png = "0.17"
+base64 = "0.22"
 # As we grow: tokio (async runtime), reqwest (HTTP), serde (config),
 # and an LLM client will go here.

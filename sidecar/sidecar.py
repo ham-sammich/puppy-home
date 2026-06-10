@@ -8,7 +8,7 @@ legacy MessageQueue) to the Rust GUI over a line-delimited JSON protocol.
 Protocol (newline-delimited JSON, UTF-8):
 
   Rust -> sidecar (stdin), one object per line:
-    {"op": "prompt",  "id": <int>, "text": "..."}   # a model turn
+    {"op": "prompt",  "id": <int>, "text": "...", "images": ["<b64 png>"]}  # a model turn (images optional)
     {"op": "cancel"}                                 # cancel the running turn
     {"op": "command", "id": <int>, "text": "/..."}  # a slash command
     {"op": "complete", "id": <int>, "text": "...", "cursor": <int>}  # caret at char index
@@ -43,6 +43,7 @@ redirected to stderr so it can never corrupt a JSON line.
 """
 
 import asyncio
+import base64
 import json
 import os
 import sys
@@ -144,6 +145,89 @@ def forward_legacy_message(message: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Streaming "thinking" capture
+# ---------------------------------------------------------------------------
+def _make_stream_console(on_thinking):
+    """A Rich-Console replacement set as Code Puppy's streaming console.
+
+    Code Puppy renders the live token stream (THINKING banner + dim reasoning,
+    then the AGENT RESPONSE) to this console. We suppress the terminal output and
+    forward just the reasoning text to the GUI so a watching user can read the
+    agent's thoughts and pause/steer. The final answer still arrives via `result`.
+    """
+    import io as _io
+
+    from rich.console import Console as _Console
+    from rich.text import Text as _Text
+
+    class _StreamConsole(_Console):
+        def __init__(self):
+            super().__init__(file=_io.StringIO(), force_terminal=False,
+                             color_system=None, width=120, soft_wrap=True)
+            self._mode = None  # None | "thinking" | "response"
+
+        def _plain(self, values):
+            out = []
+            for v in values:
+                try:
+                    if isinstance(v, str):
+                        out.append(_Text.from_markup(v).plain)
+                    elif isinstance(v, _Text):
+                        out.append(v.plain)
+                    else:
+                        out.append(getattr(v, "plain", None) or str(v))
+                except Exception:
+                    out.append(str(v))
+            return "".join(out)
+
+        def print(self, *values, **kwargs):  # noqa: A003
+            try:
+                text = self._plain(values)
+            except Exception:
+                return
+            s = text.strip()
+            if not s:
+                return
+            up = s.upper()
+            if len(s) < 48 and "THINKING" in up:
+                self._mode = "thinking"
+                return
+            if len(s) < 48 and "AGENT RESPONSE" in up:
+                self._mode = "response"
+                return
+            if self._mode == "thinking":
+                try:
+                    on_thinking(text)
+                except Exception:
+                    pass
+            # response text + everything else is suppressed (answer comes via result)
+
+    return _StreamConsole()
+
+
+def _decode_image_attachments(images):
+    """Decode base64 PNGs from the GUI into pydantic-ai BinaryContent parts.
+
+    Returns None when there are no (valid) images so callers fall back to a
+    plain text turn. Never raises - a bad attachment is logged and skipped.
+    """
+    if not images:
+        return None
+    try:
+        from pydantic_ai import BinaryContent
+    except Exception:
+        log("pydantic_ai.BinaryContent unavailable; dropping image attachments")
+        return None
+    out = []
+    for b64 in images:
+        try:
+            out.append(BinaryContent(data=base64.b64decode(b64), media_type="image/png"))
+        except Exception:
+            log("bad image attachment:\n" + traceback.format_exc())
+    return out or None
+
+
+# ---------------------------------------------------------------------------
 # Bridge
 # ---------------------------------------------------------------------------
 class Bridge:
@@ -196,6 +280,7 @@ class Bridge:
         self.agent = get_current_agent()
         self.build_completer()
         self.install_ask_connector()
+        self.install_stream_capture()
 
         self.emit_ready()
         self.emit_commands()
@@ -209,12 +294,28 @@ class Bridge:
             model = self.agent.get_model_name()
         except Exception:
             pass
+        autosave = ""
+        try:
+            from code_puppy.config import get_current_autosave_session_name
+            autosave = get_current_autosave_session_name()
+        except Exception:
+            pass
+        puppy_name, owner_name = "Puppy", "Master"
+        try:
+            from code_puppy.config import get_owner_name, get_puppy_name
+            puppy_name = get_puppy_name()
+            owner_name = get_owner_name()
+        except Exception:
+            pass
         send({
             "event": "ready",
             "agent": getattr(self.agent, "name", "code-puppy"),
             "model": model or "(unset)",
             "cp_version": self.cp_version,
             "cwd": os.getcwd(),
+            "autosave": autosave,
+            "puppy_name": puppy_name,
+            "owner_name": owner_name,
         })
 
     def emit_agents(self) -> None:
@@ -320,6 +421,140 @@ class Bridge:
             "token_rate": token_rate,
             "sub_agents": sub_agents,
         })
+
+    # --- Code Puppy sessions (autosave + named contexts) --------------------
+
+    def set_puppy_name(self, name: str) -> None:
+        """Rename the puppy (global Code Puppy config), then re-announce."""
+        name = (name or "").strip()
+        if not name:
+            return
+        try:
+            from code_puppy.config import set_config_value
+            set_config_value("puppy_name", name)
+        except Exception:
+            log("set_puppy_name failed:\n" + traceback.format_exc())
+            return
+        self.emit_ready()
+
+    def emit_sessions(self, open_picker: bool = False) -> None:
+        """List saved Code Puppy sessions (autosave + named contexts) + metadata."""
+        import json as _json
+        import pathlib
+        items = []
+        try:
+            from code_puppy.session_storage import list_sessions
+            from code_puppy.config import AUTOSAVE_DIR, CONTEXTS_DIR
+            sources = [("autosave", AUTOSAVE_DIR), ("context", CONTEXTS_DIR)]
+            for source, base in sources:
+                base_p = pathlib.Path(base)
+                for name in list_sessions(base_p):
+                    meta = {}
+                    try:
+                        meta = _json.loads(
+                            (base_p / f"{name}_meta.json").read_text(encoding="utf-8")
+                        )
+                    except Exception:
+                        pass
+                    items.append({
+                        "name": name,
+                        "source": source,
+                        "timestamp": meta.get("timestamp", ""),
+                        "messages": int(meta.get("message_count", 0) or 0),
+                        "tokens": int(meta.get("total_tokens", 0) or 0),
+                    })
+        except Exception:
+            log("session enumeration failed:\n" + traceback.format_exc())
+        items.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+        current = ""
+        try:
+            from code_puppy.config import get_current_autosave_session_name
+            current = get_current_autosave_session_name()
+        except Exception:
+            pass
+        send({"event": "sessions", "items": items, "current": current,
+              "open": bool(open_picker)})
+
+    def _history_to_entries(self, history) -> list:
+        """Flatten pydantic-ai message history into {role,text} transcript rows."""
+        out = []
+        for msg in history or []:
+            for part in getattr(msg, "parts", None) or []:
+                kind = type(part).__name__
+                content = getattr(part, "content", None)
+                if not isinstance(content, str) or not content.strip():
+                    continue
+                if kind == "UserPromptPart":
+                    out.append({"role": "user", "text": content})
+                elif kind == "TextPart":
+                    out.append({"role": "agent", "text": content})
+        return out
+
+    def preview_session(self, name: str, source: str) -> None:
+        """Read a saved session's history from disk and emit it for previewing,
+        WITHOUT loading it into the agent or touching the autosave id."""
+        if not name:
+            return
+        import pathlib
+        try:
+            from code_puppy.session_storage import load_session as _load
+            from code_puppy.config import AUTOSAVE_DIR, CONTEXTS_DIR
+            base = pathlib.Path(AUTOSAVE_DIR if source == "autosave" else CONTEXTS_DIR)
+            history = _load(name, base)
+        except Exception as exc:
+            send({"event": "error", "id": None,
+                  "message": f"preview failed: {type(exc).__name__}: {exc}"})
+            return
+        send({
+            "event": "session_preview",
+            "name": name,
+            "source": source,
+            "messages": len(history) if history else 0,
+            "entries": self._history_to_entries(history),
+        })
+
+    def load_session(self, name: str, source: str) -> None:
+        """Load a saved session into the agent + (autosave) reattach its id."""
+        if not name:
+            return
+        import pathlib
+        try:
+            from code_puppy.session_storage import load_session as _load
+            from code_puppy.config import (
+                AUTOSAVE_DIR,
+                CONTEXTS_DIR,
+                rotate_autosave_id,
+                set_current_autosave_from_session_name,
+            )
+            base = pathlib.Path(AUTOSAVE_DIR if source == "autosave" else CONTEXTS_DIR)
+            history = _load(name, base)
+        except FileNotFoundError:
+            send({"event": "error", "id": None, "message": f"session not found: {name}"})
+            return
+        except Exception as exc:
+            send({"event": "error", "id": None,
+                  "message": f"load_session failed: {type(exc).__name__}: {exc}"})
+            log(traceback.format_exc())
+            return
+        try:
+            self.agent.set_message_history(history)
+            self._sanitize_history()  # repair any orphaned tool pairs in the saved file
+        except Exception:
+            log("set_message_history failed:\n" + traceback.format_exc())
+        try:
+            if source == "autosave":
+                set_current_autosave_from_session_name(name)
+            else:
+                rotate_autosave_id()
+        except Exception:
+            pass
+        send({
+            "event": "session_loaded",
+            "name": name,
+            "messages": len(history) if history else 0,
+            "entries": self._history_to_entries(history),
+        })
+        self.emit_ready()
 
     # --- pause / steer (Code Puppy's PauseController is thread-safe) ---------
 
@@ -468,6 +703,29 @@ class Bridge:
         send({"event": "completions", "id": msg_id, "items": items})
 
     # --- interactive questions connector ----------------------------------
+    def _emit_thinking(self, text: str) -> None:
+        """Forward a chunk of the agent's reasoning stream to the GUI."""
+        if not text:
+            return
+        send({
+            "event": "message",
+            "source": "stream",
+            "kind": "agent_reasoning",
+            "category": "thinking",
+            "text": text,
+            "payload": {},
+        })
+
+    def install_stream_capture(self) -> None:
+        """Capture Code Puppy's live token stream so the GUI can show the agent's
+        thinking. Without this the stream renders to a (hidden) console."""
+        try:
+            from code_puppy.agents.event_stream_handler import set_streaming_console
+            set_streaming_console(_make_stream_console(self._emit_thinking))
+            log("stream capture installed")
+        except Exception:
+            log("stream capture install failed:\n" + traceback.format_exc())
+
     def install_ask_connector(self) -> None:
         """Route Code Puppy's `ask_user_question` tool to the GUI instead of its
         terminal TUI (which needs a real TTY we don't have). The registered tool
@@ -547,10 +805,80 @@ class Bridge:
         threading.Thread(target=poll, name="bus-poller", daemon=True).start()
 
     # --- command handling --------------------------------------------------
-    async def handle_prompt(self, msg_id: int, text: str) -> None:
+    def _sanitize_history(self) -> None:
+        """Drop orphaned tool_call/tool_result pairs from the agent's history.
+
+        A history with a tool_result whose tool_use is missing (e.g. from a
+        cancelled tool call or a resumed/auto-saved partial turn) makes the model
+        reject the request with a 400. Code Puppy ships the repair; we apply it
+        before each run, on session load, and before autosave."""
+        try:
+            from code_puppy.agents._history import (
+                prune_interrupted_tool_calls,
+                sanitize_tool_call_ids,
+            )
+            hist = self.agent.get_message_history()
+            if not hist:
+                return
+            cleaned = sanitize_tool_call_ids(prune_interrupted_tool_calls(hist))
+            if cleaned is not hist or len(cleaned) != len(hist):
+                self.agent.set_message_history(cleaned)
+                if len(cleaned) != len(hist):
+                    log(f"pruned interrupted tool calls: {len(hist)} -> {len(cleaned)} msgs")
+        except Exception:
+            log("history sanitize failed:\n" + traceback.format_exc())
+
+    def _autosave(self) -> None:
+        """Persist the current conversation to its autosave session file.
+
+        The CLI does this after every turn from its own loop; the sidecar runs
+        the agent directly (bypassing that loop), so we must trigger it here or
+        conversations would never be saved. Silent (no chat 🐾 line) + best-effort.
+        """
+        try:
+            from code_puppy.config import (
+                AUTOSAVE_DIR,
+                get_auto_save_session,
+                get_current_autosave_session_name,
+            )
+            if not get_auto_save_session():
+                return
+            self._sanitize_history()  # don't persist a broken history
+            history = self.agent.get_message_history()
+            if not history:
+                return
+            import datetime
+            import pathlib
+            from code_puppy.session_storage import save_session
+            save_session(
+                history=history,
+                session_name=get_current_autosave_session_name(),
+                base_dir=pathlib.Path(AUTOSAVE_DIR),
+                timestamp=datetime.datetime.now().isoformat(),
+                token_estimator=self.agent.estimate_tokens_for_message,
+                auto_saved=True,
+            )
+        except Exception:
+            log("autosave failed:\n" + traceback.format_exc())
+
+    async def handle_prompt(self, msg_id: int, text: str, images=None) -> None:
         self.current_run = asyncio.current_task()
         try:
-            result = await self.agent.run_with_mcp(text)
+            self._sanitize_history()  # never send an orphaned tool_use/result pair
+            attachments = _decode_image_attachments(images)
+            if attachments:
+                result = await self.agent.run_with_mcp(text, attachments=attachments)
+            else:
+                result = await self.agent.run_with_mcp(text)
+            # Canonicalize the agent's history from the result, exactly like the
+            # CLI does. The history_processors callback may not capture the final
+            # message, so without this the NEXT turn (and the autosave) can send a
+            # malformed history → 400 "tool_result without tool_use".
+            if hasattr(result, "all_messages"):
+                try:
+                    self.agent.set_message_history(list(result.all_messages()))
+                except Exception:
+                    log("set history from result failed:\n" + traceback.format_exc())
             output = getattr(result, "output", None)
             if output is None:
                 output = str(result)
@@ -566,6 +894,8 @@ class Bridge:
             log(traceback.format_exc())
         finally:
             self.current_run = None
+            # Save the conversation after every turn (success or cancel), like the CLI.
+            self._autosave()
 
     def run_slash_command(self, msg_id: int, text: str) -> None:
         """Run a Code Puppy slash command via its dispatcher, off the loop.
@@ -583,7 +913,12 @@ class Bridge:
                       "message": f"command failed: {type(exc).__name__}: {exc}"})
                 log(traceback.format_exc())
                 return
-            if isinstance(result, str):
+            if result == "__AUTOSAVE_LOAD__":
+                # /autosave_load (/resume): the CLI opens a TTY picker — instead
+                # surface our GUI session browser.
+                self.emit_sessions(open_picker=True)
+                send({"event": "command_done", "id": msg_id, "handled": True})
+            elif isinstance(result, str):
                 asyncio.run_coroutine_threadsafe(
                     self.handle_prompt(msg_id, result), self.loop)
             else:
@@ -600,7 +935,9 @@ class Bridge:
         op = cmd.get("op")
         if op == "prompt":
             asyncio.run_coroutine_threadsafe(
-                self.handle_prompt(int(cmd.get("id", 0)), cmd.get("text", "")),
+                self.handle_prompt(
+                    int(cmd.get("id", 0)), cmd.get("text", ""), cmd.get("images")
+                ),
                 self.loop,
             )
         elif op == "cancel":
@@ -621,6 +958,14 @@ class Bridge:
             self.set_model(cmd.get("name", ""))
         elif op == "status":
             self.emit_status()
+        elif op == "list_sessions":
+            self.emit_sessions()
+        elif op == "load_session":
+            self.load_session(cmd.get("name", ""), cmd.get("source", "autosave"))
+        elif op == "preview_session":
+            self.preview_session(cmd.get("name", ""), cmd.get("source", "autosave"))
+        elif op == "set_puppy_name":
+            self.set_puppy_name(cmd.get("name", ""))
         elif op == "pause":
             self.pause_agent()
         elif op == "resume":

@@ -6,6 +6,7 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use eframe::egui;
 use egui_dock::{DockArea, DockState, Style};
 
+use crate::session::Theme;
 use crate::shell::{Shell, ShellAction, Tab};
 use crate::supervisor::Supervisor;
 
@@ -16,36 +17,108 @@ pub struct PuppyApp {
     /// A folder-picker dialog runs on a worker thread; its result arrives here.
     /// (Running rfd inline would re-enter the egui frame and crash on Windows.)
     folder_pick: Option<Receiver<Option<PathBuf>>>,
+    /// Signature of the last-saved session, to persist only when it changes.
+    last_session_sig: String,
+    /// Current UI theme (persisted in `session.json`).
+    theme: Theme,
+}
+
+/// Snapshot the open workspaces as a persistable session.
+fn current_session(sup: &Supervisor, theme: Theme) -> crate::session::Session {
+    crate::session::Session {
+        workspaces: sup
+            .iter()
+            .map(|w| crate::session::WorkspaceEntry {
+                path: w.root.to_string_lossy().into_owned(),
+                agent: (!w.agent.is_empty()).then(|| w.agent.clone()),
+                model: (!w.model.is_empty()).then(|| w.model.clone()),
+                autosave: (!w.autosave.is_empty()).then(|| w.autosave.clone()),
+            })
+            .collect(),
+        theme,
+    }
+}
+
+/// Apply a theme to the egui context (on launch and on toggle).
+fn apply_theme(ctx: &egui::Context, theme: Theme) {
+    ctx.set_visuals(match theme {
+        Theme::Dark => egui::Visuals::dark(),
+        Theme::Light => egui::Visuals::light(),
+    });
+}
+
+fn session_sig(session: &crate::session::Session) -> String {
+    serde_json::to_string(session).unwrap_or_default()
 }
 
 impl PuppyApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         crate::fonts::configure(&cc.egui_ctx);
         // Make panel splitters (e.g. the editor/chat divider) easy to grab.
-        cc.egui_ctx.style_mut(|s| {
+        cc.egui_ctx.global_style_mut(|s| {
             s.interaction.resize_grab_radius_side = 10.0;
             s.interaction.resize_grab_radius_corner = 14.0;
         });
+        let saved = crate::session::load();
+        let theme = saved.theme;
+        apply_theme(&cc.egui_ctx, theme);
         let mut sup = Supervisor::new(cc.egui_ctx.clone());
         let mut dock = DockState::new(vec![Tab::Dashboard]);
         let mut status = "Open a folder to start a Code Puppy workspace.".to_string();
+        let mut opened: Vec<PathBuf> = Vec::new();
 
-        // Dev convenience: auto-open a workspace folder on launch.
-        if let Ok(path) = std::env::var("PUPPY_HOME_OPEN") {
-            match sup.open(PathBuf::from(&path)) {
-                Ok(id) => {
-                    dock.push_to_focused_leaf(Tab::Chat(id));
-                    status.clear();
+        // Restore the previous session: reopen each saved folder + its agent/model.
+        for entry in saved.workspaces {
+            let path = PathBuf::from(&entry.path);
+            if !path.is_dir() {
+                continue; // folder moved/deleted since last run
+            }
+            if let Ok(id) = sup.open(path.clone()) {
+                if let Some(ws) = sup.get_mut(id) {
+                    ws.set_restore(entry.agent, entry.model, entry.autosave);
                 }
-                Err(e) => status = format!("Couldn't open {path}: {e}"),
+                dock.push_to_focused_leaf(Tab::Chat(id));
+                opened.push(path);
+                status.clear();
             }
         }
+
+        // Dev convenience: auto-open a workspace folder on launch (if not already).
+        if let Ok(path) = std::env::var("PUPPY_HOME_OPEN") {
+            let path = PathBuf::from(&path);
+            if !opened.contains(&path) {
+                match sup.open(path.clone()) {
+                    Ok(id) => {
+                        dock.push_to_focused_leaf(Tab::Chat(id));
+                        opened.push(path);
+                        status.clear();
+                    }
+                    Err(e) => status = format!("Couldn't open {}: {e}", path.display()),
+                }
+            }
+        }
+
+        // Seed the signature so we don't immediately rewrite the same session
+        // (agent/model fill in once each sidecar is ready, which then persists).
+        let last_session_sig = session_sig(&current_session(&sup, theme));
 
         PuppyApp {
             sup,
             dock: Some(dock),
             status,
             folder_pick: None,
+            last_session_sig,
+            theme,
+        }
+    }
+
+    /// Persist the open-workspace set whenever it changes (open/close/agent/model).
+    fn persist_session(&mut self) {
+        let session = current_session(&self.sup, self.theme);
+        let sig = session_sig(&session);
+        if sig != self.last_session_sig {
+            self.last_session_sig = sig;
+            crate::session::save(&session);
         }
     }
 
@@ -102,24 +175,22 @@ impl PuppyApp {
                     }
                 }
                 ShellAction::FocusChat(id) => {
-                    if let Some(dock) = self.dock.as_mut() {
-                        if let Some(path) =
+                    if let Some(dock) = self.dock.as_mut()
+                        && let Some(path) =
                             dock.find_tab_from(|t| matches!(t, Tab::Chat(x) if *x == id))
-                        {
-                            let _ = dock.set_active_tab(path);
-                        }
+                    {
+                        let _ = dock.set_active_tab(path);
                     }
                 }
                 ShellAction::ShowChanges(id) => {
                     if let Some(ws) = self.sup.get_mut(id) {
                         ws.show_changes();
                     }
-                    if let Some(dock) = self.dock.as_mut() {
-                        if let Some(path) =
+                    if let Some(dock) = self.dock.as_mut()
+                        && let Some(path) =
                             dock.find_tab_from(|t| matches!(t, Tab::Chat(x) if *x == id))
-                        {
-                            let _ = dock.set_active_tab(path);
-                        }
+                    {
+                        let _ = dock.set_active_tab(path);
                     }
                 }
             }
@@ -134,6 +205,8 @@ impl eframe::App for PuppyApp {
 
         let mut actions: Vec<ShellAction> = Vec::new();
         let mut open_clicked = false;
+        let mut theme_clicked = false;
+        let theme = self.theme;
 
         // Copy the bits the menu needs so its closure doesn't borrow `self`.
         let picking = self.folder_pick.is_some();
@@ -166,11 +239,23 @@ impl eframe::App for PuppyApp {
                     ui.separator();
                     ui.label(egui::RichText::new(&status).weak());
                 }
+                ui.separator();
+                if ui
+                    .button(format!("Theme: {}", theme.label()))
+                    .on_hover_text("Toggle light / dark theme")
+                    .clicked()
+                {
+                    theme_clicked = true;
+                }
             });
         });
 
         if open_clicked {
             self.begin_folder_pick(ui.ctx());
+        }
+        if theme_clicked {
+            self.theme = self.theme.toggled();
+            apply_theme(ui.ctx(), self.theme);
         }
 
         let mut dock = self.dock.take().expect("dock present");
@@ -186,6 +271,7 @@ impl eframe::App for PuppyApp {
         self.dock = Some(dock);
 
         self.apply_actions(actions);
+        self.persist_session();
 
         // Keep elapsed timers ticking while any instance is busy.
         if self.sup.any_busy() {
