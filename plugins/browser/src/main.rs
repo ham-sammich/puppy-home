@@ -27,6 +27,8 @@ enum WireCmd {
     Back,
     Forward,
     Reload,
+    /// Open the F12 DevTools window.
+    Devtools,
     Close,
 }
 
@@ -58,6 +60,9 @@ fn main() -> wry::Result<()> {
 
     let initial_url =
         std::env::args().nth(1).unwrap_or_else(|| "https://example.com".to_string());
+    // Optional 2nd arg: a Chrome DevTools Protocol remote-debugging port, so the
+    // host (and Code Puppy) can attach to this page over CDP at 127.0.0.1:PORT.
+    let cdp_port: Option<u16> = std::env::args().nth(2).and_then(|s| s.parse().ok());
 
     // Borderless: the host reparents this window into the Browser tab. On
     // Windows we start hidden and let the host show it once embedded (no flash);
@@ -70,9 +75,17 @@ fn main() -> wry::Result<()> {
         .build(&event_loop)
         .expect("create window");
 
-    let webview = WebViewBuilder::new(&window)
+    let mut builder = WebViewBuilder::new(&window)
         .with_url(&initial_url)
-        .build()?;
+        .with_devtools(true);
+    #[cfg(windows)]
+    if let Some(port) = cdp_port {
+        use wry::WebViewBuilderExtWindows;
+        builder = builder.with_additional_browser_args(format!("--remote-debugging-port={port}"));
+    }
+    #[cfg(not(windows))]
+    let _ = cdp_port;
+    let webview = builder.build()?;
 
     // Tell the host our native window handle so it can embed us.
     report_handle(&window);
@@ -94,6 +107,7 @@ fn main() -> wry::Result<()> {
                 WireCmd::Reload => {
                     let _ = webview.evaluate_script("location.reload()");
                 }
+                WireCmd::Devtools => webview.open_devtools(),
                 WireCmd::Close => *control_flow = ControlFlow::Exit,
             },
             Event::WindowEvent {

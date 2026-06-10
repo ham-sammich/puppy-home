@@ -45,6 +45,8 @@ struct BrowserTab {
     placed_rect: Option<(i32, i32, i32, i32)>,
     /// Whether the child window is currently shown (avoids per-frame ShowWindow).
     visible: bool,
+    /// CDP remote-debugging port this page listens on (for DevTools / Code Puppy).
+    cdp_port: Option<u16>,
 }
 
 /// Owns plugin discovery + the open browser tabs.
@@ -105,6 +107,16 @@ impl BrowserManager {
     /// The (normalized) URL a tab is pointed at, if any.
     pub fn tab_url(&self, id: BrowserId) -> Option<String> {
         self.tabs.get(&id).map(|t| t.url.clone())
+    }
+
+    /// The CDP (Chrome DevTools Protocol) endpoint for a tab, if it's running —
+    /// e.g. `http://127.0.0.1:9377`. Code Puppy can attach to it to inspect the
+    /// console, DOM, network, and evaluate JS in the page.
+    pub fn tab_cdp_url(&self, id: BrowserId) -> Option<String> {
+        self.tabs
+            .get(&id)
+            .and_then(|t| t.cdp_port)
+            .map(|p| format!("http://127.0.0.1:{p}"))
     }
 
     /// End a frame: hide any browser window whose tab wasn't drawn (inactive or
@@ -344,6 +356,28 @@ impl BrowserManager {
                         h.reload();
                     }
                 }
+                ui.separator();
+                if ui
+                    .button("DevTools")
+                    .on_hover_text("Open browser DevTools (F12)")
+                    .clicked()
+                {
+                    if let Some(h) = tab.host.as_mut() {
+                        h.devtools();
+                    }
+                }
+                if let Some(port) = tab.cdp_port {
+                    if ui
+                        .button("CDP")
+                        .on_hover_text(format!(
+                            "Copy DevTools Protocol endpoint http://127.0.0.1:{port} \
+                             — paste it to Code Puppy to let it inspect this page"
+                        ))
+                        .clicked()
+                    {
+                        ui.ctx().copy_text(format!("http://127.0.0.1:{port}"));
+                    }
+                }
             });
 
             let go = ui
@@ -443,13 +477,24 @@ fn launch(tab: &mut BrowserTab, exe: Option<&std::path::Path>, url: &str) {
         tab.launch_error = Some("Plugin executable not found.".into());
         return;
     };
-    match BrowserHost::spawn(exe, url) {
+    // Give every page a CDP endpoint so DevTools / Code Puppy can attach.
+    let cdp_port = pick_free_port();
+    match BrowserHost::spawn(exe, url, cdp_port) {
         Ok(h) => {
             tab.host = Some(h);
             tab.launched = true;
+            tab.cdp_port = cdp_port;
         }
         Err(e) => tab.launch_error = Some(format!("Couldn't launch browser: {e}")),
     }
+}
+
+/// Grab an ephemeral free TCP port for the page's CDP remote-debugging endpoint.
+fn pick_free_port() -> Option<u16> {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .ok()
+        .and_then(|l| l.local_addr().ok())
+        .map(|a| a.port())
 }
 
 /// Add a scheme if the user typed a bare host (`example.com` -> `https://…`).

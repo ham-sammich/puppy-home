@@ -461,7 +461,14 @@ impl Workspace {
                 }
                 EditorItem::Git => self.render_git(ui),
                 EditorItem::Commit { hash, .. } => self.render_commit(ui, &hash),
-                EditorItem::Browser(bid) => browser.render_tab(ui, bid),
+                EditorItem::Browser(bid) => {
+                    // Publish the page's CDP endpoint so Code Puppy can attach.
+                    if let Some(cdp) = browser.tab_cdp_url(bid) {
+                        let url = browser.tab_url(bid).unwrap_or_default();
+                        self.sync_browser_cdp_file(&cdp, &url);
+                    }
+                    browser.render_tab(ui, bid);
+                }
             }
         }
     }
@@ -573,6 +580,24 @@ impl Workspace {
             None => {
                 let bid = browser.open_tab(Some(self.id), url);
                 self.focus_or_open(EditorItem::Browser(bid));
+            }
+        }
+    }
+
+    /// Write the in-app browser's CDP endpoint to `<root>/.puppy/browser.json`
+    /// so Code Puppy (cwd = workspace root) can discover and attach to it when
+    /// asked to inspect the page. Only rewritten when the endpoint changes.
+    fn sync_browser_cdp_file(&mut self, cdp: &str, url: &str) {
+        if self.browser_cdp_written.as_deref() == Some(cdp) {
+            return;
+        }
+        let dir = self.root.join(".puppy");
+        if std::fs::create_dir_all(&dir).is_ok() {
+            let body = format!(
+                "{{\n  \"cdp\": \"{cdp}\",\n  \"url\": \"{url}\",\n  \"hint\": \"Chrome DevTools Protocol. GET {cdp}/json/list for targets and webSocketDebuggerUrl, then drive CDP over that websocket.\"\n}}\n"
+            );
+            if std::fs::write(dir.join("browser.json"), body).is_ok() {
+                self.browser_cdp_written = Some(cdp.to_string());
             }
         }
     }

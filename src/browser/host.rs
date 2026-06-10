@@ -21,10 +21,15 @@ pub struct BrowserHost {
 }
 
 impl BrowserHost {
-    /// Launch the plugin executable, opening `initial_url` on start.
-    pub fn spawn(exe: &Path, initial_url: &str) -> std::io::Result<Self> {
-        let mut child = Command::new(exe)
-            .arg(initial_url)
+    /// Launch the plugin executable, opening `initial_url` on start. When
+    /// `cdp_port` is set, the page exposes a CDP remote-debugging endpoint there.
+    pub fn spawn(exe: &Path, initial_url: &str, cdp_port: Option<u16>) -> std::io::Result<Self> {
+        let mut cmd = Command::new(exe);
+        cmd.arg(initial_url);
+        if let Some(port) = cdp_port {
+            cmd.arg(port.to_string());
+        }
+        let mut child = cmd
             .stdin(Stdio::piped())
             // stdout carries events (e.g. the window handle); stderr is logs.
             .stdout(Stdio::piped())
@@ -79,6 +84,11 @@ impl BrowserHost {
     /// Reload the current page.
     pub fn reload(&mut self) {
         self.send(json!({ "cmd": "reload" }).to_string());
+    }
+
+    /// Open the F12 DevTools window.
+    pub fn devtools(&mut self) {
+        self.send(json!({ "cmd": "devtools" }).to_string());
     }
 
     /// Whether the process is still running.
