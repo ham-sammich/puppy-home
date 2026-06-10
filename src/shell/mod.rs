@@ -6,6 +6,7 @@ use eframe::egui;
 use egui_dock::TabViewer;
 use egui_dock::widgets::tab_viewer::OnCloseResponse;
 
+use crate::browser::{BrowserId, BrowserManager};
 use crate::supervisor::Supervisor;
 use crate::views;
 use crate::workspace::{InstanceStatus, WorkspaceId};
@@ -15,6 +16,8 @@ use crate::workspace::{InstanceStatus, WorkspaceId};
 pub enum Tab {
     Dashboard,
     Chat(WorkspaceId),
+    /// The optional browser plugin's view.
+    Browser(BrowserId),
 }
 
 /// Structural changes requested during rendering, applied after the dock draws.
@@ -30,6 +33,7 @@ pub enum ShellAction {
 /// Transient `TabViewer` holding mutable access to app state for one frame.
 pub struct Shell<'a> {
     pub sup: &'a mut Supervisor,
+    pub browser: &'a mut BrowserManager,
     pub actions: &'a mut Vec<ShellAction>,
 }
 
@@ -50,6 +54,7 @@ impl TabViewer for Shell<'_> {
                 }
                 None => "(closed)".to_string().into(),
             },
+            Tab::Browser(id) => self.browser.tab_title(*id).into(),
         }
     }
 
@@ -60,6 +65,7 @@ impl TabViewer for Shell<'_> {
                 Some(ws) => ws.render_chat(ui),
                 None => closed_placeholder(ui),
             },
+            Tab::Browser(id) => self.browser.render_tab(ui, *id),
         }
     }
 
@@ -67,6 +73,7 @@ impl TabViewer for Shell<'_> {
         match tab {
             Tab::Dashboard => egui::Id::new("tab-dashboard"),
             Tab::Chat(id) => egui::Id::new(("tab-chat", id.0)),
+            Tab::Browser(id) => egui::Id::new(("tab-browser", id.0)),
         }
     }
 
@@ -77,8 +84,10 @@ impl TabViewer for Shell<'_> {
     fn on_close(&mut self, tab: &mut Tab) -> OnCloseResponse {
         // Closing a chat tab closes the whole workspace; closing a Diffs tab
         // just removes that view.
-        if let Tab::Chat(id) = tab {
-            self.actions.push(ShellAction::Close(*id));
+        match tab {
+            Tab::Chat(id) => self.actions.push(ShellAction::Close(*id)),
+            Tab::Browser(id) => self.browser.close_tab(*id),
+            Tab::Dashboard => {}
         }
         OnCloseResponse::Close
     }

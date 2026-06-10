@@ -6,6 +6,7 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use eframe::egui;
 use egui_dock::{DockArea, DockState, Style};
 
+use crate::browser::BrowserManager;
 use crate::session::Theme;
 use crate::shell::{Shell, ShellAction, Tab};
 use crate::supervisor::Supervisor;
@@ -30,6 +31,8 @@ pub struct PuppyApp {
     terminal_theme: TerminalTheme,
     /// Whether the live theme-editor window is open.
     theme_editor_open: bool,
+    /// Optional browser plugin: discovery + open browser tabs.
+    browser: BrowserManager,
 }
 
 /// Snapshot the open workspaces as a persistable session.
@@ -130,6 +133,7 @@ impl PuppyApp {
             theme_palette,
             terminal_theme,
             theme_editor_open: false,
+            browser: BrowserManager::discover(),
         }
     }
 
@@ -235,9 +239,11 @@ impl eframe::App for PuppyApp {
 
         let mut actions: Vec<ShellAction> = Vec::new();
         let mut open_clicked = false;
+        let mut open_browser = false;
         let mut pick_theme: Option<Theme> = None;
         let mut open_editor = false;
         let theme = self.theme.clone();
+        let browser_available = self.browser.is_available();
 
         // Copy the bits the menu needs so its closure doesn't borrow `self`.
         let picking = self.folder_pick.is_some();
@@ -258,6 +264,14 @@ impl eframe::App for PuppyApp {
                 }
                 if picking {
                     ui.label(egui::RichText::new("choosing folder…").weak());
+                }
+                let browser_tip = if browser_available {
+                    "Open a browser tab"
+                } else {
+                    "Browser plugin not installed — opens an install guide"
+                };
+                if ui.button("Browser").on_hover_text(browser_tip).clicked() {
+                    open_browser = true;
                 }
                 ui.label(egui::RichText::new(format!("{ws_count} workspace(s)")).weak());
                 if waiting > 0 {
@@ -304,6 +318,12 @@ impl eframe::App for PuppyApp {
         if open_clicked {
             self.begin_folder_pick(ui.ctx());
         }
+        if open_browser {
+            let id = self.browser.new_tab();
+            if let Some(dock) = self.dock.as_mut() {
+                dock.push_to_focused_leaf(Tab::Browser(id));
+            }
+        }
         if let Some(t) = pick_theme {
             self.theme = t;
             // Sync the editor buffer to the freshly-picked custom theme.
@@ -342,6 +362,7 @@ impl eframe::App for PuppyApp {
         {
             let mut shell = Shell {
                 sup: &mut self.sup,
+                browser: &mut self.browser,
                 actions: &mut actions,
             };
             DockArea::new(&mut dock)

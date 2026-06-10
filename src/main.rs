@@ -9,8 +9,10 @@
 
 mod app;
 mod backend;
+mod browser;
 mod fonts;
 mod git;
+mod plugin;
 mod session;
 mod shell;
 mod supervisor;
