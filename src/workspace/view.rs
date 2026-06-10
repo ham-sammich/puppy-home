@@ -9,29 +9,24 @@ use eframe::egui;
 use super::Workspace;
 use super::diff::{file_name, marker_color};
 use super::render::{render_dir, render_entry};
-use super::state::EditorItem;
-use crate::shell::ShellAction;
+use super::state::{EditorItem, Entry};
+use crate::browser::BrowserManager;
 
 impl Workspace {
-    pub fn render_chat(&mut self, ui: &mut egui::Ui, actions: &mut Vec<ShellAction>) {
+    pub fn render_chat(&mut self, ui: &mut egui::Ui, browser: &mut BrowserManager) {
         let id = self.id.0;
         self.poll_git(ui.ctx());
 
         // Offer to open the workspace's dev server in the browser plugin, when
         // it's installed. Scan the embedded terminal's output for local URLs.
-        let browser_available = ui
-            .ctx()
-            .data(|d| d.get_temp::<bool>(crate::browser::available_id()))
-            .unwrap_or(false);
+        let browser_available = browser.is_available();
         let dev_urls: Vec<String> = if browser_available {
-            self.terminal
-                .as_ref()
-                .map(|t| crate::browser::detect_dev_urls(&t.screen_text()))
-                .unwrap_or_default()
+            crate::browser::detect_dev_urls(&self.dev_url_scan_text())
         } else {
             Vec::new()
         };
-        let ws_id = self.id;
+        // Collected this frame: Some(url) opens a browser editor tab in-workspace.
+        let mut open_browser: Option<Option<String>> = None;
 
         let mut open_git = false;
         egui::Panel::top(egui::Id::new(("ws-top", id))).show_inside(ui, |ui| {
@@ -55,10 +50,7 @@ impl Workspace {
                         .on_hover_text("Open a browser tab in this workspace")
                         .clicked()
                     {
-                        actions.push(ShellAction::OpenBrowser {
-                            workspace: ws_id,
-                            url: None,
-                        });
+                        open_browser = Some(None);
                     }
                     for url in &dev_urls {
                         let label = format!("Open {}", url_host_port(url));
@@ -67,10 +59,7 @@ impl Workspace {
                             .on_hover_text(format!("Open {url} in the browser plugin"))
                             .clicked()
                         {
-                            actions.push(ShellAction::OpenBrowser {
-                                workspace: ws_id,
-                                url: Some(url.clone()),
-                            });
+                            open_browser = Some(Some(url.clone()));
                         }
                     }
                     ui.separator();
@@ -91,6 +80,11 @@ impl Workspace {
 
         if open_git {
             self.show_git();
+        }
+        // Open the browser as an editor tab *inside* this workspace.
+        if let Some(url) = open_browser {
+            let bid = browser.open_tab(Some(self.id), url);
+            self.focus_or_open(EditorItem::Browser(bid));
         }
 
         // File tree sidebar (toggleable) — explorer (top) + Changes (bottom).
@@ -241,7 +235,7 @@ impl Workspace {
                 .show_inside(ui, |ui| {
                     self.render_chat_body(ui);
                 });
-            self.render_editor_area(ui);
+            self.render_editor_area(ui, browser);
         }
 
         // Interactive question modal floats above everything for this workspace.
@@ -325,28 +319,36 @@ impl Workspace {
     }
 
     /// The editor area: a tab bar of open files / Changes, then the active one.
-    pub(crate) fn render_editor_area(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn render_editor_area(&mut self, ui: &mut egui::Ui, browser: &mut BrowserManager) {
         let id = self.id.0;
         let mut switch_to: Option<usize> = None;
         let mut close: Option<usize> = None;
 
+        // Precompute tab labels so the tab-strip closure doesn't borrow `browser`.
+        let labels: Vec<String> = self
+            .editor_open
+            .iter()
+            .map(|item| match item {
+                EditorItem::Changes => "📝 Changes".to_string(),
+                EditorItem::Git => "🌿 Git".to_string(),
+                EditorItem::Commit { short, .. } => format!("⎇ {short}"),
+                EditorItem::Browser(bid) => browser.tab_title(*bid),
+                EditorItem::File(p) => {
+                    let dirty = self.open_files.get(p).map(|b| b.dirty).unwrap_or(false);
+                    let name = p
+                        .file_name()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| p.to_string_lossy().into_owned());
+                    format!("{}{name}", if dirty { "● " } else { "" })
+                }
+            })
+            .collect();
+
         egui::Panel::top(egui::Id::new(("ws-editortabs", id))).show_inside(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                for (i, item) in self.editor_open.iter().enumerate() {
+                for (i, label) in labels.iter().enumerate() {
                     let selected = i == self.editor_active;
-                    let label = match item {
-                        EditorItem::Changes => "📝 Changes".to_string(),
-                        EditorItem::Git => "🌿 Git".to_string(),
-                        EditorItem::Commit { short, .. } => format!("⎇ {short}"),
-                        EditorItem::File(p) => {
-                            let dirty = self.open_files.get(p).map(|b| b.dirty).unwrap_or(false);
-                            let name = p
-                                .file_name()
-                                .map(|s| s.to_string_lossy().into_owned())
-                                .unwrap_or_else(|| p.to_string_lossy().into_owned());
-                            format!("{}{name}", if dirty { "● " } else { "" })
-                        }
-                    };
+                    let label = label.clone();
                     ui.scope(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
                         if ui.selectable_label(selected, label).clicked() {
@@ -365,6 +367,10 @@ impl Workspace {
             self.editor_active = i;
         }
         if let Some(i) = close {
+            // Closing a browser tab also shuts down its plugin process.
+            if let Some(EditorItem::Browser(bid)) = self.editor_open.get(i) {
+                browser.close_tab(*bid);
+            }
             self.close_editor(i);
         }
 
@@ -374,6 +380,7 @@ impl Workspace {
                 EditorItem::File(p) => self.render_file(ui, &p),
                 EditorItem::Git => self.render_git(ui),
                 EditorItem::Commit { hash, .. } => self.render_commit(ui, &hash),
+                EditorItem::Browser(bid) => browser.render_tab(ui, bid),
             }
         }
     }
@@ -467,6 +474,32 @@ impl Workspace {
                 ui.weak("starting shell…");
             });
         }
+    }
+}
+
+impl Workspace {
+    /// Text to scan for dev-server URLs: the embedded terminal's screen plus the
+    /// recent transcript (the agent often prints "running at http://localhost…").
+    fn dev_url_scan_text(&self) -> String {
+        let mut s = String::new();
+        if let Some(t) = &self.terminal {
+            s.push_str(&t.screen_text());
+            s.push('\n');
+        }
+        for e in self.transcript.iter().rev().take(40) {
+            match e {
+                Entry::Agent(t) | Entry::Note(t) | Entry::User(t) | Entry::Error(t) => {
+                    s.push_str(t);
+                    s.push('\n');
+                }
+                Entry::Thinking { text, .. } => {
+                    s.push_str(text);
+                    s.push('\n');
+                }
+                Entry::Message(_) => {}
+            }
+        }
+        s
     }
 }
 

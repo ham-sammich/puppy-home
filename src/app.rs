@@ -216,14 +216,6 @@ impl PuppyApp {
                         let _ = dock.set_active_tab(path);
                     }
                 }
-                ShellAction::OpenBrowser { workspace, url } => {
-                    let bid = self.browser.open_tab(Some(workspace), url);
-                    if let Some(dock) = self.dock.as_mut() {
-                        // The originating workspace node is focused, so this
-                        // lands as a sibling tab right inside that workspace.
-                        dock.push_to_focused_leaf(Tab::Browser(bid));
-                    }
-                }
                 ShellAction::ShowChanges(id) => {
                     if let Some(ws) = self.sup.get_mut(id) {
                         ws.show_changes();
@@ -267,9 +259,7 @@ impl eframe::App for PuppyApp {
             d.insert_temp(
                 crate::theme::terminal_colors_id(),
                 self.terminal_theme.resolve(),
-            );
-            // Let workspaces know whether to offer "Open in browser".
-            d.insert_temp(crate::browser::available_id(), self.browser.is_available());
+            )
         });
 
         let mut actions: Vec<ShellAction> = Vec::new();

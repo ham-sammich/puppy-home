@@ -98,6 +98,8 @@ pub(crate) struct FileBuffer {
 pub(crate) enum EditorItem {
     Changes,
     File(PathBuf),
+    /// An embedded browser tab (the browser plugin), living in this workspace.
+    Browser(crate::browser::BrowserId),
     /// The Source Control / Git page (branch, staging, history).
     Git,
     /// A single commit's patch (opened from the history list).

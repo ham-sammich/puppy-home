@@ -27,12 +27,6 @@ const BROWSER_PLUGIN_ID: &str = "browser";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BrowserId(pub u64);
 
-/// The egui data-store id under which the app stashes browser availability each
-/// frame, so workspaces can decide whether to offer "Open in browser".
-pub fn available_id() -> egui::Id {
-    egui::Id::new("puppy-browser-available")
-}
-
 /// Per-tab browser state: URL bar + the (optional) running process.
 #[derive(Default)]
 struct BrowserTab {
