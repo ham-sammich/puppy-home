@@ -26,6 +26,7 @@ mod composer;
 mod diff;
 mod editor;
 mod git_graph;
+mod git_graph_view;
 mod git_view;
 mod render;
 mod sessions;

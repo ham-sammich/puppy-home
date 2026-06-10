@@ -349,6 +349,11 @@ pub fn delete_branch(root: &Path, name: &str) -> Result<(), String> {
     run(root, &["branch", "-D", name]).map(|_| ())
 }
 
+/// Merge `target` (a branch/commit) into the current branch.
+pub fn merge(root: &Path, target: &str) -> Result<String, String> {
+    run(root, &["merge", target]).map(|s| s.trim().to_string())
+}
+
 /// Apply a commit onto the current branch.
 pub fn cherry_pick(root: &Path, hash: &str) -> Result<(), String> {
     run(root, &["cherry-pick", hash]).map(|_| ())
