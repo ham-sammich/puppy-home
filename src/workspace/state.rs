@@ -93,6 +93,16 @@ pub(crate) struct FileBuffer {
     pub(crate) save_error: Option<String>,
 }
 
+/// Where the editor area (files / git / browser) sits relative to the chat.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum EditorSide {
+    /// Stacked: editor on top, chat in a bottom panel (the default).
+    #[default]
+    Bottom,
+    /// Side by side: editor on the right, chat fills the left.
+    Right,
+}
+
 /// A tab in the workspace's editor area (above the chat).
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) enum EditorItem {

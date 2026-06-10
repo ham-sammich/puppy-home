@@ -139,6 +139,8 @@ pub struct Workspace {
     open_files: BTreeMap<PathBuf, FileBuffer>,
     editor_open: Vec<EditorItem>,
     editor_active: usize,
+    /// Editor-area placement relative to chat (stacked vs side-by-side).
+    editor_side: crate::workspace::state::EditorSide,
     // Git view (Source Control page + commit/blame tabs)
     git_view: Option<GitView>,
     /// All-branches commits for the graph view (newest first, with parents/refs).
@@ -232,6 +234,7 @@ impl Workspace {
             open_files: BTreeMap::new(),
             editor_open: Vec::new(),
             editor_active: 0,
+            editor_side: crate::workspace::state::EditorSide::default(),
             git_view: None,
             git_graph_commits: Vec::new(),
             git_show_graph: true,

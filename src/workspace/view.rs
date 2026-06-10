@@ -9,7 +9,7 @@ use eframe::egui;
 use super::Workspace;
 use super::diff::{file_name, marker_color};
 use super::render::{render_dir, render_entry};
-use super::state::{EditorItem, Entry};
+use super::state::{EditorItem, EditorSide, Entry};
 use crate::browser::BrowserManager;
 
 impl Workspace {
@@ -228,13 +228,28 @@ impl Workspace {
         if self.editor_open.is_empty() {
             self.render_chat_body(ui);
         } else {
-            egui::Panel::bottom(egui::Id::new(("ws-chat", id)))
-                .resizable(true)
-                .default_size(280.0)
-                .show_inside(ui, |ui| {
+            match self.editor_side {
+                EditorSide::Bottom => {
+                    // Stacked: editor on top, chat in a resizable bottom panel.
+                    egui::Panel::bottom(egui::Id::new(("ws-chat", id)))
+                        .resizable(true)
+                        .default_size(280.0)
+                        .show_inside(ui, |ui| {
+                            self.render_chat_body(ui);
+                        });
+                    self.render_editor_area(ui, browser);
+                }
+                EditorSide::Right => {
+                    // Side by side: editor on the right, chat fills the left.
+                    egui::Panel::right(egui::Id::new(("ws-editor-side", id)))
+                        .resizable(true)
+                        .default_size(ui.available_width() * 0.5)
+                        .show_inside(ui, |ui| {
+                            self.render_editor_area(ui, browser);
+                        });
                     self.render_chat_body(ui);
-                });
-            self.render_editor_area(ui, browser);
+                }
+            }
         }
 
         // Interactive question modal floats above everything for this workspace.
@@ -361,25 +376,49 @@ impl Workspace {
             })
             .collect();
 
+        let mut toggle_side = false;
         egui::Panel::top(egui::Id::new(("ws-editortabs", id))).show_inside(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                for (i, label) in labels.iter().enumerate() {
-                    let selected = i == self.editor_active;
-                    let label = label.clone();
-                    ui.scope(|ui| {
-                        ui.spacing_mut().item_spacing.x = 2.0;
-                        if ui.selectable_label(selected, label).clicked() {
-                            switch_to = Some(i);
+                // Right-aligned layout toggle: stack vs. side-by-side with chat.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let label = match self.editor_side {
+                        EditorSide::Bottom => "⬌ Side by side",
+                        EditorSide::Right => "⬍ Stacked",
+                    };
+                    if ui
+                        .small_button(label)
+                        .on_hover_text("Move the editor/browser beside the chat, or back on top")
+                        .clicked()
+                    {
+                        toggle_side = true;
+                    }
+                    // Tabs fill the remaining space, left-to-right.
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        for (i, label) in labels.iter().enumerate() {
+                            let selected = i == self.editor_active;
+                            let label = label.clone();
+                            ui.scope(|ui| {
+                                ui.spacing_mut().item_spacing.x = 2.0;
+                                if ui.selectable_label(selected, label).clicked() {
+                                    switch_to = Some(i);
+                                }
+                                if ui.small_button("✕").clicked() {
+                                    close = Some(i);
+                                }
+                                ui.separator();
+                            });
                         }
-                        if ui.small_button("✕").clicked() {
-                            close = Some(i);
-                        }
-                        ui.separator();
                     });
-                }
+                });
             });
         });
 
+        if toggle_side {
+            self.editor_side = match self.editor_side {
+                EditorSide::Bottom => EditorSide::Right,
+                EditorSide::Right => EditorSide::Bottom,
+            };
+        }
         if let Some(i) = switch_to {
             self.editor_active = i;
         }
