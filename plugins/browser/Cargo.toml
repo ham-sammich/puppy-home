@@ -1,0 +1,17 @@
+[package]
+name = "puppy-browser"
+version = "1.0.0"
+edition = "2021"
+description = "Optional in-app browser plugin for puppy-home (wry webview + stdio IPC)."
+
+[[bin]]
+name = "puppy-browser"
+path = "src/main.rs"
+
+[dependencies]
+# OS-native webview (WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux)
+# driven by a tao event loop. Kept entirely out of the base app.
+wry = "0.45"
+tao = "0.30"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -60,7 +60,9 @@ impl TabViewer for Shell<'_> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match tab {
-            Tab::Dashboard => views::dashboard::render(ui, self.sup, self.actions),
+            Tab::Dashboard => {
+                views::dashboard::render(ui, self.sup, self.browser, self.actions)
+            }
             Tab::Chat(id) => match self.sup.get_mut(*id) {
                 Some(ws) => ws.render_chat(ui),
                 None => closed_placeholder(ui),

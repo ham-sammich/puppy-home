@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2024"
 description = "An AI agent application — Code Puppy as the default agent."
 
+# The optional browser plugin is a SEPARATE crate so its heavy webview deps
+# (wry/tao) never bloat the base app — the app only ever launches its built exe.
+[workspace]
+members = ["plugins/browser"]
+
 [dependencies]
 # Native windowed GUI (egui in immediate mode, cross-platform, pure Rust).
 eframe = "0.34.3"

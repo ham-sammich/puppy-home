@@ -92,6 +92,11 @@ impl PluginRegistry {
     pub fn get(&self, id: &str) -> Option<&InstalledPlugin> {
         self.plugins.iter().find(|p| p.manifest.id == id)
     }
+
+    /// All discovered plugins (for the dashboard list).
+    pub fn all(&self) -> &[InstalledPlugin] {
+        &self.plugins
+    }
 }
 
 /// Where plugins live: `$PUPPY_PLUGINS_DIR`, else `<exe-dir>/plugins`, else

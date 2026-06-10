@@ -4,11 +4,17 @@ use std::time::Instant;
 
 use eframe::egui;
 
+use crate::browser::BrowserManager;
 use crate::shell::ShellAction;
 use crate::supervisor::Supervisor;
 use crate::workspace::InstanceStatus;
 
-pub fn render(ui: &mut egui::Ui, sup: &Supervisor, actions: &mut Vec<ShellAction>) {
+pub fn render(
+    ui: &mut egui::Ui,
+    sup: &Supervisor,
+    browser: &BrowserManager,
+    actions: &mut Vec<ShellAction>,
+) {
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.heading("Instances");
@@ -41,6 +47,8 @@ pub fn render(ui: &mut egui::Ui, sup: &Supervisor, actions: &mut Vec<ShellAction
             });
         ui.add_space(4.0);
     }
+
+    plugins_section(ui, browser);
 
     if sup.is_empty() {
         ui.add_space(20.0);
@@ -186,6 +194,42 @@ pub fn render(ui: &mut egui::Ui, sup: &Supervisor, actions: &mut Vec<ShellAction
                     }
                 });
         });
+}
+
+/// The optional-plugins list: name, version, and runnable/incompatible status.
+fn plugins_section(ui: &mut egui::Ui, browser: &BrowserManager) {
+    egui::CollapsingHeader::new(format!("Plugins ({})", browser.plugins().len()))
+        .default_open(true)
+        .show(ui, |ui| {
+            if browser.plugins().is_empty() {
+                ui.weak("No plugins installed. Open the Browser tab to install one.");
+                return;
+            }
+            for p in browser.plugins() {
+                let (label, color) = if p.is_runnable() {
+                    ("ready", egui::Color32::from_rgb(120, 200, 140))
+                } else if !p.manifest.is_compatible() {
+                    ("incompatible", ui.visuals().warn_fg_color)
+                } else {
+                    ("exe missing", egui::Color32::from_rgb(220, 120, 120))
+                };
+                ui.horizontal(|ui| {
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                    ui.painter().circle_filled(rect.center(), 4.0, color);
+                    ui.label(egui::RichText::new(&p.manifest.name).strong())
+                        .on_hover_text(p.dir.display().to_string());
+                    ui.label(
+                        egui::RichText::new(format!("v{}", p.manifest.version))
+                            .weak()
+                            .small(),
+                    );
+                    ui.label(egui::RichText::new(label).color(color).small());
+                });
+            }
+        });
+    ui.add_space(4.0);
+    ui.separator();
 }
 
 /// Color a sub-agent's status string for the dashboard dot/label.
