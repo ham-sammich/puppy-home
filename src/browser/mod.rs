@@ -40,6 +40,11 @@ struct BrowserTab {
     /// Whether a process was ever launched (distinguishes "not started yet"
     /// from "started and then exited").
     launched: bool,
+    /// Last physical rect (x, y, w, h) the child window was placed at — so we
+    /// only call `SetWindowPos` when it actually changes (avoids choppiness).
+    placed_rect: Option<(i32, i32, i32, i32)>,
+    /// Whether the child window is currently shown (avoids per-frame ShowWindow).
+    visible: bool,
 }
 
 /// Owns plugin discovery + the open browser tabs.
@@ -80,7 +85,11 @@ impl BrowserManager {
         self.placed.clear();
         for tab in self.tabs.values_mut() {
             if tab.host.as_mut().map(|h| !h.is_alive()).unwrap_or(false) {
+                // Process gone: reset embedding state so a relaunch re-attaches.
                 tab.host = None;
+                tab.embedded = false;
+                tab.visible = false;
+                tab.placed_rect = None;
             }
         }
     }
@@ -101,13 +110,16 @@ impl BrowserManager {
     /// End a frame: hide any browser window whose tab wasn't drawn (inactive or
     /// closed), so it doesn't float over other views.
     pub fn end_frame(&mut self) {
-        for (id, tab) in &self.tabs {
-            if self.placed.contains(id) {
+        for (id, tab) in self.tabs.iter_mut() {
+            if self.placed.contains(id) || !tab.visible {
                 continue;
             }
             if let Some(h) = tab.host.as_ref().and_then(|h| h.child_hwnd()) {
                 embed::hide(h);
             }
+            tab.visible = false;
+            // Force a reposition next time it's shown (layout may have changed).
+            tab.placed_rect = None;
         }
     }
 
@@ -388,7 +400,16 @@ impl BrowserManager {
                 let w = (rect.width() * ppp).round() as i32;
                 let h = (rect.height() * ppp).round() as i32;
                 if w > 0 && h > 0 {
-                    embed::place(child, x, y, w, h);
+                    let r = (x, y, w, h);
+                    // Only move the native window when the rect actually changed.
+                    if tab.placed_rect != Some(r) {
+                        embed::place(child, x, y, w, h);
+                        tab.placed_rect = Some(r);
+                    }
+                    if !tab.visible {
+                        embed::show(child);
+                        tab.visible = true;
+                    }
                     self.placed.insert(id);
                 }
             }

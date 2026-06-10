@@ -11,8 +11,9 @@ pub const SUPPORTED: bool = cfg!(windows);
 mod imp {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GWL_STYLE, GetWindowLongPtrW, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOZORDER, SetParent,
-        SetWindowLongPtrW, SetWindowPos, ShowWindow, WS_CHILD, WS_POPUP, WS_VISIBLE,
+        GWL_STYLE, GetWindowLongPtrW, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOCOPYBITS,
+        SWP_NOZORDER, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow, WS_CHILD, WS_POPUP,
+        WS_VISIBLE,
     };
 
     fn hwnd(raw: i64) -> HWND {
@@ -30,7 +31,8 @@ mod imp {
         }
     }
 
-    /// Position + show the child at (x, y, w, h) in parent-client pixels.
+    /// Move/resize the child to (x, y, w, h) in parent-client pixels. Call only
+    /// when the rect actually changes — repositioning every frame is choppy.
     pub fn place(child: i64, x: i32, y: i32, w: i32, h: i32) {
         unsafe {
             let _ = SetWindowPos(
@@ -40,9 +42,15 @@ mod imp {
                 y,
                 w,
                 h,
-                SWP_NOZORDER | SWP_NOACTIVATE,
+                // NOCOPYBITS avoids smearing stale pixels while resizing.
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS,
             );
-            // SHOWNA = show without stealing focus from the egui surface.
+        }
+    }
+
+    /// Show the child without stealing focus from the egui surface.
+    pub fn show(child: i64) {
+        unsafe {
             let _ = ShowWindow(hwnd(child), SW_SHOWNA);
         }
     }
@@ -59,7 +67,8 @@ mod imp {
 mod imp {
     pub fn reparent(_parent: i64, _child: i64) {}
     pub fn place(_child: i64, _x: i32, _y: i32, _w: i32, _h: i32) {}
+    pub fn show(_child: i64) {}
     pub fn hide(_child: i64) {}
 }
 
-pub use imp::{hide, place, reparent};
+pub use imp::{hide, place, reparent, show};
