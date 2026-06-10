@@ -195,8 +195,17 @@ impl PuppyApp {
                 ShellAction::OpenFolder(path) => self.open_workspace(path),
                 ShellAction::Close(id) => {
                     self.sup.close(id);
+                    // Also close any browser tabs that belonged to this workspace.
+                    let browser_ids = self.browser.tabs_for_workspace(id);
+                    for bid in &browser_ids {
+                        self.browser.close_tab(*bid);
+                    }
                     if let Some(dock) = self.dock.as_mut() {
-                        dock.retain_tabs(|t| !matches!(t, Tab::Chat(x) if *x == id));
+                        dock.retain_tabs(|t| match t {
+                            Tab::Chat(x) => *x != id,
+                            Tab::Browser(b) => !browser_ids.contains(b),
+                            _ => true,
+                        });
                     }
                 }
                 ShellAction::FocusChat(id) => {
@@ -205,6 +214,14 @@ impl PuppyApp {
                             dock.find_tab_from(|t| matches!(t, Tab::Chat(x) if *x == id))
                     {
                         let _ = dock.set_active_tab(path);
+                    }
+                }
+                ShellAction::OpenBrowser { workspace, url } => {
+                    let bid = self.browser.open_tab(Some(workspace), url);
+                    if let Some(dock) = self.dock.as_mut() {
+                        // The originating workspace node is focused, so this
+                        // lands as a sibling tab right inside that workspace.
+                        dock.push_to_focused_leaf(Tab::Browser(bid));
                     }
                 }
                 ShellAction::ShowChanges(id) => {
@@ -250,7 +267,9 @@ impl eframe::App for PuppyApp {
             d.insert_temp(
                 crate::theme::terminal_colors_id(),
                 self.terminal_theme.resolve(),
-            )
+            );
+            // Let workspaces know whether to offer "Open in browser".
+            d.insert_temp(crate::browser::available_id(), self.browser.is_available());
         });
 
         let mut actions: Vec<ShellAction> = Vec::new();
@@ -335,7 +354,7 @@ impl eframe::App for PuppyApp {
             self.begin_folder_pick(ui.ctx());
         }
         if open_browser {
-            let id = self.browser.new_tab();
+            let id = self.browser.open_tab(None, None);
             if let Some(dock) = self.dock.as_mut() {
                 dock.push_to_focused_leaf(Tab::Browser(id));
             }

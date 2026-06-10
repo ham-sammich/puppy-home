@@ -28,6 +28,12 @@ pub enum ShellAction {
     FocusChat(WorkspaceId),
     /// Focus a workspace's chat tab and switch its editor to the Changes view.
     ShowChanges(WorkspaceId),
+    /// Open a browser tab tied to a workspace, optionally at a URL (e.g. its
+    /// dev server). `None` URL opens a blank browser.
+    OpenBrowser {
+        workspace: WorkspaceId,
+        url: Option<String>,
+    },
 }
 
 /// Transient `TabViewer` holding mutable access to app state for one frame.
@@ -64,7 +70,7 @@ impl TabViewer for Shell<'_> {
                 views::dashboard::render(ui, self.sup, self.browser, self.actions)
             }
             Tab::Chat(id) => match self.sup.get_mut(*id) {
-                Some(ws) => ws.render_chat(ui),
+                Some(ws) => ws.render_chat(ui, self.actions),
                 None => closed_placeholder(ui),
             },
             Tab::Browser(id) => self.browser.render_tab(ui, *id),

@@ -10,11 +10,28 @@ use super::Workspace;
 use super::diff::{file_name, marker_color};
 use super::render::{render_dir, render_entry};
 use super::state::EditorItem;
+use crate::shell::ShellAction;
 
 impl Workspace {
-    pub fn render_chat(&mut self, ui: &mut egui::Ui) {
+    pub fn render_chat(&mut self, ui: &mut egui::Ui, actions: &mut Vec<ShellAction>) {
         let id = self.id.0;
         self.poll_git(ui.ctx());
+
+        // Offer to open the workspace's dev server in the browser plugin, when
+        // it's installed. Scan the embedded terminal's output for local URLs.
+        let browser_available = ui
+            .ctx()
+            .data(|d| d.get_temp::<bool>(crate::browser::available_id()))
+            .unwrap_or(false);
+        let dev_urls: Vec<String> = if browser_available {
+            self.terminal
+                .as_ref()
+                .map(|t| crate::browser::detect_dev_urls(&t.screen_text()))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let ws_id = self.id;
 
         let mut open_git = false;
         egui::Panel::top(egui::Id::new(("ws-top", id))).show_inside(ui, |ui| {
@@ -32,6 +49,32 @@ impl Workspace {
                 ui.separator();
                 self.render_puppy_name(ui);
                 ui.separator();
+                if browser_available {
+                    if ui
+                        .button("Browser")
+                        .on_hover_text("Open a browser tab in this workspace")
+                        .clicked()
+                    {
+                        actions.push(ShellAction::OpenBrowser {
+                            workspace: ws_id,
+                            url: None,
+                        });
+                    }
+                    for url in &dev_urls {
+                        let label = format!("Open {}", url_host_port(url));
+                        if ui
+                            .button(label)
+                            .on_hover_text(format!("Open {url} in the browser plugin"))
+                            .clicked()
+                        {
+                            actions.push(ShellAction::OpenBrowser {
+                                workspace: ws_id,
+                                url: Some(url.clone()),
+                            });
+                        }
+                    }
+                    ui.separator();
+                }
                 ui.label(egui::RichText::new(&self.status_line).weak());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.toggle_value(&mut self.show_logs, "logs");
@@ -425,4 +468,14 @@ impl Workspace {
             });
         }
     }
+}
+
+/// Compact `host:port` of a URL, for the dev-server chips.
+fn url_host_port(url: &str) -> String {
+    let after = url.split("://").nth(1).unwrap_or(url);
+    after
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after)
+        .to_string()
 }

@@ -171,6 +171,14 @@ impl Terminal {
         }
     }
 
+    /// The visible screen text (for scanning dev-server URLs, etc.).
+    pub fn screen_text(&self) -> String {
+        self.parser
+            .lock()
+            .map(|p| p.screen().contents())
+            .unwrap_or_default()
+    }
+
     fn write_bytes(&mut self, bytes: &[u8]) {
         if !self.alive || bytes.is_empty() {
             return;

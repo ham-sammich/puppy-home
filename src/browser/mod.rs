@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use eframe::egui;
 
 use crate::plugin::{InstalledPlugin, PluginRegistry};
+use crate::workspace::WorkspaceId;
 use host::BrowserHost;
 
 /// The plugin id this manager drives.
@@ -26,6 +27,12 @@ const BROWSER_PLUGIN_ID: &str = "browser";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BrowserId(pub u64);
 
+/// The egui data-store id under which the app stashes browser availability each
+/// frame, so workspaces can decide whether to offer "Open in browser".
+pub fn available_id() -> egui::Id {
+    egui::Id::new("puppy-browser-available")
+}
+
 /// Per-tab browser state: URL bar + the (optional) running process.
 #[derive(Default)]
 struct BrowserTab {
@@ -34,6 +41,8 @@ struct BrowserTab {
     launch_error: Option<String>,
     /// Whether the plugin window has been reparented into our window yet.
     embedded: bool,
+    /// The workspace this browser tab belongs to (if opened from one).
+    workspace: Option<WorkspaceId>,
 }
 
 /// Owns plugin discovery + the open browser tabs.
@@ -99,12 +108,35 @@ impl BrowserManager {
         self.registry.all()
     }
 
-    /// Allocate a fresh tab id (and its backing state).
-    pub fn new_tab(&mut self) -> BrowserId {
+    /// Open a browser tab. When a `url` is given and the plugin is available,
+    /// the process launches immediately (e.g. opening a workspace's dev server);
+    /// otherwise it shows a Launch button.
+    pub fn open_tab(&mut self, workspace: Option<WorkspaceId>, url: Option<String>) -> BrowserId {
         let id = BrowserId(self.next_id);
         self.next_id += 1;
-        self.tabs.insert(id, BrowserTab::default());
+        let mut tab = BrowserTab {
+            workspace,
+            ..Default::default()
+        };
+        if let Some(u) = url {
+            let u = normalize_url(u.trim());
+            let exe = self.registry.get(BROWSER_PLUGIN_ID).map(|p| p.exe_path());
+            if self.is_available() {
+                launch(&mut tab, exe.as_deref(), &u);
+            }
+            tab.url = u;
+        }
+        self.tabs.insert(id, tab);
         id
+    }
+
+    /// The browser tabs belonging to a given workspace (for cleanup on close).
+    pub fn tabs_for_workspace(&self, ws: WorkspaceId) -> Vec<BrowserId> {
+        self.tabs
+            .iter()
+            .filter(|(_, t)| t.workspace == Some(ws))
+            .map(|(id, _)| *id)
+            .collect()
     }
 
     /// Close a tab: ask its browser process to exit gracefully (drop then also
@@ -117,9 +149,12 @@ impl BrowserManager {
         }
     }
 
-    /// A short title for the tab strip.
-    pub fn tab_title(&self, _id: BrowserId) -> String {
-        "Browser".to_string()
+    /// A short title for the tab strip — the URL host if we have one.
+    pub fn tab_title(&self, id: BrowserId) -> String {
+        match self.tabs.get(&id).map(|t| t.url.as_str()) {
+            Some(u) if !u.is_empty() => format!("Web: {}", host_port(u)),
+            _ => "Browser".to_string(),
+        }
     }
 
     /// Render one browser tab: Install panel or the live browser toolbar.
@@ -404,9 +439,70 @@ fn open_in_file_manager(dir: &std::path::Path) {
     let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
 }
 
+/// The `host:port` of a URL, for compact tab titles/chips.
+fn host_port(url: &str) -> String {
+    let after = url.split("://").nth(1).unwrap_or(url);
+    after.split(['/', '?', '#']).next().unwrap_or(after).to_string()
+}
+
+/// Scan text (e.g. terminal output) for local dev-server URLs to offer opening.
+pub fn detect_dev_urls(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for scheme in ["http://", "https://"] {
+        let mut from = 0;
+        while let Some(rel) = text[from..].find(scheme) {
+            let abs = from + rel;
+            let rest = &text[abs..];
+            let end = rest
+                .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '(' | ')' | '<' | '>'))
+                .unwrap_or(rest.len());
+            let url = rest[..end]
+                .trim_end_matches(|c| matches!(c, '.' | ',' | ';' | ':' | '!' | '?'))
+                .to_string();
+            if is_local_url(&url) && !out.contains(&url) {
+                out.push(url);
+            }
+            from = abs + scheme.len();
+        }
+    }
+    out
+}
+
+/// Whether a URL points at the local machine (a dev server worth offering).
+fn is_local_url(url: &str) -> bool {
+    let hp = host_port(url);
+    let host = hp.rsplit_once(':').map(|(h, _)| h).unwrap_or(&hp);
+    matches!(host, "localhost" | "127.0.0.1" | "0.0.0.0" | "[::1]")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_local_dev_urls() {
+        let log = "  VITE v5  ready\n  Local:   http://localhost:5173/\n  Network: http://192.168.1.5:5173/\n";
+        let urls = detect_dev_urls(log);
+        assert_eq!(urls, vec!["http://localhost:5173/"]);
+    }
+
+    #[test]
+    fn detects_multiple_and_dedups() {
+        let t = "run on http://127.0.0.1:3000 and again http://127.0.0.1:3000 also 0.0.0.0:8080";
+        let urls = detect_dev_urls(t);
+        assert_eq!(urls, vec!["http://127.0.0.1:3000"]);
+    }
+
+    #[test]
+    fn ignores_non_local_urls() {
+        assert!(detect_dev_urls("see https://example.com/docs").is_empty());
+    }
+
+    #[test]
+    fn host_port_extracts() {
+        assert_eq!(host_port("http://localhost:5173/app"), "localhost:5173");
+        assert_eq!(host_port("https://127.0.0.1:8000"), "127.0.0.1:8000");
+    }
 
     #[test]
     fn normalize_url_adds_scheme() {
