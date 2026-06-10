@@ -861,13 +861,23 @@ class Bridge:
         except Exception:
             log("autosave failed:\n" + traceback.format_exc())
 
-    def _browser_context(self) -> str:
+    # Words that signal the user's turn is about the in-app browser/page.
+    _BROWSER_HINTS = (
+        "browser", "console", "devtools", "dev tools", "cdp", "dom", "inspect",
+        "the page", "web page", "webpage", "the site", "the app", "localhost",
+        "screenshot", "javascript", "front-end", "frontend", "network tab",
+        "rendered", "rendering",
+    )
+
+    def _browser_context(self, user_text: str) -> str:
         """If the in-app browser plugin is open, the host drops a breadcrumb at
         ``.puppy/browser.json`` (in our cwd) with a live Chrome DevTools Protocol
         endpoint. Surface it to the agent so prompts like "check my app's console"
-        Just Work — no need for the user to paste the endpoint. Empty when there's
-        no browser open (so it never pollutes unrelated turns)."""
+        Just Work — no need for the user to paste the endpoint. Only injected when
+        the turn looks browser-related, so it never pollutes unrelated turns."""
         try:
+            if not any(k in user_text.lower() for k in self._BROWSER_HINTS):
+                return ""
             path = os.path.join(os.getcwd(), ".puppy", "browser.json")
             if not os.path.exists(path):
                 return ""
@@ -895,7 +905,7 @@ class Bridge:
         self.current_run = asyncio.current_task()
         try:
             self._sanitize_history()  # never send an orphaned tool_use/result pair
-            ctx = self._browser_context()
+            ctx = self._browser_context(text)
             prompt_text = f"{ctx}\n\n{text}" if ctx else text
             attachments = _decode_image_attachments(images)
             if attachments:

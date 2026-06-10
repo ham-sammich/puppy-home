@@ -20,7 +20,17 @@ impl Workspace {
         // it's installed. Scan the embedded terminal's output for local URLs.
         let browser_available = browser.is_available();
         let dev_urls: Vec<String> = if browser_available {
+            // Drop our own CDP endpoints and de-dupe by host:port so the chips
+            // only show real dev servers (not the browser's debugging ports).
+            let cdp = browser.cdp_hostports();
+            let mut seen = std::collections::HashSet::new();
             crate::browser::detect_dev_urls(&self.dev_url_scan_text())
+                .into_iter()
+                .filter(|u| {
+                    let hp = url_host_port(u);
+                    !cdp.contains(&hp) && seen.insert(hp)
+                })
+                .collect()
         } else {
             Vec::new()
         };

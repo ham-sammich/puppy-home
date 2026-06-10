@@ -109,6 +109,15 @@ impl BrowserManager {
         self.tabs.get(&id).map(|t| t.url.clone())
     }
 
+    /// `host:port` of every tab's CDP endpoint — so the dev-server chip scanner
+    /// can exclude them (they're our own debugging ports, not the user's app).
+    pub fn cdp_hostports(&self) -> Vec<String> {
+        self.tabs
+            .values()
+            .filter_map(|t| t.cdp_port.map(|p| format!("127.0.0.1:{p}")))
+            .collect()
+    }
+
     /// The CDP (Chrome DevTools Protocol) endpoint for a tab, if it's running —
     /// e.g. `http://127.0.0.1:9377`. Code Puppy can attach to it to inspect the
     /// console, DOM, network, and evaluate JS in the page.
