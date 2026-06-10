@@ -144,13 +144,17 @@ pub fn head_info(root: &Path) -> RepoInfo {
 }
 
 /// One commit in the history list.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Commit {
     pub hash: String,
     pub short: String,
     pub author: String,
     pub when: String,
     pub subject: String,
+    /// Full parent hashes (1 for a normal commit, 2+ for a merge, 0 for a root).
+    pub parents: Vec<String>,
+    /// Decorations on this commit: branch/tag names (e.g. `main`, `tag: v1`).
+    pub refs: Vec<String>,
 }
 
 /// Recent commits on HEAD (newest first), at most `limit`.
@@ -171,7 +175,61 @@ pub fn log(root: &Path, limit: usize) -> Vec<Commit> {
                 author: f.next()?.to_string(),
                 when: f.next()?.to_string(),
                 subject: f.next().unwrap_or("").to_string(),
+                parents: Vec::new(),
+                refs: Vec::new(),
             })
+        })
+        .collect()
+}
+
+/// Commits across **all** branches (newest first, date-ordered), with parent
+/// hashes + ref decorations — everything the graph view needs to lay out lanes.
+pub fn graph_log(root: &Path, limit: usize) -> Vec<Commit> {
+    // Fields, %x1f-separated: hash, short, parents, author, age, refs, subject.
+    let fmt = "--pretty=format:%H%x1f%h%x1f%P%x1f%an%x1f%ar%x1f%D%x1f%s";
+    let n = format!("-n{limit}");
+    let out = match run(root, &["log", "--all", "--date-order", &n, fmt]) {
+        Ok(o) => o,
+        Err(_) => return Vec::new(),
+    };
+    out.lines()
+        .filter_map(|line| {
+            let mut f = line.split('\u{1f}');
+            let hash = f.next()?.to_string();
+            let short = f.next()?.to_string();
+            let parents = f
+                .next()?
+                .split_whitespace()
+                .map(str::to_string)
+                .collect();
+            let author = f.next()?.to_string();
+            let when = f.next()?.to_string();
+            let refs = parse_refs(f.next().unwrap_or(""));
+            let subject = f.next().unwrap_or("").to_string();
+            Some(Commit {
+                hash,
+                short,
+                author,
+                when,
+                subject,
+                parents,
+                refs,
+            })
+        })
+        .collect()
+}
+
+/// Parse git's `%D` decoration string into clean ref labels.
+/// Drops the `HEAD -> ` arrow and `tag: ` prefix, keeps the names.
+fn parse_refs(d: &str) -> Vec<String> {
+    d.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            s.strip_prefix("HEAD -> ")
+                .or_else(|| s.strip_prefix("tag: "))
+                .unwrap_or(s)
+                .to_string()
         })
         .collect()
 }
@@ -270,6 +328,56 @@ pub fn unstage_all(root: &Path) -> Result<(), String> {
 /// Commit the staged changes. Returns the short summary git prints, or an error.
 pub fn commit(root: &Path, message: &str) -> Result<String, String> {
     run(root, &["commit", "-m", message]).map(|s| s.trim().to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Graph actions: branch/checkout/cherry-pick/revert/reset + remote sync.
+// ---------------------------------------------------------------------------
+
+/// Switch to an existing branch (or detach onto a tag/remote ref).
+pub fn checkout(root: &Path, name: &str) -> Result<(), String> {
+    run(root, &["checkout", name]).map(|_| ())
+}
+
+/// Create a new branch at `at` and switch to it.
+pub fn create_branch(root: &Path, name: &str, at: &str) -> Result<(), String> {
+    run(root, &["checkout", "-b", name, at]).map(|_| ())
+}
+
+/// Force-delete a local branch.
+pub fn delete_branch(root: &Path, name: &str) -> Result<(), String> {
+    run(root, &["branch", "-D", name]).map(|_| ())
+}
+
+/// Apply a commit onto the current branch.
+pub fn cherry_pick(root: &Path, hash: &str) -> Result<(), String> {
+    run(root, &["cherry-pick", hash]).map(|_| ())
+}
+
+/// Create a new commit that undoes `hash` (no editor).
+pub fn revert(root: &Path, hash: &str) -> Result<(), String> {
+    run(root, &["revert", "--no-edit", hash]).map(|_| ())
+}
+
+/// Move the current branch tip to `hash`. `mode` is a git reset flag such as
+/// `--soft`, `--mixed`, or `--hard` (the last discards working-tree changes).
+pub fn reset(root: &Path, hash: &str, mode: &str) -> Result<(), String> {
+    run(root, &["reset", mode, hash]).map(|_| ())
+}
+
+/// Fetch all remotes and prune stale tracking branches.
+pub fn fetch(root: &Path) -> Result<String, String> {
+    run(root, &["fetch", "--all", "--prune"]).map(|s| s.trim().to_string())
+}
+
+/// Fast-forward the current branch from its upstream.
+pub fn pull(root: &Path) -> Result<String, String> {
+    run(root, &["pull", "--ff-only"]).map(|s| s.trim().to_string())
+}
+
+/// Push the current branch to its upstream.
+pub fn push(root: &Path) -> Result<String, String> {
+    run(root, &["push"]).map(|s| s.trim().to_string())
 }
 
 /// One blamed line: the commit that last touched it + the content.

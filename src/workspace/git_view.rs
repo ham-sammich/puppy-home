@@ -136,6 +136,7 @@ impl Workspace {
             unstaged,
             log: crate::git::log(&self.root, 50),
         });
+        self.git_graph_commits = crate::git::graph_log(&self.root, 200);
     }
 
     /// Open (or focus) the Source Control / Git page.
@@ -219,6 +220,9 @@ impl Workspace {
         let can_commit = !staged.is_empty() && !self.commit_msg.trim().is_empty();
 
         let mut do_refresh = false;
+        let mut do_fetch = false;
+        let mut do_pull = false;
+        let mut do_push = false;
         let mut do_commit = false;
         let mut do_stage_all = false;
         let mut do_unstage_all = false;
@@ -247,6 +251,32 @@ impl Workspace {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.small_button("⟳").on_hover_text("Refresh").clicked() {
                     do_refresh = true;
+                }
+                if ui.small_button("Push").on_hover_text("git push").clicked() {
+                    do_push = true;
+                }
+                if ui
+                    .small_button("Pull")
+                    .on_hover_text("git pull --ff-only")
+                    .clicked()
+                {
+                    do_pull = true;
+                }
+                if ui
+                    .small_button("Fetch")
+                    .on_hover_text("git fetch --all --prune")
+                    .clicked()
+                {
+                    do_fetch = true;
+                }
+                // List <-> Graph toggle (GitKraken-style commit tree).
+                let (next, label, tip) = if self.git_show_graph {
+                    (false, "List", "Show the flat history list")
+                } else {
+                    (true, "Graph", "Show the commit graph")
+                };
+                if ui.small_button(label).on_hover_text(tip).clicked() {
+                    self.git_show_graph = next;
                 }
             });
         });
@@ -290,7 +320,8 @@ impl Workspace {
 
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .id_salt(("git-scroll", id))
+            .max_height(ui.available_height() * 0.5)
+            .id_salt(("git-stage-scroll", id))
             .show(ui, |ui| {
                 // Staged.
                 ui.horizontal(|ui| {
@@ -345,33 +376,76 @@ impl Workspace {
                         }
                     });
                 }
-
-                ui.add_space(8.0);
-                ui.separator();
-                ui.label(egui::RichText::new("History").strong());
-                for c in &log {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(&c.short)
-                                .monospace()
-                                .small()
-                                .color(egui::Color32::from_rgb(180, 150, 220)),
-                        );
-                        if ui
-                            .selectable_label(false, &c.subject)
-                            .on_hover_text(format!("{} · {}", c.author, c.when))
-                            .clicked()
-                        {
-                            commit_click = Some(c.clone());
-                        }
-                    });
-                }
             });
+
+        ui.add_space(6.0);
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("History").strong());
+            ui.label(
+                egui::RichText::new(if self.git_show_graph {
+                    "(graph — all branches)"
+                } else {
+                    "(current branch)"
+                })
+                .weak()
+                .small(),
+            );
+        });
+
+        if self.git_show_graph {
+            // GitKraken-style commit tree (owns its own scroll area).
+            self.render_graph(ui);
+        } else {
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .id_salt(("git-log-scroll", id))
+                .show(ui, |ui| {
+                    for c in &log {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(&c.short)
+                                    .monospace()
+                                    .small()
+                                    .color(egui::Color32::from_rgb(180, 150, 220)),
+                            );
+                            if ui
+                                .selectable_label(false, &c.subject)
+                                .on_hover_text(format!("{} · {}", c.author, c.when))
+                                .clicked()
+                            {
+                                commit_click = Some(c.clone());
+                            }
+                        });
+                    }
+                });
+        }
 
         // Apply deferred actions.
         if do_refresh {
             self.git_action_msg = None;
             self.refresh_git_view();
+        }
+        if do_fetch {
+            match crate::git::fetch(&self.root) {
+                Ok(s) => self.git_action(Ok(()), if s.is_empty() { "Fetched (up to date)" } else { "Fetched from remotes" }),
+                Err(e) => self.git_action(Err(e), ""),
+            }
+        }
+        if do_pull {
+            match crate::git::pull(&self.root) {
+                Ok(s) => {
+                    let line = s.lines().last().unwrap_or("Pulled").to_string();
+                    self.git_action(Ok(()), &format!("Pulled · {line}"));
+                }
+                Err(e) => self.git_action(Err(e), ""),
+            }
+        }
+        if do_push {
+            match crate::git::push(&self.root) {
+                Ok(_) => self.git_action(Ok(()), "Pushed to upstream"),
+                Err(e) => self.git_action(Err(e), ""),
+            }
         }
         if let Some(p) = stage_path {
             let r = crate::git::stage(&self.root, &p);

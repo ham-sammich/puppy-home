@@ -25,6 +25,7 @@ mod clipboard;
 mod composer;
 mod diff;
 mod editor;
+mod git_graph;
 mod git_view;
 mod render;
 mod sessions;
@@ -139,6 +140,12 @@ pub struct Workspace {
     editor_active: usize,
     // Git view (Source Control page + commit/blame tabs)
     git_view: Option<GitView>,
+    /// All-branches commits for the graph view (newest first, with parents/refs).
+    git_graph_commits: Vec<crate::git::Commit>,
+    /// Whether the Git page shows the GitKraken-style graph vs. the flat list.
+    git_show_graph: bool,
+    /// Active "create branch here" dialog (commit hash/short + typed name).
+    git_branch_dialog: Option<git_graph::BranchDialog>,
     commit_msg: String,
     git_action_msg: Option<(bool, String)>,
     commit_view: Option<(String, DiffRecord)>,
@@ -225,6 +232,9 @@ impl Workspace {
             editor_open: Vec::new(),
             editor_active: 0,
             git_view: None,
+            git_graph_commits: Vec::new(),
+            git_show_graph: true,
+            git_branch_dialog: None,
             commit_msg: String::new(),
             git_action_msg: None,
             commit_view: None,
