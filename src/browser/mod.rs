@@ -165,9 +165,13 @@ impl BrowserManager {
         }
     }
 
-    /// A short title for the tab strip — the URL host if we have one.
+    /// A short title for the tab strip — the file name for `file://`, else host.
     pub fn tab_title(&self, id: BrowserId) -> String {
         match self.tabs.get(&id).map(|t| t.url.as_str()) {
+            Some(u) if u.starts_with("file://") => {
+                let name = u.rsplit('/').next().unwrap_or(u);
+                format!("Web: {name}")
+            }
             Some(u) if !u.is_empty() => format!("Web: {}", host_port(u)),
             _ => "Browser".to_string(),
         }
@@ -458,6 +462,16 @@ fn open_in_file_manager(dir: &std::path::Path) {
     let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
 }
 
+/// Build a `file://` URL for a local path, so the plugin can open local HTML.
+pub fn file_url(path: &std::path::Path) -> String {
+    let s = path.to_string_lossy().replace('\\', "/").replace(' ', "%20");
+    if s.starts_with('/') {
+        format!("file://{s}")
+    } else {
+        format!("file:///{s}")
+    }
+}
+
 /// The `host:port` of a URL, for compact tab titles/chips.
 fn host_port(url: &str) -> String {
     let after = url.split("://").nth(1).unwrap_or(url);
@@ -515,6 +529,19 @@ mod tests {
     #[test]
     fn ignores_non_local_urls() {
         assert!(detect_dev_urls("see https://example.com/docs").is_empty());
+    }
+
+    #[test]
+    fn file_url_builds() {
+        use std::path::Path;
+        assert_eq!(
+            file_url(Path::new("D:\\proj\\index.html")),
+            "file:///D:/proj/index.html"
+        );
+        assert_eq!(
+            file_url(Path::new("D:\\a b\\x.html")),
+            "file:///D:/a%20b/x.html"
+        );
     }
 
     #[test]

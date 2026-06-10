@@ -81,22 +81,9 @@ impl Workspace {
         if open_git {
             self.show_git();
         }
-        // Open the browser as an editor tab *inside* this workspace. If a tab
-        // for the same URL is already open, just focus it (no duplicates).
+        // Open the browser as an editor tab *inside* this workspace.
         if let Some(url) = open_browser {
-            let existing = url.as_ref().and_then(|u| {
-                self.editor_open.iter().position(|it| {
-                    matches!(it, EditorItem::Browser(b)
-                        if browser.tab_url(*b).as_deref() == Some(u.as_str()))
-                })
-            });
-            match existing {
-                Some(i) => self.editor_active = i,
-                None => {
-                    let bid = browser.open_tab(Some(self.id), url);
-                    self.focus_or_open(EditorItem::Browser(bid));
-                }
-            }
+            self.open_browser_tab(browser, url);
         }
 
         // File tree sidebar (toggleable) — explorer (top) + Changes (bottom).
@@ -407,7 +394,32 @@ impl Workspace {
         if let Some(item) = self.editor_open.get(self.editor_active).cloned() {
             match item {
                 EditorItem::Changes => self.render_diffs(ui),
-                EditorItem::File(p) => self.render_file(ui, &p),
+                EditorItem::File(p) => {
+                    // For HTML, offer a one-click preview in the browser plugin.
+                    if browser.is_available() && is_html(&p) {
+                        let mut preview = false;
+                        egui::Panel::top(egui::Id::new(("ws-html-bar", id))).show_inside(
+                            ui,
+                            |ui| {
+                                ui.add_space(2.0);
+                                ui.horizontal(|ui| {
+                                    if ui
+                                        .button("Open in browser")
+                                        .on_hover_text("Preview this HTML file in the browser plugin")
+                                        .clicked()
+                                    {
+                                        preview = true;
+                                    }
+                                });
+                                ui.add_space(2.0);
+                            },
+                        );
+                        if preview {
+                            self.open_browser_tab(browser, Some(crate::browser::file_url(&p)));
+                        }
+                    }
+                    self.render_file(ui, &p);
+                }
                 EditorItem::Git => self.render_git(ui),
                 EditorItem::Commit { hash, .. } => self.render_commit(ui, &hash),
                 EditorItem::Browser(bid) => browser.render_tab(ui, bid),
@@ -508,6 +520,24 @@ impl Workspace {
 }
 
 impl Workspace {
+    /// Open (or focus) a browser editor tab in this workspace. If a tab for the
+    /// same URL is already open, focus it instead of opening a duplicate.
+    fn open_browser_tab(&mut self, browser: &mut BrowserManager, url: Option<String>) {
+        let existing = url.as_ref().and_then(|u| {
+            self.editor_open.iter().position(|it| {
+                matches!(it, EditorItem::Browser(b)
+                    if browser.tab_url(*b).as_deref() == Some(u.as_str()))
+            })
+        });
+        match existing {
+            Some(i) => self.editor_active = i,
+            None => {
+                let bid = browser.open_tab(Some(self.id), url);
+                self.focus_or_open(EditorItem::Browser(bid));
+            }
+        }
+    }
+
     /// Text to scan for dev-server URLs: the embedded terminal's screen plus the
     /// recent transcript (the agent often prints "running at http://localhost…").
     fn dev_url_scan_text(&self) -> String {
@@ -531,6 +561,17 @@ impl Workspace {
         }
         s
     }
+}
+
+/// Whether a path looks like an HTML file we can preview in the browser.
+fn is_html(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_ascii_lowercase())
+            .as_deref(),
+        Some("html" | "htm")
+    )
 }
 
 /// Compact `host:port` of a URL, for the dev-server chips.
