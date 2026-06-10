@@ -81,10 +81,22 @@ impl Workspace {
         if open_git {
             self.show_git();
         }
-        // Open the browser as an editor tab *inside* this workspace.
+        // Open the browser as an editor tab *inside* this workspace. If a tab
+        // for the same URL is already open, just focus it (no duplicates).
         if let Some(url) = open_browser {
-            let bid = browser.open_tab(Some(self.id), url);
-            self.focus_or_open(EditorItem::Browser(bid));
+            let existing = url.as_ref().and_then(|u| {
+                self.editor_open.iter().position(|it| {
+                    matches!(it, EditorItem::Browser(b)
+                        if browser.tab_url(*b).as_deref() == Some(u.as_str()))
+                })
+            });
+            match existing {
+                Some(i) => self.editor_active = i,
+                None => {
+                    let bid = browser.open_tab(Some(self.id), url);
+                    self.focus_or_open(EditorItem::Browser(bid));
+                }
+            }
         }
 
         // File tree sidebar (toggleable) — explorer (top) + Changes (bottom).
@@ -323,6 +335,24 @@ impl Workspace {
         let id = self.id.0;
         let mut switch_to: Option<usize> = None;
         let mut close: Option<usize> = None;
+
+        // Drop browser tabs whose process has exited (the user closed the page),
+        // so a closed browser doesn't leave a dead tab behind.
+        let dead: Vec<usize> = self
+            .editor_open
+            .iter()
+            .enumerate()
+            .filter_map(|(i, it)| match it {
+                EditorItem::Browser(b) if browser.is_tab_closed(*b) => Some(i),
+                _ => None,
+            })
+            .collect();
+        for i in dead.into_iter().rev() {
+            if let Some(EditorItem::Browser(b)) = self.editor_open.get(i) {
+                browser.close_tab(*b);
+            }
+            self.close_editor(i);
+        }
 
         // Precompute tab labels so the tab-strip closure doesn't borrow `browser`.
         let labels: Vec<String> = self

@@ -37,6 +37,9 @@ struct BrowserTab {
     embedded: bool,
     /// The workspace this browser tab belongs to (if opened from one).
     workspace: Option<WorkspaceId>,
+    /// Whether a process was ever launched (distinguishes "not started yet"
+    /// from "started and then exited").
+    launched: bool,
 }
 
 /// Owns plugin discovery + the open browser tabs.
@@ -71,9 +74,28 @@ impl BrowserManager {
         self.parent_hwnd = hwnd;
     }
 
-    /// Start a frame: forget which tabs were placed last frame.
+    /// Start a frame: reap any exited browser processes and forget which tabs
+    /// were placed last frame.
     pub fn begin_frame(&mut self) {
         self.placed.clear();
+        for tab in self.tabs.values_mut() {
+            if tab.host.as_mut().map(|h| !h.is_alive()).unwrap_or(false) {
+                tab.host = None;
+            }
+        }
+    }
+
+    /// Whether a tab's process has exited (or the tab is gone) — so its owner
+    /// can drop the now-dead tab. A tab that was never launched is *not* closed.
+    pub fn is_tab_closed(&self, id: BrowserId) -> bool {
+        self.tabs
+            .get(&id)
+            .map_or(true, |t| t.launched && t.host.is_none())
+    }
+
+    /// The (normalized) URL a tab is pointed at, if any.
+    pub fn tab_url(&self, id: BrowserId) -> Option<String> {
+        self.tabs.get(&id).map(|t| t.url.clone())
     }
 
     /// End a frame: hide any browser window whose tab wasn't drawn (inactive or
@@ -397,7 +419,10 @@ fn launch(tab: &mut BrowserTab, exe: Option<&std::path::Path>, url: &str) {
         return;
     };
     match BrowserHost::spawn(exe, url) {
-        Ok(h) => tab.host = Some(h),
+        Ok(h) => {
+            tab.host = Some(h);
+            tab.launched = true;
+        }
         Err(e) => tab.launch_error = Some(format!("Couldn't launch browser: {e}")),
     }
 }
@@ -451,7 +476,7 @@ pub fn detect_dev_urls(text: &str) -> Vec<String> {
                 .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '(' | ')' | '<' | '>'))
                 .unwrap_or(rest.len());
             let url = rest[..end]
-                .trim_end_matches(|c| matches!(c, '.' | ',' | ';' | ':' | '!' | '?'))
+                .trim_end_matches(|c| matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | '/'))
                 .to_string();
             if is_local_url(&url) && !out.contains(&url) {
                 out.push(url);
@@ -477,12 +502,12 @@ mod tests {
     fn detects_local_dev_urls() {
         let log = "  VITE v5  ready\n  Local:   http://localhost:5173/\n  Network: http://192.168.1.5:5173/\n";
         let urls = detect_dev_urls(log);
-        assert_eq!(urls, vec!["http://localhost:5173/"]);
+        assert_eq!(urls, vec!["http://localhost:5173"]);
     }
 
     #[test]
     fn detects_multiple_and_dedups() {
-        let t = "run on http://127.0.0.1:3000 and again http://127.0.0.1:3000 also 0.0.0.0:8080";
+        let t = "run on http://127.0.0.1:3000 and again http://127.0.0.1:3000/ also 0.0.0.0:8080";
         let urls = detect_dev_urls(t);
         assert_eq!(urls, vec!["http://127.0.0.1:3000"]);
     }
