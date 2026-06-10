@@ -230,8 +230,13 @@ impl Terminal {
         }
         let origin = rect.min;
 
-        let default_fg = egui::Color32::from_rgb(0xcc, 0xcc, 0xcc);
-        let default_bg = egui::Color32::from_rgb(0x1e, 0x1e, 0x24);
+        // The active terminal palette is stashed in ctx data by the app layer.
+        let term: crate::theme::ResolvedTerminal = ui
+            .ctx()
+            .data(|d| d.get_temp(crate::theme::terminal_colors_id()))
+            .unwrap_or_default();
+        let default_fg = term.fg;
+        let default_bg = term.bg;
 
         // Mouse-wheel scrollback (when hovered and not on the alternate screen).
         if resp.hovered() {
@@ -257,8 +262,8 @@ impl Terminal {
                     let Some(cell) = screen.cell(row, col) else {
                         continue;
                     };
-                    let mut fg = to_color(cell.fgcolor(), default_fg);
-                    let mut bg = to_color(cell.bgcolor(), default_bg);
+                    let mut fg = to_color(cell.fgcolor(), default_fg, &term);
+                    let mut bg = to_color(cell.bgcolor(), default_bg, &term);
                     if cell.inverse() {
                         std::mem::swap(&mut fg, &mut bg);
                     }
@@ -287,7 +292,7 @@ impl Terminal {
                     let y = origin.y + cr as f32 * cell_h;
                     let rect =
                         egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(cell_w, cell_h));
-                    let cursor = egui::Color32::from_rgb(0xd0, 0xd0, 0x70);
+                    let cursor = term.cursor;
                     if focused {
                         painter.rect_filled(rect, 0.0, cursor.gamma_multiply(0.55));
                     } else {
@@ -430,34 +435,24 @@ fn letter(key: egui::Key) -> Option<char> {
     })
 }
 
-/// Convert a vt100 color to an egui color (256-color palette for indexed).
-fn to_color(c: vt100::Color, default: egui::Color32) -> egui::Color32 {
+/// Convert a vt100 color to an egui color, honoring the active terminal theme
+/// (its 16 base ANSI colors) and the 256-color cube for higher indices.
+fn to_color(
+    c: vt100::Color,
+    default: egui::Color32,
+    term: &crate::theme::ResolvedTerminal,
+) -> egui::Color32 {
     match c {
         vt100::Color::Default => default,
         vt100::Color::Rgb(r, g, b) => egui::Color32::from_rgb(r, g, b),
-        vt100::Color::Idx(i) => ansi_256(i),
+        vt100::Color::Idx(i) => ansi_256(i, term),
     }
 }
 
-fn ansi_256(i: u8) -> egui::Color32 {
+fn ansi_256(i: u8, term: &crate::theme::ResolvedTerminal) -> egui::Color32 {
     use egui::Color32;
     match i {
-        0 => Color32::from_rgb(0, 0, 0),
-        1 => Color32::from_rgb(205, 49, 49),
-        2 => Color32::from_rgb(13, 188, 121),
-        3 => Color32::from_rgb(229, 229, 16),
-        4 => Color32::from_rgb(36, 114, 200),
-        5 => Color32::from_rgb(188, 63, 188),
-        6 => Color32::from_rgb(17, 168, 205),
-        7 => Color32::from_rgb(229, 229, 229),
-        8 => Color32::from_rgb(102, 102, 102),
-        9 => Color32::from_rgb(241, 76, 76),
-        10 => Color32::from_rgb(35, 209, 139),
-        11 => Color32::from_rgb(245, 245, 67),
-        12 => Color32::from_rgb(59, 142, 234),
-        13 => Color32::from_rgb(214, 112, 214),
-        14 => Color32::from_rgb(41, 184, 219),
-        15 => Color32::from_rgb(255, 255, 255),
+        0..=15 => term.ansi[i as usize],
         16..=231 => {
             let i = i - 16;
             let r = i / 36;
@@ -516,22 +511,24 @@ mod tests {
 
     #[test]
     fn ansi_palette() {
-        assert_eq!(ansi_256(1), egui::Color32::from_rgb(205, 49, 49)); // red
-        assert_eq!(ansi_256(16), egui::Color32::from_rgb(0, 0, 0)); // cube origin
-        assert_eq!(ansi_256(231), egui::Color32::from_rgb(255, 255, 255)); // cube max
-        assert_eq!(ansi_256(232), egui::Color32::from_rgb(8, 8, 8)); // grayscale start
+        let term = crate::theme::ResolvedTerminal::default();
+        assert_eq!(ansi_256(1, &term), egui::Color32::from_rgb(205, 49, 49)); // red
+        assert_eq!(ansi_256(16, &term), egui::Color32::from_rgb(0, 0, 0)); // cube origin
+        assert_eq!(ansi_256(231, &term), egui::Color32::from_rgb(255, 255, 255)); // cube max
+        assert_eq!(ansi_256(232, &term), egui::Color32::from_rgb(8, 8, 8)); // grayscale start
     }
 
     #[test]
     fn color_conversion() {
+        let term = crate::theme::ResolvedTerminal::default();
         let def = egui::Color32::from_rgb(1, 2, 3);
-        assert_eq!(to_color(vt100::Color::Default, def), def);
+        assert_eq!(to_color(vt100::Color::Default, def, &term), def);
         assert_eq!(
-            to_color(vt100::Color::Rgb(10, 20, 30), def),
+            to_color(vt100::Color::Rgb(10, 20, 30), def, &term),
             egui::Color32::from_rgb(10, 20, 30)
         );
         assert_eq!(
-            to_color(vt100::Color::Idx(1), def),
+            to_color(vt100::Color::Idx(1), def, &term),
             egui::Color32::from_rgb(205, 49, 49)
         );
     }

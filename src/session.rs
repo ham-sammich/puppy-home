@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Session {
@@ -15,30 +15,58 @@ pub struct Session {
     pub theme: Theme,
 }
 
-/// UI color theme, persisted across runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
+/// UI color theme, persisted across runs. `Custom(name)` references a saved
+/// theme in `themes.json` by name.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Theme {
     #[default]
     Dark,
     Light,
+    Custom(String),
 }
 
 impl Theme {
-    /// The other theme (drives the toggle button).
-    pub fn toggled(self) -> Theme {
+    /// Human-friendly label for the theme menu.
+    pub fn label(&self) -> String {
         match self {
-            Theme::Dark => Theme::Light,
-            Theme::Light => Theme::Dark,
+            Theme::Dark => "Dark".into(),
+            Theme::Light => "Light".into(),
+            Theme::Custom(name) => name.clone(),
         }
     }
 
-    /// Lowercase label for the toggle button.
-    pub fn label(self) -> &'static str {
+    /// Compact persisted token: `dark`, `light`, or `custom:<name>`.
+    fn token(&self) -> String {
         match self {
-            Theme::Dark => "dark",
-            Theme::Light => "light",
+            Theme::Dark => "dark".into(),
+            Theme::Light => "light".into(),
+            Theme::Custom(name) => format!("custom:{name}"),
         }
+    }
+
+    /// Parse a persisted token back into a [`Theme`] (unknown -> Dark).
+    fn from_token(s: &str) -> Theme {
+        match s {
+            "dark" => Theme::Dark,
+            "light" => Theme::Light,
+            other => match other.strip_prefix("custom:") {
+                Some(name) => Theme::Custom(name.to_string()),
+                None => Theme::Dark,
+            },
+        }
+    }
+}
+
+impl Serialize for Theme {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.token())
+    }
+}
+
+impl<'de> Deserialize<'de> for Theme {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Theme, D::Error> {
+        let s = String::deserialize(d)?;
+        Ok(Theme::from_token(&s))
     }
 }
 
@@ -150,12 +178,22 @@ mod tests {
     }
 
     #[test]
-    fn theme_defaults_dark_and_toggles() {
+    fn theme_defaults_dark_and_labels() {
         assert_eq!(Theme::default(), Theme::Dark);
-        assert_eq!(Theme::Dark.toggled(), Theme::Light);
-        assert_eq!(Theme::Light.toggled(), Theme::Dark);
-        assert_eq!(Theme::Dark.label(), "dark");
-        assert_eq!(Theme::Light.label(), "light");
+        assert_eq!(Theme::Dark.label(), "Dark");
+        assert_eq!(Theme::Custom("Neon".into()).label(), "Neon");
+    }
+
+    #[test]
+    fn custom_theme_roundtrips_via_serde() {
+        let s = Session {
+            workspaces: vec![],
+            theme: Theme::Custom("Neon".into()),
+        };
+        let j = serde_json::to_string(&s).unwrap();
+        assert!(j.contains("\"theme\":\"custom:Neon\""));
+        let back: Session = serde_json::from_str(&j).unwrap();
+        assert_eq!(back.theme, Theme::Custom("Neon".into()));
     }
 
     #[test]

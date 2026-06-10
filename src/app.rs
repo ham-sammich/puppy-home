@@ -9,6 +9,7 @@ use egui_dock::{DockArea, DockState, Style};
 use crate::session::Theme;
 use crate::shell::{Shell, ShellAction, Tab};
 use crate::supervisor::Supervisor;
+use crate::theme::{TerminalTheme, ThemePalette};
 
 pub struct PuppyApp {
     sup: Supervisor,
@@ -21,6 +22,14 @@ pub struct PuppyApp {
     last_session_sig: String,
     /// Current UI theme (persisted in `session.json`).
     theme: Theme,
+    /// Library of saved custom themes (persisted in `themes.json`).
+    themes: Vec<ThemePalette>,
+    /// The editor's working UI palette (the theme being edited / previewed).
+    theme_palette: ThemePalette,
+    /// The active terminal palette (persisted in `terminal.json`).
+    terminal_theme: TerminalTheme,
+    /// Whether the live theme-editor window is open.
+    theme_editor_open: bool,
 }
 
 /// Snapshot the open workspaces as a persistable session.
@@ -39,12 +48,9 @@ fn current_session(sup: &Supervisor, theme: Theme) -> crate::session::Session {
     }
 }
 
-/// Apply a theme to the egui context (on launch and on toggle).
-fn apply_theme(ctx: &egui::Context, theme: Theme) {
-    ctx.set_visuals(match theme {
-        Theme::Dark => egui::Visuals::dark(),
-        Theme::Light => egui::Visuals::light(),
-    });
+/// Apply a theme to the egui context (on launch and on change).
+fn apply_theme(ctx: &egui::Context, theme: &Theme, library: &[ThemePalette]) {
+    ctx.set_visuals(crate::theme::visuals_for(theme, library));
 }
 
 fn session_sig(session: &crate::session::Session) -> String {
@@ -61,7 +67,18 @@ impl PuppyApp {
         });
         let saved = crate::session::load();
         let theme = saved.theme;
-        apply_theme(&cc.egui_ctx, theme);
+        let themes = crate::theme::load_themes();
+        let terminal_theme = crate::theme::load_terminal();
+        // Seed the editor buffer with the active theme (or a fresh dark base).
+        let theme_palette = match &theme {
+            Theme::Custom(name) => themes
+                .iter()
+                .find(|t| &t.name == name)
+                .cloned()
+                .unwrap_or_else(ThemePalette::dark),
+            _ => ThemePalette::dark(),
+        };
+        apply_theme(&cc.egui_ctx, &theme, &themes);
         let mut sup = Supervisor::new(cc.egui_ctx.clone());
         let mut dock = DockState::new(vec![Tab::Dashboard]);
         let mut status = "Open a folder to start a Code Puppy workspace.".to_string();
@@ -100,7 +117,7 @@ impl PuppyApp {
 
         // Seed the signature so we don't immediately rewrite the same session
         // (agent/model fill in once each sidecar is ready, which then persists).
-        let last_session_sig = session_sig(&current_session(&sup, theme));
+        let last_session_sig = session_sig(&current_session(&sup, theme.clone()));
 
         PuppyApp {
             sup,
@@ -109,12 +126,16 @@ impl PuppyApp {
             folder_pick: None,
             last_session_sig,
             theme,
+            themes,
+            theme_palette,
+            terminal_theme,
+            theme_editor_open: false,
         }
     }
 
     /// Persist the open-workspace set whenever it changes (open/close/agent/model).
     fn persist_session(&mut self) {
-        let session = current_session(&self.sup, self.theme);
+        let session = current_session(&self.sup, self.theme.clone());
         let sig = session_sig(&session);
         if sig != self.last_session_sig {
             self.last_session_sig = sig;
@@ -203,16 +224,27 @@ impl eframe::App for PuppyApp {
         self.sup.drain();
         self.poll_folder_pick();
 
+        // Hand the resolved terminal palette to the embedded terminal renderer
+        // via the per-context data store (avoids threading it through the dock).
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(
+                crate::theme::terminal_colors_id(),
+                self.terminal_theme.resolve(),
+            )
+        });
+
         let mut actions: Vec<ShellAction> = Vec::new();
         let mut open_clicked = false;
-        let mut theme_clicked = false;
-        let theme = self.theme;
+        let mut pick_theme: Option<Theme> = None;
+        let mut open_editor = false;
+        let theme = self.theme.clone();
 
         // Copy the bits the menu needs so its closure doesn't borrow `self`.
         let picking = self.folder_pick.is_some();
         let ws_count = self.sup.len();
         let waiting = self.sup.waiting_count();
         let status = self.status.clone();
+        let theme_names: Vec<String> = self.themes.iter().map(|t| t.name.clone()).collect();
 
         egui::Panel::top("app-menu").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
@@ -240,22 +272,70 @@ impl eframe::App for PuppyApp {
                     ui.label(egui::RichText::new(&status).weak());
                 }
                 ui.separator();
-                if ui
-                    .button(format!("Theme: {}", theme.label()))
-                    .on_hover_text("Toggle light / dark theme")
-                    .clicked()
-                {
-                    theme_clicked = true;
-                }
+                ui.menu_button(format!("Theme: {}", theme.label()), |ui| {
+                    if ui.selectable_label(theme == Theme::Dark, "Dark").clicked() {
+                        pick_theme = Some(Theme::Dark);
+                        ui.close();
+                    }
+                    if ui.selectable_label(theme == Theme::Light, "Light").clicked() {
+                        pick_theme = Some(Theme::Light);
+                        ui.close();
+                    }
+                    if !theme_names.is_empty() {
+                        ui.separator();
+                        ui.label(egui::RichText::new("Custom").weak().small());
+                        for name in &theme_names {
+                            let sel = matches!(&theme, Theme::Custom(n) if n == name);
+                            if ui.selectable_label(sel, name).clicked() {
+                                pick_theme = Some(Theme::Custom(name.clone()));
+                                ui.close();
+                            }
+                        }
+                    }
+                    ui.separator();
+                    if ui.button("Edit themes…").clicked() {
+                        open_editor = true;
+                        ui.close();
+                    }
+                });
             });
         });
 
         if open_clicked {
             self.begin_folder_pick(ui.ctx());
         }
-        if theme_clicked {
-            self.theme = self.theme.toggled();
-            apply_theme(ui.ctx(), self.theme);
+        if let Some(t) = pick_theme {
+            self.theme = t;
+            // Sync the editor buffer to the freshly-picked custom theme.
+            if let Theme::Custom(name) = &self.theme
+                && let Some(p) = self.themes.iter().find(|t| &t.name == name)
+            {
+                self.theme_palette = p.clone();
+            }
+            apply_theme(ui.ctx(), &self.theme, &self.themes);
+        }
+        if open_editor {
+            self.theme_editor_open = true;
+        }
+        if self.theme_editor_open {
+            let outcome = crate::theme::editor_window(
+                ui.ctx(),
+                &mut self.theme_editor_open,
+                &mut self.theme_palette,
+                &mut self.themes,
+                &mut self.terminal_theme,
+            );
+            if let Some(name) = outcome.select {
+                self.theme = Theme::Custom(name);
+            }
+            if outcome.changed {
+                // Live preview: apply the working palette directly (it may not be
+                // saved to the library yet).
+                ui.ctx().set_visuals(self.theme_palette.to_visuals());
+                if !matches!(self.theme, Theme::Custom(_)) {
+                    self.theme = Theme::Custom(self.theme_palette.name.clone());
+                }
+            }
         }
 
         let mut dock = self.dock.take().expect("dock present");

@@ -15,6 +15,7 @@ mod session;
 mod shell;
 mod supervisor;
 mod terminal;
+mod theme;
 mod views;
 mod workspace;
 
