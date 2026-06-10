@@ -252,6 +252,17 @@ impl Workspace {
             }
         }
 
+        // Self-clean: once no browser tab remains, remove the CDP breadcrumb so
+        // it can't go stale (it's re-created when a browser is reopened).
+        let has_browser = self
+            .editor_open
+            .iter()
+            .any(|it| matches!(it, EditorItem::Browser(_)));
+        if !has_browser && self.browser_cdp_written.is_some() {
+            super::cleanup_puppy_browser(&self.root);
+            self.browser_cdp_written = None;
+        }
+
         // Interactive question modal floats above everything for this workspace.
         if self.pending_ask.is_some() {
             self.render_ask_modal(ui.ctx());
@@ -593,6 +604,14 @@ impl Workspace {
         }
         let dir = self.root.join(".puppy");
         if std::fs::create_dir_all(&dir).is_ok() {
+            // Keep this transient runtime dir out of git (self-contained ignore,
+            // so we never touch the user's root .gitignore). Only if it's a repo.
+            if self.root.join(".git").exists() {
+                let gi = dir.join(".gitignore");
+                if !gi.exists() {
+                    let _ = std::fs::write(&gi, "*\n");
+                }
+            }
             let body = format!(
                 "{{\n  \"cdp\": \"{cdp}\",\n  \"url\": \"{url}\",\n  \"hint\": \"Chrome DevTools Protocol. GET {cdp}/json/list for targets and webSocketDebuggerUrl, then drive CDP over that websocket.\"\n}}\n"
             );

@@ -861,15 +861,47 @@ class Bridge:
         except Exception:
             log("autosave failed:\n" + traceback.format_exc())
 
+    def _browser_context(self) -> str:
+        """If the in-app browser plugin is open, the host drops a breadcrumb at
+        ``.puppy/browser.json`` (in our cwd) with a live Chrome DevTools Protocol
+        endpoint. Surface it to the agent so prompts like "check my app's console"
+        Just Work — no need for the user to paste the endpoint. Empty when there's
+        no browser open (so it never pollutes unrelated turns)."""
+        try:
+            path = os.path.join(os.getcwd(), ".puppy", "browser.json")
+            if not os.path.exists(path):
+                return ""
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            cdp = data.get("cdp", "")
+            if not cdp:
+                return ""
+            url = data.get("url", "")
+            where = f" showing {url}" if url else ""
+            return (
+                f"[context] The in-app browser is open{where}. Its Chrome DevTools "
+                f"Protocol endpoint is {cdp}. If I ask about the page \u2014 its "
+                "console, errors, network, DOM, or to run JavaScript in it \u2014 "
+                f"attach over CDP: GET {cdp}/json/list for a target's "
+                "webSocketDebuggerUrl, connect that websocket, and issue CDP methods "
+                "(Runtime.evaluate, Log.enable, Runtime.consoleAPICalled, "
+                "Page.captureScreenshot, Network.*). Use your shell/python tools. "
+                "Ignore this note if my request is unrelated to the browser."
+            )
+        except Exception:
+            return ""
+
     async def handle_prompt(self, msg_id: int, text: str, images=None) -> None:
         self.current_run = asyncio.current_task()
         try:
             self._sanitize_history()  # never send an orphaned tool_use/result pair
+            ctx = self._browser_context()
+            prompt_text = f"{ctx}\n\n{text}" if ctx else text
             attachments = _decode_image_attachments(images)
             if attachments:
-                result = await self.agent.run_with_mcp(text, attachments=attachments)
+                result = await self.agent.run_with_mcp(prompt_text, attachments=attachments)
             else:
-                result = await self.agent.run_with_mcp(text)
+                result = await self.agent.run_with_mcp(prompt_text)
             # Canonicalize the agent's history from the result, exactly like the
             # CLI does. The history_processors callback may not capture the final
             # message, so without this the NEXT turn (and the autosave) can send a

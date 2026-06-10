@@ -600,6 +600,25 @@ impl Workspace {
     }
 }
 
+/// Remove the transient browser CDP breadcrumb (`<root>/.puppy/browser.json`),
+/// its self-contained `.gitignore`, and the dir if now empty. Best-effort.
+pub(crate) fn cleanup_puppy_browser(root: &std::path::Path) {
+    let dir = root.join(".puppy");
+    let _ = std::fs::remove_file(dir.join("browser.json"));
+    let _ = std::fs::remove_file(dir.join(".gitignore"));
+    let _ = std::fs::remove_dir(&dir); // only succeeds if empty — leaves user files
+}
+
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        // Closing the workspace (or app exit) removes its CDP breadcrumb so it
+        // never lingers pointing at a dead port.
+        if self.browser_cdp_written.is_some() {
+            cleanup_puppy_browser(&self.root);
+        }
+    }
+}
+
 /// Max transcript entries kept live. Immediate-mode rendering re-lays out every
 /// entry each frame, so this bounds per-frame work on a chatty turn.
 const MAX_TRANSCRIPT: usize = 1500;
