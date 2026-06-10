@@ -3784,10 +3784,12 @@ dependencies = [
  "egui_extras",
  "png 0.17.16",
  "portable-pty",
+ "raw-window-handle",
  "rfd",
  "serde",
  "serde_json",
  "vt100",
+ "windows 0.58.0",
 ]
 
 [[package]]

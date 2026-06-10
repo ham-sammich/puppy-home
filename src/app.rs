@@ -223,8 +223,24 @@ impl PuppyApp {
     }
 }
 
+/// The host window's native handle (Windows only), used to embed the browser
+/// plugin's window. `None` everywhere else (the browser stays a separate window).
+#[cfg(windows)]
+fn window_hwnd(frame: &eframe::Frame) -> Option<i64> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match frame.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(h) => Some(h.hwnd.get() as i64),
+        _ => None,
+    }
+}
+
+#[cfg(not(windows))]
+fn window_hwnd(_frame: &eframe::Frame) -> Option<i64> {
+    None
+}
+
 impl eframe::App for PuppyApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.sup.drain();
         self.poll_folder_pick();
 
@@ -358,6 +374,12 @@ impl eframe::App for PuppyApp {
             }
         }
 
+        // Embedding lifecycle: tell the browser manager our window handle, then
+        // bracket the dock draw so it can place/hide plugin windows per-frame.
+        let parent_hwnd = window_hwnd(frame);
+        self.browser.set_parent_hwnd(parent_hwnd);
+        self.browser.begin_frame();
+
         let mut dock = self.dock.take().expect("dock present");
         {
             let mut shell = Shell {
@@ -370,6 +392,7 @@ impl eframe::App for PuppyApp {
                 .show_inside(ui, &mut shell);
         }
         self.dock = Some(dock);
+        self.browser.end_frame();
 
         self.apply_actions(actions);
         self.persist_session();

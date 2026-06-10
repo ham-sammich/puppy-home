@@ -4,9 +4,11 @@
 //! This mirrors the Code Puppy sidecar pattern — the heavy webview lives in its
 //! own process, so a browser crash never takes the IDE down.
 
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use serde_json::json;
 
@@ -14,6 +16,8 @@ use serde_json::json;
 pub struct BrowserHost {
     child: Child,
     stdin: Option<ChildStdin>,
+    /// The plugin's native window handle (0 until it reports one over stdout).
+    hwnd: Arc<AtomicI64>,
 }
 
 impl BrowserHost {
@@ -22,13 +26,31 @@ impl BrowserHost {
         let mut child = Command::new(exe)
             .arg(initial_url)
             .stdin(Stdio::piped())
-            // Swallow the plugin's stdout/stderr (it logs to stderr); we only
-            // talk to it via stdin for now.
-            .stdout(Stdio::null())
+            // stdout carries events (e.g. the window handle); stderr is logs.
+            .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()?;
         let stdin = child.stdin.take();
-        Ok(Self { child, stdin })
+        let hwnd = Arc::new(AtomicI64::new(0));
+        if let Some(out) = child.stdout.take() {
+            let hwnd = hwnd.clone();
+            std::thread::spawn(move || {
+                for line in BufReader::new(out).lines().map_while(Result::ok) {
+                    if let Some(h) = parse_hwnd(&line) {
+                        hwnd.store(h, Ordering::Relaxed);
+                    }
+                }
+            });
+        }
+        Ok(Self { child, stdin, hwnd })
+    }
+
+    /// The plugin's native window handle, once reported.
+    pub fn child_hwnd(&self) -> Option<i64> {
+        match self.hwnd.load(Ordering::Relaxed) {
+            0 => None,
+            n => Some(n),
+        }
     }
 
     /// Write one JSON command line to the plugin.
@@ -75,5 +97,15 @@ impl Drop for BrowserHost {
     fn drop(&mut self) {
         // A dropped host (closed tab / app exit) must not leave a zombie window.
         let _ = self.child.kill();
+    }
+}
+
+/// Parse a `{"event":"hwnd","hwnd":<isize>}` line into the handle.
+fn parse_hwnd(line: &str) -> Option<i64> {
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    if v.get("event")?.as_str()? == "hwnd" {
+        v.get("hwnd")?.as_i64()
+    } else {
+        None
     }
 }

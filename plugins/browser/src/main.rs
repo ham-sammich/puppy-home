@@ -59,9 +59,14 @@ fn main() -> wry::Result<()> {
     let initial_url =
         std::env::args().nth(1).unwrap_or_else(|| "https://example.com".to_string());
 
+    // Borderless: the host reparents this window into the Browser tab. On
+    // Windows we start hidden and let the host show it once embedded (no flash);
+    // elsewhere we stay a normal visible window (no embedding yet).
     let window = WindowBuilder::new()
         .with_title("Puppy Browser")
         .with_inner_size(tao::dpi::LogicalSize::new(1024.0, 720.0))
+        .with_decorations(!cfg!(windows))
+        .with_visible(!cfg!(windows))
         .build(&event_loop)
         .expect("create window");
 
@@ -69,6 +74,8 @@ fn main() -> wry::Result<()> {
         .with_url(&initial_url)
         .build()?;
 
+    // Tell the host our native window handle so it can embed us.
+    report_handle(&window);
     eprintln!("puppy-browser: ready");
 
     event_loop.run(move |event, _, control_flow| {
@@ -96,4 +103,22 @@ fn main() -> wry::Result<()> {
             _ => {}
         }
     });
+}
+
+/// Print our native window handle so the host can reparent us. One JSON line:
+/// `{"event":"hwnd","hwnd":<isize>}`. Only Windows embedding is wired today.
+fn report_handle(window: &tao::window::Window) {
+    use std::io::Write;
+    #[cfg(windows)]
+    let handle: i64 = {
+        use tao::platform::windows::WindowExtWindows;
+        window.hwnd() as isize as i64
+    };
+    #[cfg(not(windows))]
+    let handle: i64 = {
+        let _ = window;
+        0
+    };
+    println!("{{\"event\":\"hwnd\",\"hwnd\":{handle}}}");
+    let _ = std::io::stdout().flush();
 }

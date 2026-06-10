@@ -8,9 +8,10 @@
 //! When the plugin isn't installed, the tab shows an **Install** panel that can
 //! install from a local build, open the plugins folder, or rescan.
 
+mod embed;
 mod host;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 use eframe::egui;
@@ -31,6 +32,8 @@ struct BrowserTab {
     url: String,
     host: Option<BrowserHost>,
     launch_error: Option<String>,
+    /// Whether the plugin window has been reparented into our window yet.
+    embedded: bool,
 }
 
 /// Owns plugin discovery + the open browser tabs.
@@ -40,6 +43,10 @@ pub struct BrowserManager {
     next_id: u64,
     /// Last install error (shown on the Install panel).
     install_error: Option<String>,
+    /// The host window handle to embed plugin windows into (set each frame).
+    parent_hwnd: Option<i64>,
+    /// Browser tabs whose window was placed (shown) this frame.
+    placed: HashSet<BrowserId>,
 }
 
 impl BrowserManager {
@@ -50,6 +57,32 @@ impl BrowserManager {
             tabs: BTreeMap::new(),
             next_id: 1,
             install_error: None,
+            parent_hwnd: None,
+            placed: HashSet::new(),
+        }
+    }
+
+    /// Record the host window handle (call once per frame, before the dock
+    /// draws) so embedded plugin windows can be reparented into it.
+    pub fn set_parent_hwnd(&mut self, hwnd: Option<i64>) {
+        self.parent_hwnd = hwnd;
+    }
+
+    /// Start a frame: forget which tabs were placed last frame.
+    pub fn begin_frame(&mut self) {
+        self.placed.clear();
+    }
+
+    /// End a frame: hide any browser window whose tab wasn't drawn (inactive or
+    /// closed), so it doesn't float over other views.
+    pub fn end_frame(&mut self) {
+        for (id, tab) in &self.tabs {
+            if self.placed.contains(id) {
+                continue;
+            }
+            if let Some(h) = tab.host.as_ref().and_then(|h| h.child_hwnd()) {
+                embed::hide(h);
+            }
         }
     }
 
@@ -211,12 +244,14 @@ impl BrowserManager {
         Ok(())
     }
 
-    /// The live browser toolbar; launches/supervises the plugin process.
+    /// The live browser toolbar; launches/supervises the plugin process and
+    /// (on Windows) embeds its window into the viewport below the toolbar.
     fn render_browser(&mut self, ui: &mut egui::Ui, id: BrowserId) {
         let exe = self
             .registry
             .get(BROWSER_PLUGIN_ID)
             .map(|p| p.exe_path());
+        let parent = self.parent_hwnd;
         let tab = self.tabs.entry(id).or_default();
 
         // Reap a process that exited (e.g. user closed the browser window).
@@ -266,7 +301,7 @@ impl BrowserManager {
         if tab.host.is_none() {
             ui.add_space(16.0);
             ui.vertical_centered(|ui| {
-                if ui.button("Launch browser window").clicked() {
+                if ui.button("Launch browser").clicked() {
                     let url = if tab.url.trim().is_empty() {
                         "https://example.com".to_string()
                     } else {
@@ -283,18 +318,46 @@ impl BrowserManager {
             return;
         }
 
-        // Running: the page is in a separate OS window (docking comes next).
+        // The viewport region below the toolbar: the plugin window is placed here.
         let rect = ui.available_rect_before_wrap();
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
-        painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "Browser running in a separate window.\nUse the toolbar above to drive it.\n(Docking it into this panel is the next increment.)",
-            egui::FontId::proportional(14.0),
-            ui.visuals().weak_text_color(),
-        );
+        let child = tab.host.as_ref().and_then(|h| h.child_hwnd());
+        match (embed::SUPPORTED, parent, child) {
+            (true, Some(parent), Some(child)) => {
+                if !tab.embedded {
+                    embed::reparent(parent, child);
+                    tab.embedded = true;
+                }
+                let ppp = ui.ctx().pixels_per_point();
+                let x = (rect.min.x * ppp).round() as i32;
+                let y = (rect.min.y * ppp).round() as i32;
+                let w = (rect.width() * ppp).round() as i32;
+                let h = (rect.height() * ppp).round() as i32;
+                if w > 0 && h > 0 {
+                    embed::place(child, x, y, w, h);
+                    self.placed.insert(id);
+                }
+            }
+            (true, _, None) => viewport_note(ui, rect, "starting browser\u{2026}"),
+            _ => viewport_note(
+                ui,
+                rect,
+                "Browser running in a separate window.\n(Embedding is Windows-only for now.)",
+            ),
+        }
     }
+}
+
+/// Centered hint painted in the empty viewport region.
+fn viewport_note(ui: &egui::Ui, rect: egui::Rect, text: &str) {
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        text,
+        egui::FontId::proportional(14.0),
+        ui.visuals().weak_text_color(),
+    );
 }
 
 /// Spawn a host for `tab`, recording any error for display.

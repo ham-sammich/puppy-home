@@ -27,5 +27,11 @@ vt100 = "0.16"
 arboard = "3.4"
 png = "0.17"
 base64 = "0.22"
+# Windows-only: reparent the browser plugin's native window into our window so
+# the webview renders inside the Browser tab (native-child-window embedding).
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+raw-window-handle = "0.6"
+
 # As we grow: tokio (async runtime), reqwest (HTTP), serde (config),
 # and an LLM client will go here.
