@@ -403,6 +403,15 @@ impl eframe::App for PuppyApp {
         self.dock = Some(dock);
         self.browser.end_frame();
 
+        // An embedded webview steals OS keyboard focus when clicked; if the user
+        // then clicks back onto the egui surface, reclaim focus to the host so
+        // the chat box and other fields receive keystrokes again.
+        if let Some(parent) = parent_hwnd
+            && ui.ctx().input(|i| i.pointer.any_pressed())
+        {
+            self.browser.reclaim_host_focus(parent);
+        }
+
         self.apply_actions(actions);
         self.persist_session();
 

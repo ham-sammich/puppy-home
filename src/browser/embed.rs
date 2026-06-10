@@ -9,11 +9,13 @@ pub const SUPPORTED: bool = cfg!(windows);
 
 #[cfg(windows)]
 mod imp {
-    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Foundation::{BOOL, HWND};
+    use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GWL_STYLE, GetWindowLongPtrW, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOCOPYBITS,
-        SWP_NOZORDER, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow, WS_CHILD, WS_POPUP,
-        WS_VISIBLE,
+        GWL_STYLE, GetWindowLongPtrW, GetWindowThreadProcessId, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE,
+        SWP_NOCOPYBITS, SWP_NOZORDER, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+        WS_CHILD, WS_POPUP, WS_VISIBLE,
     };
 
     fn hwnd(raw: i64) -> HWND {
@@ -61,6 +63,23 @@ mod imp {
             let _ = ShowWindow(hwnd(child), SW_HIDE);
         }
     }
+
+    /// Reclaim OS keyboard focus to the host window from the (cross-process)
+    /// webview child. The child lives in the plugin's thread, so we briefly
+    /// attach input queues to move focus across the thread boundary.
+    pub fn focus_host(parent: i64, child: i64) {
+        unsafe {
+            let our = GetCurrentThreadId();
+            let child_thread = GetWindowThreadProcessId(hwnd(child), None);
+            if child_thread != 0 && child_thread != our {
+                let _ = AttachThreadInput(our, child_thread, BOOL(1));
+                let _ = SetFocus(hwnd(parent));
+                let _ = AttachThreadInput(our, child_thread, BOOL(0));
+            } else {
+                let _ = SetFocus(hwnd(parent));
+            }
+        }
+    }
 }
 
 #[cfg(not(windows))]
@@ -69,6 +88,7 @@ mod imp {
     pub fn place(_child: i64, _x: i32, _y: i32, _w: i32, _h: i32) {}
     pub fn show(_child: i64) {}
     pub fn hide(_child: i64) {}
+    pub fn focus_host(_parent: i64, _child: i64) {}
 }
 
-pub use imp::{hide, place, reparent, show};
+pub use imp::{focus_host, hide, place, reparent, show};

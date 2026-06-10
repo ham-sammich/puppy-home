@@ -135,6 +135,21 @@ impl BrowserManager {
         }
     }
 
+    /// Reclaim OS keyboard focus to the host window when the user clicks the
+    /// egui surface — otherwise an embedded webview keeps the keyboard and the
+    /// chat box (etc.) won't receive typed input.
+    pub fn reclaim_host_focus(&self, parent_hwnd: i64) {
+        if let Some(child) = self.tabs.values().find_map(|t| {
+            if t.visible && t.embedded {
+                t.host.as_ref().and_then(|h| h.child_hwnd())
+            } else {
+                None
+            }
+        }) {
+            embed::focus_host(parent_hwnd, child);
+        }
+    }
+
     /// Whether the browser plugin is installed *and* runnable on this host.
     pub fn is_available(&self) -> bool {
         self.registry
