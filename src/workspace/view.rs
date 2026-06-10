@@ -1,14 +1,13 @@
 //! The chat tab shell: top bar, file tree + changes sidebar, editor-area tab
 //! bar, transcript body, bottom menu bar, and the embedded terminal.
 
-use std::path::PathBuf;
 use std::time::Instant;
 
 use eframe::egui;
 
 use super::Workspace;
 use super::diff::{file_name, marker_color};
-use super::render::{render_dir, render_entry};
+use super::render::{TreeActions, render_dir, render_entry};
 use super::state::{EditorItem, EditorSide, Entry};
 use crate::browser::BrowserManager;
 
@@ -110,8 +109,7 @@ impl Workspace {
                 diff_list.len()
             };
 
-            let mut open_file: Option<PathBuf> = None;
-            let mut to_delete: Option<PathBuf> = None;
+            let mut acts = TreeActions::default();
             let mut click_diff: Option<usize> = None;
             let mut click_git: Option<(String, char)> = None;
             let mut do_refresh = false;
@@ -195,29 +193,41 @@ impl Workspace {
 
                     // File tree fills the remaining (top) space.
                     ui.add_space(4.0);
-                    ui.label(egui::RichText::new(format!("🗂 {}", self.name)).strong());
+                    ui.label(egui::RichText::new(format!("🗂 {}", self.name)).strong())
+                        .context_menu(|ui| {
+                            if ui.button("New file").clicked() {
+                                acts.new_in = Some((self.root.clone(), false));
+                                ui.close();
+                            }
+                            if ui.button("New folder").clicked() {
+                                acts.new_in = Some((self.root.clone(), true));
+                                ui.close();
+                            }
+                        });
                     ui.separator();
-                    let mut clicked: Option<PathBuf> = None;
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .id_salt(("tree-scroll", id))
                         .show(ui, |ui| {
-                            render_dir(ui, &self.root, &markers, &mut clicked, &mut to_delete);
+                            render_dir(ui, &self.root, &markers, &mut acts);
                         });
-                    if let Some(path) = clicked {
-                        open_file = Some(path);
-                    }
                 });
 
             if do_refresh {
                 self.git_refresh_at = Instant::now();
             }
-            if let Some(path) = open_file {
+            if let Some(path) = acts.open {
                 self.open_editor_file(path);
             }
-            if let Some(path) = to_delete {
+            if let Some(path) = acts.delete {
                 self.pending_delete = Some(path);
                 self.delete_error = None;
+            }
+            if let Some(path) = acts.rename {
+                self.start_rename(path);
+            }
+            if let Some((parent, is_dir)) = acts.new_in {
+                self.start_new(parent, is_dir);
             }
             if let Some(i) = click_diff {
                 self.load_diff_index(i);
@@ -271,6 +281,12 @@ impl Workspace {
         // Interactive question modal floats above everything for this workspace.
         if self.pending_delete.is_some() {
             self.render_delete_modal(ui.ctx());
+        }
+        if self.pending_rename.is_some() {
+            self.render_rename_modal(ui.ctx());
+        }
+        if self.pending_new.is_some() {
+            self.render_new_modal(ui.ctx());
         }
         if self.pending_ask.is_some() {
             self.render_ask_modal(ui.ctx());

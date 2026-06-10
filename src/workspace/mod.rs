@@ -147,6 +147,10 @@ pub struct Workspace {
     pending_delete: Option<PathBuf>,
     /// Error from the most recent delete attempt (shown in the confirm modal).
     delete_error: Option<String>,
+    /// A path being renamed via the tree context menu (modal).
+    pending_rename: Option<crate::workspace::state::PendingRename>,
+    /// A new file/folder being created via the tree context menu (modal).
+    pending_new: Option<crate::workspace::state::PendingNew>,
     // Git view (Source Control page + commit/blame tabs)
     git_view: Option<GitView>,
     /// All-branches commits for the graph view (newest first, with parents/refs).
@@ -244,6 +248,8 @@ impl Workspace {
             browser_cdp_written: None,
             pending_delete: None,
             delete_error: None,
+            pending_rename: None,
+            pending_new: None,
             git_view: None,
             git_graph_commits: Vec::new(),
             git_show_graph: true,

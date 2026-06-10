@@ -106,14 +106,26 @@ pub(crate) fn labelled(ui: &mut egui::Ui, who: &str, color: egui::Color32, text:
     ui.add_space(6.0);
 }
 
+/// Actions requested from the file-tree context menus this frame.
+#[derive(Default)]
+pub(crate) struct TreeActions {
+    /// Open this file in the editor.
+    pub(crate) open: Option<PathBuf>,
+    /// Delete this path (file or folder).
+    pub(crate) delete: Option<PathBuf>,
+    /// Rename this path.
+    pub(crate) rename: Option<PathBuf>,
+    /// Create a new entry inside this dir; bool = is-folder.
+    pub(crate) new_in: Option<(PathBuf, bool)>,
+}
+
 /// Recursively render a directory as a lazy collapsible tree. Only expanded
 /// folders are read (the collapsing body runs only when open).
 pub(crate) fn render_dir(
     ui: &mut egui::Ui,
     dir: &Path,
     markers: &HashMap<PathBuf, char>,
-    clicked: &mut Option<PathBuf>,
-    to_delete: &mut Option<PathBuf>,
+    acts: &mut TreeActions,
 ) {
     let Ok(read) = std::fs::read_dir(dir) else {
         return;
@@ -143,15 +155,28 @@ pub(crate) fn render_dir(
         if is_dir {
             let header = egui::CollapsingHeader::new(format!("📁 {name}"))
                 .id_salt(&path)
-                .show(ui, |ui| render_dir(ui, &path, markers, clicked, to_delete));
+                .show(ui, |ui| render_dir(ui, &path, markers, acts));
             header.header_response.context_menu(|ui| {
+                if ui.button("New file").clicked() {
+                    acts.new_in = Some((path.clone(), false));
+                    ui.close();
+                }
+                if ui.button("New folder").clicked() {
+                    acts.new_in = Some((path.clone(), true));
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Rename").clicked() {
+                    acts.rename = Some(path.clone());
+                    ui.close();
+                }
                 if ui.button("Copy path").clicked() {
                     ui.ctx().copy_text(path.to_string_lossy().into_owned());
                     ui.close();
                 }
                 ui.separator();
                 if ui.button("Delete folder").clicked() {
-                    *to_delete = Some(path.clone());
+                    acts.delete = Some(path.clone());
                     ui.close();
                 }
             });
@@ -169,11 +194,15 @@ pub(crate) fn render_dir(
                 })
                 .inner;
             if resp.clicked() {
-                *clicked = Some(path.clone());
+                acts.open = Some(path.clone());
             }
             resp.context_menu(|ui| {
                 if ui.button("Open").clicked() {
-                    *clicked = Some(path.clone());
+                    acts.open = Some(path.clone());
+                    ui.close();
+                }
+                if ui.button("Rename").clicked() {
+                    acts.rename = Some(path.clone());
                     ui.close();
                 }
                 if ui.button("Copy path").clicked() {
@@ -182,7 +211,7 @@ pub(crate) fn render_dir(
                 }
                 ui.separator();
                 if ui.button("Delete").clicked() {
-                    *to_delete = Some(path.clone());
+                    acts.delete = Some(path.clone());
                     ui.close();
                 }
             });

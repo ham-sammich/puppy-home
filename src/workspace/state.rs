@@ -93,6 +93,21 @@ pub(crate) struct FileBuffer {
     pub(crate) save_error: Option<String>,
 }
 
+/// A pending rename of a tree path, edited in a modal.
+pub(crate) struct PendingRename {
+    pub(crate) path: PathBuf,
+    pub(crate) name: String,
+    pub(crate) error: Option<String>,
+}
+
+/// A pending "new file/folder" inside `parent`, edited in a modal.
+pub(crate) struct PendingNew {
+    pub(crate) parent: PathBuf,
+    pub(crate) is_dir: bool,
+    pub(crate) name: String,
+    pub(crate) error: Option<String>,
+}
+
 /// Where the editor area (files / git / browser) sits relative to the chat.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum EditorSide {
