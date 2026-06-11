@@ -6,7 +6,7 @@
 
 use eframe::egui;
 
-use crate::views::common::validate_name;
+use crate::views::common::{EditMode, mode_toggle, paste_editor, validate_name};
 
 /// Where a skill is saved (mirrors the sidecar's `save_skill` scopes).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -67,6 +67,10 @@ pub struct Wizard {
     /// `true` when opened from "Edit" (changes the title and button wording).
     editing: bool,
     error: Option<String>,
+    /// Form (guided steps) vs. Paste (drop in a whole SKILL.md and validate).
+    mode: EditMode,
+    /// The raw-paste buffer (a full SKILL.md), seeded from the form on entry.
+    paste: String,
 }
 
 impl Wizard {
@@ -79,6 +83,8 @@ impl Wizard {
             scope: Scope::User,
             editing: false,
             error: None,
+            mode: EditMode::Form,
+            paste: String::new(),
         }
     }
 
@@ -91,7 +97,23 @@ impl Wizard {
             scope,
             editing: true,
             error: None,
+            mode: EditMode::Form,
+            paste: String::new(),
         }
+    }
+
+    /// Seed the paste buffer from the current form fields (canonical SKILL.md).
+    fn sync_paste_from_form(&mut self) {
+        self.paste = compose_preview(&self.name, &self.description, &self.content);
+    }
+
+    /// Parse the paste buffer back into the form fields (the syntax check).
+    fn apply_paste(&mut self) -> Result<(), String> {
+        let (name, description, body) = parse_skill_md(&self.paste)?;
+        self.name = name;
+        self.description = description;
+        self.content = body;
+        Ok(())
     }
 
     fn title(&self) -> &'static str {
@@ -137,6 +159,37 @@ fn validate_basics(w: &Wizard) -> Result<(), String> {
     Ok(())
 }
 
+/// Parse a full SKILL.md (YAML-ish frontmatter + markdown body) into
+/// `(name, description, body)`. Mirrors the sidecar's loader and validates the
+/// required keys, so a bad paste fails here rather than on disk.
+fn parse_skill_md(text: &str) -> Result<(String, String, String), String> {
+    let rest = text
+        .trim_start()
+        .strip_prefix("---")
+        .ok_or("missing '---' frontmatter block at the top")?;
+    let close = rest
+        .find("\n---")
+        .ok_or("frontmatter is never closed with a '---' line")?;
+    let (frontmatter, after) = (&rest[..close], &rest[close + 4..]);
+    let body = after.trim_start_matches(['\r', '\n']);
+
+    let mut name = String::new();
+    let mut description = String::new();
+    for line in frontmatter.lines() {
+        let line = line.trim();
+        if let Some(v) = line.strip_prefix("name:") {
+            name = v.trim().to_string();
+        } else if let Some(v) = line.strip_prefix("description:") {
+            description = v.trim().to_string();
+        }
+    }
+    validate_name(&name)?;
+    if description.trim().is_empty() {
+        return Err("frontmatter needs a non-empty 'description:'".into());
+    }
+    Ok((name, description, body.trim_end().to_string()))
+}
+
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
@@ -163,26 +216,41 @@ pub fn show(ctx: &egui::Context, wizard: &mut Wizard) -> WizardAction {
             ui.set_min_width(w);
             ui.set_max_size(egui::vec2(w, h));
 
-            let steps = ["Basics", "Content", "Review"];
-            ui.horizontal(|ui| {
-                for (i, label) in steps.iter().enumerate() {
-                    let text = format!("{}. {label}", i + 1);
-                    if i == wizard.step {
-                        ui.strong(text);
-                    } else {
-                        ui.weak(text);
-                    }
-                    if i + 1 < steps.len() {
-                        ui.weak(">");
-                    }
+            // Form vs. Paste mode (seed the paste buffer on the way in).
+            let next_mode = mode_toggle(ui, wizard.mode);
+            if next_mode != wizard.mode {
+                if next_mode == EditMode::Paste {
+                    wizard.sync_paste_from_form();
                 }
-            });
+                wizard.mode = next_mode;
+                wizard.error = None;
+            }
             ui.separator();
 
-            match wizard.step {
-                0 => step_basics(ui, wizard),
-                1 => step_content(ui, wizard),
-                _ => step_review(ui, wizard),
+            match wizard.mode {
+                EditMode::Form => {
+                    let steps = ["Basics", "Content", "Review"];
+                    ui.horizontal(|ui| {
+                        for (i, label) in steps.iter().enumerate() {
+                            let text = format!("{}. {label}", i + 1);
+                            if i == wizard.step {
+                                ui.strong(text);
+                            } else {
+                                ui.weak(text);
+                            }
+                            if i + 1 < steps.len() {
+                                ui.weak(">");
+                            }
+                        }
+                    });
+                    ui.add_space(4.0);
+                    match wizard.step {
+                        0 => step_basics(ui, wizard),
+                        1 => step_content(ui, wizard),
+                        _ => step_review(ui, wizard),
+                    }
+                }
+                EditMode::Paste => step_paste(ui, wizard),
             }
 
             if let Some(err) = &wizard.error {
@@ -198,37 +266,60 @@ pub fn show(ctx: &egui::Context, wizard: &mut Wizard) -> WizardAction {
                 }
                 ui.with_layout(
                     egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| match wizard.step {
-                        0 => {
-                            if ui.button("Next").clicked() {
-                                match validate_basics(wizard) {
+                    |ui| match wizard.mode {
+                        EditMode::Paste => {
+                            if ui.button("Save skill").clicked() {
+                                match wizard.apply_paste() {
+                                    Ok(()) => action = WizardAction::Save,
+                                    Err(e) => wizard.error = Some(e),
+                                }
+                            }
+                            if ui
+                                .button("Format")
+                                .on_hover_text("Validate the syntax and tidy the SKILL.md")
+                                .clicked()
+                            {
+                                match wizard.apply_paste() {
                                     Ok(()) => {
-                                        wizard.step = 1;
+                                        wizard.sync_paste_from_form();
                                         wizard.error = None;
                                     }
                                     Err(e) => wizard.error = Some(e),
                                 }
                             }
                         }
-                        1 => {
-                            if ui.button("Next").clicked() {
-                                wizard.step = 2;
-                                wizard.error = None;
+                        EditMode::Form => match wizard.step {
+                            0 => {
+                                if ui.button("Next").clicked() {
+                                    match validate_basics(wizard) {
+                                        Ok(()) => {
+                                            wizard.step = 1;
+                                            wizard.error = None;
+                                        }
+                                        Err(e) => wizard.error = Some(e),
+                                    }
+                                }
                             }
-                            if ui.button("Back").clicked() {
-                                wizard.step = 0;
-                                wizard.error = None;
+                            1 => {
+                                if ui.button("Next").clicked() {
+                                    wizard.step = 2;
+                                    wizard.error = None;
+                                }
+                                if ui.button("Back").clicked() {
+                                    wizard.step = 0;
+                                    wizard.error = None;
+                                }
                             }
-                        }
-                        _ => {
-                            if ui.button("Save skill").clicked() {
-                                action = WizardAction::Save;
+                            _ => {
+                                if ui.button("Save skill").clicked() {
+                                    action = WizardAction::Save;
+                                }
+                                if ui.button("Back").clicked() {
+                                    wizard.step = 1;
+                                    wizard.error = None;
+                                }
                             }
-                            if ui.button("Back").clicked() {
-                                wizard.step = 1;
-                                wizard.error = None;
-                            }
-                        }
+                        },
                     },
                 );
             });
@@ -322,9 +413,56 @@ fn step_review(ui: &mut egui::Ui, wizard: &Wizard) {
     });
 }
 
+fn step_paste(ui: &mut egui::Ui, wizard: &mut Wizard) {
+    ui.label("Paste a full SKILL.md (--- frontmatter --- then the markdown body):");
+    ui.add_space(4.0);
+    paste_editor(ui, "skill-paste", &mut wizard.paste);
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Save to:").small().weak());
+        for scope in [Scope::User, Scope::Project] {
+            if ui
+                .selectable_label(wizard.scope == scope, scope.label())
+                .clicked()
+            {
+                wizard.scope = scope;
+            }
+        }
+    });
+    ui.add_space(2.0);
+    ui.weak("Format checks the syntax and tidies it; Save validates and writes it.");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_round_trips_compose() {
+        let md = compose_preview("git-flow", "Release flow", "## Steps\n\n1. go");
+        let (name, desc, body) = parse_skill_md(&md).unwrap();
+        assert_eq!(name, "git-flow");
+        assert_eq!(desc, "Release flow");
+        assert_eq!(body, "## Steps\n\n1. go");
+    }
+
+    #[test]
+    fn parse_rejects_bad_input() {
+        assert!(parse_skill_md("no frontmatter here").is_err());
+        assert!(parse_skill_md("---\nname: x\n").is_err()); // unclosed
+        assert!(parse_skill_md("---\nname: x\n---\nbody").is_err()); // no description
+        assert!(parse_skill_md("---\ndescription: y\n---\nbody").is_err()); // no name
+        assert!(parse_skill_md("---\nname: bad/name\ndescription: y\n---\nb").is_err());
+    }
+
+    #[test]
+    fn parse_tolerates_leading_blank_lines_and_crlf() {
+        let md = "\n\n---\r\nname: ok\r\ndescription: d\r\n---\r\n\r\nbody text\n";
+        let (name, desc, body) = parse_skill_md(md).unwrap();
+        assert_eq!(name, "ok");
+        assert_eq!(desc, "d");
+        assert_eq!(body, "body text");
+    }
 
     #[test]
     fn preview_mirrors_sidecar_compose() {

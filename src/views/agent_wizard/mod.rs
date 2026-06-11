@@ -1,14 +1,17 @@
 //! The guided visual builder for the Agent Manager (modal window).
 //!
-//! Four steps: basics (name, display name, description, model, scope), prompt
-//! (system + optional user prompt), tools (built-in tool + MCP server
-//! selection), review (the exact JSON that lands on disk). The manager owns
-//! the [`Wizard`] state and acts on the returned [`WizardAction`].
+//! Two ways in: a guided **Form** (basics, prompt, tools, review) or a raw
+//! **Paste** mode where you drop in a whole agent JSON and validate/format it.
+//! Both funnel through the same [`AgentConfigDraft`] -> `save_agent_config`.
+//! The per-step renderers live in the `steps` child module.
+
+mod steps;
 
 use eframe::egui;
+use serde_json::Value;
 
 use crate::backend::{AgentConfigDetail, AgentConfigDraft};
-use crate::views::common::validate_name;
+use crate::views::common::{EditMode, mode_toggle, validate_name};
 
 /// Where an agent JSON file is saved (mirrors the sidecar's save scopes).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -71,6 +74,10 @@ pub struct Wizard {
     /// `true` when opened from "Edit" (changes title and button wording).
     editing: bool,
     error: Option<String>,
+    /// Form (guided steps) vs. Paste (drop in a whole agent JSON and validate).
+    mode: EditMode,
+    /// The raw-paste buffer (a full agent JSON), seeded from the form on entry.
+    paste: String,
 }
 
 impl Wizard {
@@ -89,6 +96,8 @@ impl Wizard {
             tool_filter: String::new(),
             editing: false,
             error: None,
+            mode: EditMode::Form,
+            paste: String::new(),
         }
     }
 
@@ -108,6 +117,8 @@ impl Wizard {
             tool_filter: String::new(),
             editing: true,
             error: None,
+            mode: EditMode::Form,
+            paste: String::new(),
         }
     }
 
@@ -133,6 +144,25 @@ impl Wizard {
             scope: self.scope.wire().to_string(),
         }
     }
+
+    /// Seed the paste buffer from the current form fields (canonical JSON).
+    fn sync_paste_from_form(&mut self) {
+        self.paste = compose_preview(self);
+    }
+
+    /// Parse the paste buffer back into the form fields (the syntax check).
+    fn apply_paste(&mut self) -> Result<(), String> {
+        let p = parse_agent_json(&self.paste)?;
+        self.name = p.name;
+        self.display_name = p.display_name;
+        self.description = p.description;
+        self.model = p.model;
+        self.system_prompt = p.system_prompt;
+        self.user_prompt = p.user_prompt;
+        self.tools = p.tools;
+        self.mcp_servers = p.mcp_servers;
+        Ok(())
+    }
 }
 
 /// What the manager should do after this frame's wizard render.
@@ -140,7 +170,7 @@ impl Wizard {
 pub enum WizardAction {
     KeepOpen,
     Cancel,
-    /// The user confirmed the review step: send `save_agent_config` and close.
+    /// The user confirmed: send `save_agent_config` and close.
     Save,
 }
 
@@ -196,6 +226,74 @@ fn compose_preview(w: &Wizard) -> String {
     format!("{{\n{}\n}}", body.join(",\n"))
 }
 
+/// The fields a pasted agent JSON parses into (then copied onto the wizard).
+struct ParsedAgent {
+    name: String,
+    display_name: String,
+    description: String,
+    model: String,
+    system_prompt: String,
+    user_prompt: String,
+    tools: Vec<String>,
+    mcp_servers: Vec<String>,
+}
+
+/// A JSON array of strings (non-string entries ignored); `None`/missing -> [].
+fn str_array(v: Option<&Value>) -> Vec<String> {
+    v.and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|i| i.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Agent `mcp_servers` entries may be bare strings or `{ "name": ... }`
+/// objects (code-puppy accepts both); collect just the server names.
+fn mcp_names(v: Option<&Value>) -> Vec<String> {
+    v.and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|i| {
+                    i.as_str()
+                        .map(str::to_string)
+                        .or_else(|| i.get("name").and_then(Value::as_str).map(str::to_string))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Parse a pasted agent JSON into [`ParsedAgent`], mirroring the sidecar's
+/// required-field checks so a bad paste fails here, not on disk.
+fn parse_agent_json(text: &str) -> Result<ParsedAgent, String> {
+    let v: Value = serde_json::from_str(text.trim()).map_err(|e| format!("invalid JSON: {e}"))?;
+    let obj = v.as_object().ok_or("the top level must be a JSON object")?;
+    let s = |k: &str| {
+        obj.get(k)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let name = s("name");
+    validate_name(&name)?;
+    let description = s("description");
+    if description.trim().is_empty() {
+        return Err("a \"description\" field is required".into());
+    }
+    Ok(ParsedAgent {
+        name,
+        display_name: s("display_name"),
+        description,
+        model: s("model"),
+        system_prompt: s("system_prompt"),
+        user_prompt: s("user_prompt"),
+        tools: str_array(obj.get("tools")),
+        mcp_servers: mcp_names(obj.get("mcp_servers")),
+    })
+}
+
 /// Validate the basics step; mirrors the sidecar's checks so the user hears
 /// about problems before the op crosses the wire.
 fn validate_basics(w: &Wizard) -> Result<(), String> {
@@ -236,27 +334,42 @@ pub fn show(
             ui.set_min_width(w);
             ui.set_max_size(egui::vec2(w, h));
 
-            let steps = ["Basics", "Prompt", "Tools", "Review"];
-            ui.horizontal(|ui| {
-                for (i, label) in steps.iter().enumerate() {
-                    let text = format!("{}. {label}", i + 1);
-                    if i == wizard.step {
-                        ui.strong(text);
-                    } else {
-                        ui.weak(text);
-                    }
-                    if i + 1 < steps.len() {
-                        ui.weak(">");
-                    }
+            // Form vs. Paste mode (seed the paste buffer on the way in).
+            let next_mode = mode_toggle(ui, wizard.mode);
+            if next_mode != wizard.mode {
+                if next_mode == EditMode::Paste {
+                    wizard.sync_paste_from_form();
                 }
-            });
+                wizard.mode = next_mode;
+                wizard.error = None;
+            }
             ui.separator();
 
-            match wizard.step {
-                0 => step_basics(ui, wizard),
-                1 => step_prompt(ui, wizard),
-                2 => step_tools(ui, wizard, tool_catalog, mcp_catalog),
-                _ => step_review(ui, wizard),
+            match wizard.mode {
+                EditMode::Form => {
+                    let labels = ["Basics", "Prompt", "Tools", "Review"];
+                    ui.horizontal(|ui| {
+                        for (i, label) in labels.iter().enumerate() {
+                            let text = format!("{}. {label}", i + 1);
+                            if i == wizard.step {
+                                ui.strong(text);
+                            } else {
+                                ui.weak(text);
+                            }
+                            if i + 1 < labels.len() {
+                                ui.weak(">");
+                            }
+                        }
+                    });
+                    ui.separator();
+                    match wizard.step {
+                        0 => steps::step_basics(ui, wizard),
+                        1 => steps::step_prompt(ui, wizard),
+                        2 => steps::step_tools(ui, wizard, tool_catalog, mcp_catalog),
+                        _ => steps::step_review(ui, wizard),
+                    }
+                }
+                EditMode::Paste => steps::step_paste(ui, wizard),
             }
 
             if let Some(err) = &wizard.error {
@@ -270,16 +383,43 @@ pub fn show(
                 if ui.button("Cancel").clicked() {
                     action = WizardAction::Cancel;
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    nav_buttons(ui, wizard, &mut action);
-                });
+                ui.with_layout(
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| match wizard.mode {
+                        EditMode::Paste => paste_footer(ui, wizard, &mut action),
+                        EditMode::Form => nav_buttons(ui, wizard, &mut action),
+                    },
+                );
             });
         });
 
     action
 }
 
-/// The Next/Back/Save navigation footer for the current step.
+/// Paste-mode footer: Save validates + writes; Format syntax-checks + tidies.
+fn paste_footer(ui: &mut egui::Ui, wizard: &mut Wizard, action: &mut WizardAction) {
+    if ui.button("Save agent").clicked() {
+        match wizard.apply_paste() {
+            Ok(()) => *action = WizardAction::Save,
+            Err(e) => wizard.error = Some(e),
+        }
+    }
+    if ui
+        .button("Format")
+        .on_hover_text("Validate the JSON and tidy it")
+        .clicked()
+    {
+        match wizard.apply_paste() {
+            Ok(()) => {
+                wizard.sync_paste_from_form();
+                wizard.error = None;
+            }
+            Err(e) => wizard.error = Some(e),
+        }
+    }
+}
+
+/// The Next/Back/Save navigation footer for the current form step.
 fn nav_buttons(ui: &mut egui::Ui, wizard: &mut Wizard, action: &mut WizardAction) {
     match wizard.step {
         0 => {
@@ -313,199 +453,6 @@ fn nav_buttons(ui: &mut egui::Ui, wizard: &mut Wizard, action: &mut WizardAction
             }
         }
     }
-}
-
-fn step_basics(ui: &mut egui::Ui, wizard: &mut Wizard) {
-    egui::Grid::new("agent-wizard-basics")
-        .num_columns(2)
-        .spacing([8.0, 6.0])
-        .show(ui, |ui| {
-            ui.label("Name");
-            ui.add(
-                egui::TextEdit::singleline(&mut wizard.name)
-                    .desired_width(f32::INFINITY)
-                    .hint_text("my-agent (letters, digits, - and _)"),
-            );
-            ui.end_row();
-
-            ui.label("Display name");
-            ui.add(
-                egui::TextEdit::singleline(&mut wizard.display_name)
-                    .desired_width(f32::INFINITY)
-                    .hint_text("optional - shown in the agent picker"),
-            );
-            ui.end_row();
-
-            ui.label("Description");
-            ui.add(
-                egui::TextEdit::singleline(&mut wizard.description)
-                    .desired_width(f32::INFINITY)
-                    .hint_text("one line: what is this agent for?"),
-            );
-            ui.end_row();
-
-            ui.label("Model");
-            ui.add(
-                egui::TextEdit::singleline(&mut wizard.model)
-                    .desired_width(f32::INFINITY)
-                    .hint_text("optional - blank uses the global model"),
-            );
-            ui.end_row();
-        });
-
-    ui.add_space(6.0);
-    ui.label(egui::RichText::new("Where to save").small().weak());
-    for scope in [Scope::User, Scope::Project] {
-        let selected = wizard.scope == scope;
-        if ui
-            .selectable_label(
-                selected,
-                format!("{}\n    {}", scope.label(), scope.blurb()),
-            )
-            .clicked()
-        {
-            wizard.scope = scope;
-        }
-    }
-    if wizard.editing {
-        ui.add_space(4.0);
-        ui.weak(
-            "Saving writes <agents dir>/<name>.json - keep the same name and \
-             scope to overwrite in place.",
-        );
-    }
-}
-
-fn step_prompt(ui: &mut egui::Ui, wizard: &mut Wizard) {
-    ui.label("System prompt (the agent's instructions):");
-    ui.add_space(4.0);
-    egui::ScrollArea::vertical()
-        .id_salt("agent-system-prompt")
-        .auto_shrink([false, true])
-        .max_height(280.0)
-        .show(ui, |ui| {
-            ui.add(
-                egui::TextEdit::multiline(&mut wizard.system_prompt)
-                    .desired_rows(12)
-                    .desired_width(f32::INFINITY)
-                    .font(egui::TextStyle::Monospace),
-            );
-        });
-    ui.add_space(8.0);
-    ui.label("User prompt (optional - a canned opening message):");
-    ui.add_space(4.0);
-    ui.add(
-        egui::TextEdit::multiline(&mut wizard.user_prompt)
-            .desired_rows(3)
-            .desired_width(f32::INFINITY)
-            .hint_text("leave blank to omit"),
-    );
-}
-
-fn step_tools(
-    ui: &mut egui::Ui,
-    wizard: &mut Wizard,
-    tool_catalog: &[String],
-    mcp_catalog: &[String],
-) {
-    ui.horizontal(|ui| {
-        ui.label(format!("Tools ({} selected):", wizard.tools.len()));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.small_button("None").clicked() {
-                wizard.tools.clear();
-            }
-            if ui.small_button("All").clicked() {
-                wizard.tools = tool_catalog.to_vec();
-            }
-        });
-    });
-    ui.add(
-        egui::TextEdit::singleline(&mut wizard.tool_filter)
-            .desired_width(f32::INFINITY)
-            .hint_text("Filter tools..."),
-    );
-    ui.add_space(2.0);
-    let needle = wizard.tool_filter.trim().to_lowercase();
-    if tool_catalog.is_empty() {
-        ui.weak("No tools reported by this Code Puppy.");
-    } else {
-        egui::ScrollArea::vertical()
-            .id_salt("agent-tools")
-            .auto_shrink([false, true])
-            .max_height(220.0)
-            .show(ui, |ui| {
-                for tool in tool_catalog {
-                    if !needle.is_empty() && !tool.to_lowercase().contains(&needle) {
-                        continue;
-                    }
-                    let mut on = wizard.tools.iter().any(|t| t == tool);
-                    if ui.checkbox(&mut on, tool).changed() {
-                        toggle(&mut wizard.tools, tool, on);
-                    }
-                }
-            });
-    }
-
-    ui.add_space(8.0);
-    ui.label(format!(
-        "MCP server bindings ({} selected):",
-        wizard.mcp_servers.len()
-    ));
-    if mcp_catalog.is_empty() {
-        ui.weak("No MCP servers registered - add some in the MCP tab first.");
-    } else {
-        for server in mcp_catalog {
-            let mut on = wizard.mcp_servers.iter().any(|s| s == server);
-            if ui.checkbox(&mut on, server).changed() {
-                toggle(&mut wizard.mcp_servers, server, on);
-            }
-        }
-    }
-}
-
-/// Add or remove `item` from `set` to match `on` (keeps selections unique).
-fn toggle(set: &mut Vec<String>, item: &str, on: bool) {
-    if on {
-        if !set.iter().any(|x| x == item) {
-            set.push(item.to_string());
-        }
-    } else {
-        set.retain(|x| x != item);
-    }
-}
-
-fn step_review(ui: &mut egui::Ui, wizard: &Wizard) {
-    ui.label("Review and confirm:");
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.strong(wizard.name.trim());
-        ui.label(egui::RichText::new(wizard.scope.wire()).weak());
-        ui.label(
-            egui::RichText::new(format!(
-                "{} tool(s), {} MCP",
-                wizard.tools.len(),
-                wizard.mcp_servers.len()
-            ))
-            .weak()
-            .small(),
-        );
-    });
-    let preview = compose_preview(wizard);
-    egui::ScrollArea::vertical()
-        .id_salt("agent-review")
-        .max_height(320.0)
-        .show(ui, |ui| {
-            ui.add(
-                egui::TextEdit::multiline(&mut preview.as_str())
-                    .desired_width(f32::INFINITY)
-                    .font(egui::TextStyle::Monospace),
-            );
-        });
-    ui.weak(if wizard.editing {
-        "Saving overwrites the existing agent JSON."
-    } else {
-        "The agent is discovered immediately and appears in the picker."
-    });
 }
 
 #[cfg(test)]
@@ -565,16 +512,6 @@ mod tests {
     }
 
     #[test]
-    fn toggle_keeps_unique_set() {
-        let mut set = vec!["a".to_string()];
-        toggle(&mut set, "a", true); // already present, no dup
-        toggle(&mut set, "b", true);
-        assert_eq!(set, vec!["a".to_string(), "b".to_string()]);
-        toggle(&mut set, "a", false);
-        assert_eq!(set, vec!["b".to_string()]);
-    }
-
-    #[test]
     fn draft_trims_and_carries_scope() {
         let w = wizard_with(&["list_files"], &["serena"]);
         let d = w.draft();
@@ -583,5 +520,49 @@ mod tests {
         assert_eq!(d.scope, "user");
         assert_eq!(d.tools, vec!["list_files".to_string()]);
         assert_eq!(d.mcp_servers, vec!["serena".to_string()]);
+    }
+
+    #[test]
+    fn paste_round_trips_compose() {
+        let mut w = wizard_with(&["list_files", "edit_file"], &["serena"]);
+        w.display_name = "My Bot".into();
+        w.model = "gpt".into();
+        w.user_prompt = "hi".into();
+        let json = compose_preview(&w);
+
+        let mut blank = Wizard::create();
+        blank.paste = json;
+        blank.apply_paste().unwrap();
+        assert_eq!(blank.name, "my-bot");
+        assert_eq!(blank.display_name, "My Bot");
+        assert_eq!(blank.model, "gpt");
+        assert_eq!(
+            blank.tools,
+            vec!["list_files".to_string(), "edit_file".to_string()]
+        );
+        assert_eq!(blank.mcp_servers, vec!["serena".to_string()]);
+    }
+
+    #[test]
+    fn paste_rejects_bad_input() {
+        let mut w = Wizard::create();
+        w.paste = "{ not json".into();
+        assert!(w.apply_paste().is_err());
+        w.paste = "[1, 2, 3]".into();
+        assert!(w.apply_paste().is_err()); // not an object
+        w.paste = "{\"name\": \"ok\"}".into();
+        assert!(w.apply_paste().is_err()); // missing description
+        w.paste = "{\"name\": \"bad/name\", \"description\": \"d\"}".into();
+        assert!(w.apply_paste().is_err()); // bad name
+    }
+
+    #[test]
+    fn paste_accepts_dict_form_mcp_servers() {
+        let mut w = Wizard::create();
+        w.paste = "{\"name\": \"ok\", \"description\": \"d\", \
+                    \"mcp_servers\": [\"a\", {\"name\": \"b\", \"auto_start\": true}]}"
+            .into();
+        w.apply_paste().unwrap();
+        assert_eq!(w.mcp_servers, vec!["a".to_string(), "b".to_string()]);
     }
 }

@@ -4,15 +4,17 @@
 //! workspace's sidecar channel (the load-bearing invariant): we pick the
 //! first ready workspace, read the catalog it received, and send ops through
 //! its backend handle. A hint is shown when no workspace is connected.
+//!
+//! The "Add MCP server" wizard (guided form + raw paste) lives in `mcp_wizard`.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use serde_json::{Map, Value, json};
 
 use crate::supervisor::Supervisor;
-use crate::views::common::{no_workspace_hint, serving_workspace, toggle_switch, validate_name};
+use crate::views::common::{no_workspace_hint, serving_workspace, toggle_switch};
+use crate::views::mcp_wizard::{self, WizardAction};
 use crate::workspace::{Workspace, WorkspaceId};
 
 /// Re-poll cadence while the tab is visible (server state settles async).
@@ -28,142 +30,7 @@ pub struct McpManagerView {
     /// Which workspace served us last, and the catalog generation we saw.
     seen: Option<(WorkspaceId, u64)>,
     last_request: Option<Instant>,
-    wizard: Option<Wizard>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Transport {
-    Stdio,
-    Sse,
-    Http,
-}
-
-impl Transport {
-    fn wire(self) -> &'static str {
-        match self {
-            Transport::Stdio => "stdio",
-            Transport::Sse => "sse",
-            Transport::Http => "http",
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Transport::Stdio => "Command (stdio)",
-            Transport::Sse => "Remote URL (SSE)",
-            Transport::Http => "Remote URL (HTTP)",
-        }
-    }
-
-    fn blurb(self) -> &'static str {
-        match self {
-            Transport::Stdio => "Run a local process; talk over stdin/stdout.",
-            Transport::Sse => "Connect to a server-sent-events endpoint.",
-            Transport::Http => "Connect to a streamable-HTTP endpoint.",
-        }
-    }
-}
-
-/// The guided "Add MCP server" wizard (3 steps: transport, fields, review).
-struct Wizard {
-    step: usize,
-    transport: Transport,
-    name: String,
-    command: String,
-    /// One argument per line.
-    args: String,
-    env: Vec<(String, String)>,
-    url: String,
-    headers: Vec<(String, String)>,
-    error: Option<String>,
-}
-
-impl Wizard {
-    fn new() -> Self {
-        Wizard {
-            step: 0,
-            transport: Transport::Stdio,
-            name: String::new(),
-            command: String::new(),
-            args: String::new(),
-            env: Vec::new(),
-            url: String::new(),
-            headers: Vec::new(),
-            error: None,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Pure helpers (unit-tested below)
-// ---------------------------------------------------------------------------
-
-/// Split the args textarea: one argument per line, trimmed, empties dropped.
-fn split_args(text: &str) -> Vec<String> {
-    text.lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
-/// Key/value rows -> JSON object, skipping rows with an empty key.
-fn pairs_to_map(rows: &[(String, String)]) -> Map<String, Value> {
-    rows.iter()
-        .filter(|(k, _)| !k.trim().is_empty())
-        .map(|(k, v)| (k.trim().to_string(), Value::String(v.clone())))
-        .collect()
-}
-
-/// Build the Code Puppy server config object from the wizard's fields.
-fn build_config(w: &Wizard) -> Value {
-    match w.transport {
-        Transport::Stdio => {
-            let mut obj = Map::new();
-            obj.insert("command".into(), json!(w.command.trim()));
-            let args = split_args(&w.args);
-            if !args.is_empty() {
-                obj.insert("args".into(), json!(args));
-            }
-            let env = pairs_to_map(&w.env);
-            if !env.is_empty() {
-                obj.insert("env".into(), Value::Object(env));
-            }
-            Value::Object(obj)
-        }
-        Transport::Sse | Transport::Http => {
-            let mut obj = Map::new();
-            obj.insert("url".into(), json!(w.url.trim()));
-            let headers = pairs_to_map(&w.headers);
-            if !headers.is_empty() {
-                obj.insert("headers".into(), Value::Object(headers));
-            }
-            Value::Object(obj)
-        }
-    }
-}
-
-/// Validate the fields step; mirrors Code Puppy's registry validation so the
-/// user hears about problems before the op crosses the wire.
-fn validate_fields(w: &Wizard) -> Result<(), String> {
-    validate_name(&w.name)?;
-    match w.transport {
-        Transport::Stdio => {
-            if w.command.trim().is_empty() {
-                return Err("a command is required for a stdio server".into());
-            }
-        }
-        Transport::Sse | Transport::Http => {
-            let url = w.url.trim();
-            if url.is_empty() {
-                return Err("a URL is required".into());
-            }
-            if !url.starts_with("http://") && !url.starts_with("https://") {
-                return Err("URL must start with http:// or https://".into());
-            }
-        }
-    }
-    Ok(())
+    wizard: Option<mcp_wizard::Wizard>,
 }
 
 /// Status-dot color for a server's lifecycle state.
@@ -225,7 +92,7 @@ pub fn render(ui: &mut egui::Ui, sup: &Supervisor, view: &mut McpManagerView) {
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button("Add MCP server").clicked() {
-                view.wizard = Some(Wizard::new());
+                view.wizard = Some(mcp_wizard::Wizard::new());
             }
             if ui.small_button("Refresh").clicked()
                 && let Some(backend) = &ws.backend
@@ -320,327 +187,31 @@ fn server_row(
     });
 }
 
-// ---------------------------------------------------------------------------
-// Add-server wizard (modal)
-// ---------------------------------------------------------------------------
-
+/// Drive the add-server wizard modal; on Save, register via the workspace's
+/// backend and refresh promptly so the new server appears.
 fn render_wizard(ctx: &egui::Context, view: &mut McpManagerView, ws: &Workspace) {
     let Some(wizard) = &mut view.wizard else {
         return;
     };
-    let mut close = false;
-    let mut submit = false;
-
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-        close = true;
-    }
-
-    egui::Window::new("Add MCP server")
-        .id(egui::Id::new("mcp-add-wizard"))
-        .collapsible(false)
-        .resizable(false)
-        // Anchor with hard margins (like the sessions modal) so the window
-        // can never grow off-screen.
-        .anchor(egui::Align2::LEFT_TOP, [16.0, 48.0])
-        .show(ctx, |ui| {
-            let screen = ui.ctx().content_rect();
-            let w = (screen.width() - 32.0).clamp(320.0, 560.0);
-            let h = (screen.height() - 96.0).clamp(240.0, 520.0);
-            ui.set_min_width(w);
-            ui.set_max_size(egui::vec2(w, h));
-
-            let steps = ["Transport", "Details", "Review"];
-            ui.horizontal(|ui| {
-                for (i, label) in steps.iter().enumerate() {
-                    let text = format!("{}. {label}", i + 1);
-                    if i == wizard.step {
-                        ui.strong(text);
-                    } else {
-                        ui.weak(text);
-                    }
-                    if i + 1 < steps.len() {
-                        ui.weak(">");
-                    }
-                }
-            });
-            ui.separator();
-
-            match wizard.step {
-                0 => step_transport(ui, wizard),
-                1 => step_fields(ui, wizard),
-                _ => step_review(ui, wizard),
+    match mcp_wizard::show(ctx, wizard) {
+        WizardAction::Save => {
+            let name = wizard.name();
+            let transport = wizard.transport_wire();
+            let config = wizard.config();
+            if let Some(backend) = &ws.backend {
+                backend.add_mcp_server(&name, transport, &config);
             }
-
-            if let Some(err) = &wizard.error {
-                ui.add_space(4.0);
-                ui.colored_label(egui::Color32::from_rgb(220, 100, 100), err);
-            }
-
-            ui.add_space(8.0);
-            ui.separator();
-            ui.horizontal(|ui| {
-                if ui.button("Cancel").clicked() {
-                    close = true;
-                }
-                ui.with_layout(
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| match wizard.step {
-                        0 => {
-                            if ui.button("Next").clicked() {
-                                wizard.step = 1;
-                                wizard.error = None;
-                            }
-                        }
-                        1 => {
-                            if ui.button("Next").clicked() {
-                                match validate_fields(wizard) {
-                                    Ok(()) => {
-                                        wizard.step = 2;
-                                        wizard.error = None;
-                                    }
-                                    Err(e) => wizard.error = Some(e),
-                                }
-                            }
-                            if ui.button("Back").clicked() {
-                                wizard.step = 0;
-                                wizard.error = None;
-                            }
-                        }
-                        _ => {
-                            if ui.button("Add server").clicked() {
-                                submit = true;
-                            }
-                            if ui.button("Back").clicked() {
-                                wizard.step = 1;
-                                wizard.error = None;
-                            }
-                        }
-                    },
-                );
-            });
-        });
-
-    if submit
-        && let Some(wizard) = &view.wizard
-        && let Some(backend) = &ws.backend
-    {
-        let config = build_config(wizard);
-        backend.add_mcp_server(wizard.name.trim(), wizard.transport.wire(), &config);
-        view.last_request = None; // refresh promptly to show the new server
-        close = true;
-    }
-    if close {
-        view.wizard = None;
-    }
-}
-
-fn step_transport(ui: &mut egui::Ui, wizard: &mut Wizard) {
-    ui.label("How does this MCP server run?");
-    ui.add_space(4.0);
-    for t in [Transport::Stdio, Transport::Sse, Transport::Http] {
-        let selected = wizard.transport == t;
-        if ui
-            .selectable_label(selected, format!("{}\n    {}", t.label(), t.blurb()))
-            .clicked()
-        {
-            wizard.transport = t;
+            view.last_request = None; // refresh promptly to show the new server
+            view.wizard = None;
         }
+        WizardAction::Cancel => view.wizard = None,
+        WizardAction::KeepOpen => {}
     }
-}
-
-fn step_fields(ui: &mut egui::Ui, wizard: &mut Wizard) {
-    egui::Grid::new("mcp-wizard-fields")
-        .num_columns(2)
-        .spacing([8.0, 6.0])
-        .show(ui, |ui| {
-            ui.label("Name");
-            ui.add(
-                egui::TextEdit::singleline(&mut wizard.name)
-                    .desired_width(f32::INFINITY)
-                    .hint_text("my-server (letters, digits, - and _)"),
-            );
-            ui.end_row();
-
-            match wizard.transport {
-                Transport::Stdio => {
-                    ui.label("Command");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut wizard.command)
-                            .desired_width(f32::INFINITY)
-                            .hint_text("npx"),
-                    );
-                    ui.end_row();
-
-                    ui.label("Arguments");
-                    ui.add(
-                        egui::TextEdit::multiline(&mut wizard.args)
-                            .desired_rows(3)
-                            .desired_width(f32::INFINITY)
-                            .hint_text("one argument per line"),
-                    );
-                    ui.end_row();
-                }
-                Transport::Sse | Transport::Http => {
-                    ui.label("URL");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut wizard.url)
-                            .desired_width(f32::INFINITY)
-                            .hint_text("https://example.com/mcp"),
-                    );
-                    ui.end_row();
-                }
-            }
-        });
-
-    ui.add_space(4.0);
-    match wizard.transport {
-        Transport::Stdio => kv_rows(
-            ui,
-            &mut wizard.env,
-            "Environment variables",
-            "NAME",
-            "value",
-        ),
-        Transport::Sse | Transport::Http => {
-            kv_rows(ui, &mut wizard.headers, "Headers", "Header", "value")
-        }
-    }
-}
-
-/// Editable key/value rows with add/remove buttons.
-fn kv_rows(
-    ui: &mut egui::Ui,
-    rows: &mut Vec<(String, String)>,
-    title: &str,
-    key_hint: &str,
-    val_hint: &str,
-) {
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(title).small().weak());
-        if ui.small_button("+").on_hover_text("Add a row").clicked() {
-            rows.push((String::new(), String::new()));
-        }
-    });
-    let mut remove: Option<usize> = None;
-    for (i, (k, v)) in rows.iter_mut().enumerate() {
-        ui.push_id(("kv", title, i), |ui| {
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(k)
-                        .desired_width(140.0)
-                        .hint_text(key_hint),
-                );
-                ui.add(
-                    egui::TextEdit::singleline(v)
-                        .desired_width(f32::INFINITY)
-                        .hint_text(val_hint),
-                );
-                if ui.small_button("x").on_hover_text("Remove").clicked() {
-                    remove = Some(i);
-                }
-            });
-        });
-    }
-    if let Some(i) = remove {
-        rows.remove(i);
-    }
-}
-
-fn step_review(ui: &mut egui::Ui, wizard: &Wizard) {
-    ui.label("Review and confirm:");
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.strong(wizard.name.trim());
-        ui.label(egui::RichText::new(wizard.transport.wire()).weak());
-    });
-    let pretty = serde_json::to_string_pretty(&build_config(wizard)).unwrap_or_default();
-    egui::ScrollArea::vertical()
-        .max_height(200.0)
-        .show(ui, |ui| {
-            ui.add(
-                egui::TextEdit::multiline(&mut pretty.as_str())
-                    .desired_width(f32::INFINITY)
-                    .font(egui::TextStyle::Monospace),
-            );
-        });
-    ui.weak("The server is registered globally and enabled; toggle it off any time.");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn stdio_wizard() -> Wizard {
-        let mut w = Wizard::new();
-        w.name = "fs".into();
-        w.command = " npx ".into();
-        w.args = "-y\n\n  server-filesystem  \n".into();
-        w.env = vec![
-            ("KEY".into(), "value".into()),
-            ("".into(), "ignored".into()),
-        ];
-        w
-    }
-
-    #[test]
-    fn args_split_one_per_line_trimmed() {
-        assert_eq!(split_args("-y\n\n  server  \n"), vec!["-y", "server"]);
-        assert!(split_args("").is_empty());
-    }
-
-    #[test]
-    fn stdio_config_shape() {
-        let cfg = build_config(&stdio_wizard());
-        assert_eq!(
-            cfg,
-            json!({
-                "command": "npx",
-                "args": ["-y", "server-filesystem"],
-                "env": {"KEY": "value"}
-            })
-        );
-    }
-
-    #[test]
-    fn stdio_config_omits_empty_optionals() {
-        let mut w = Wizard::new();
-        w.name = "fs".into();
-        w.command = "uvx".into();
-        assert_eq!(build_config(&w), json!({"command": "uvx"}));
-    }
-
-    #[test]
-    fn url_config_shape() {
-        let mut w = Wizard::new();
-        w.transport = Transport::Sse;
-        w.name = "remote".into();
-        w.url = " https://example.com/sse ".into();
-        w.headers = vec![("Authorization".into(), "Bearer x".into())];
-        assert_eq!(
-            build_config(&w),
-            json!({
-                "url": "https://example.com/sse",
-                "headers": {"Authorization": "Bearer x"}
-            })
-        );
-    }
-
-    #[test]
-    fn field_validation_per_transport() {
-        let mut w = Wizard::new();
-        w.name = "ok".into();
-        assert!(validate_fields(&w).is_err()); // stdio without command
-
-        w.command = "npx".into();
-        assert!(validate_fields(&w).is_ok());
-
-        w.transport = Transport::Http;
-        assert!(validate_fields(&w).is_err()); // http without url
-        w.url = "ftp://nope".into();
-        assert!(validate_fields(&w).is_err()); // bad scheme
-        w.url = "http://localhost:9000".into();
-        assert!(validate_fields(&w).is_ok());
-    }
 
     #[test]
     fn state_colors_distinguish_lifecycle() {
