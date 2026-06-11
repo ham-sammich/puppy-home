@@ -171,6 +171,10 @@ pub struct Workspace {
     /// remote impl routes these over the sidecar protocol. The tree + editor
     /// go through this instead of calling `std::fs` directly.
     fs: Arc<dyn fs::WorkspaceFs>,
+    /// `Some("user@host")` when this workspace's sidecar runs on a remote host
+    /// over SSH. The chat works today; the file tree + git stay local-only
+    /// until the remote fs/git impls land, so we show a placeholder instead.
+    remote_label: Option<String>,
     show_tree: bool,
     open_files: BTreeMap<PathBuf, FileBuffer>,
     editor_open: Vec<EditorItem>,
@@ -207,7 +211,13 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub fn new(id: WorkspaceId, root: PathBuf, backend: CodePuppy, rx: Receiver<UiEvent>) -> Self {
+    pub fn new(
+        id: WorkspaceId,
+        root: PathBuf,
+        remote_label: Option<String>,
+        backend: CodePuppy,
+        rx: Receiver<UiEvent>,
+    ) -> Self {
         let name = root
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
@@ -290,6 +300,7 @@ impl Workspace {
             git_repo: is_git_repo,
             git,
             fs: Arc::new(fs::LocalFs),
+            remote_label,
             git_changes: Vec::new(),
             git_rx: None,
             git_refresh_at: Instant::now(),

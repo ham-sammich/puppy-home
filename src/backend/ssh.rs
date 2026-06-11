@@ -20,7 +20,8 @@
 //! `StrictHostKeyChecking=accept-new` (trust-on-first-use, still reject *changed*
 //! keys). A future increment can expose these as per-profile toggles.
 
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Where the sidecar is cached on the remote. Uses `$HOME` (expanded by the
@@ -49,10 +50,6 @@ pub struct SshTarget {
 
 impl SshTarget {
     /// Parse a `[user@]host[:port]` string. `host` may be a config alias.
-    ///
-    /// Not yet called outside tests (connection-profile UI lands in a later
-    /// increment), so it is allowed to be unused for now.
-    #[allow(dead_code)]
     pub fn parse(spec: &str) -> Result<SshTarget, String> {
         let spec = spec.trim();
         if spec.is_empty() {
@@ -145,6 +142,148 @@ pub fn default_remote_launcher() -> String {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| DEFAULT_REMOTE_LAUNCHER.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Host discovery: read connectable aliases from the user's ssh config so the
+// connect picker can offer them (alongside free-text entry).
+// ---------------------------------------------------------------------------
+
+/// Connectable `Host` aliases from `~/.ssh/config` (following `Include`s),
+/// de-duplicated in first-seen order. Wildcard/negated patterns (`Host *`,
+/// `web-*`, `!bastion`) are skipped -- they aren't real destinations.
+pub fn config_hosts() -> Vec<String> {
+    match home_dir() {
+        Some(home) => config_hosts_in(&home),
+        None => Vec::new(),
+    }
+}
+
+/// Host discovery rooted at an explicit home dir (so tests need not touch the
+/// process-global `HOME`).
+fn config_hosts_in(home: &Path) -> Vec<String> {
+    let mut hosts = Vec::new();
+    let mut seen = HashSet::new();
+    collect_config(
+        &home.join(".ssh").join("config"),
+        home,
+        &mut hosts,
+        &mut seen,
+        0,
+    );
+    hosts
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}
+
+/// Parse one config file into `hosts`, recursing into `Include`d files. `depth`
+/// guards against include cycles.
+fn collect_config(
+    path: &Path,
+    home: &Path,
+    hosts: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+    depth: u8,
+) {
+    if depth > 8 {
+        return;
+    }
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut words = line.split_whitespace();
+        let Some(keyword) = words.next() else {
+            continue;
+        };
+        if keyword.eq_ignore_ascii_case("host") {
+            for alias in words {
+                if is_plain_alias(alias) && seen.insert(alias.to_string()) {
+                    hosts.push(alias.to_string());
+                }
+            }
+        } else if keyword.eq_ignore_ascii_case("include") {
+            for pattern in words {
+                for inc in expand_include(pattern, home) {
+                    collect_config(&inc, home, hosts, seen, depth + 1);
+                }
+            }
+        }
+    }
+}
+
+/// A real, connectable alias: no glob/negation metacharacters.
+fn is_plain_alias(tok: &str) -> bool {
+    !tok.is_empty() && !tok.contains(['*', '?', '!'])
+}
+
+/// Resolve an `Include` pattern (relative to `~/.ssh`, `~` expanded) into the
+/// files it names, expanding a single-level `*` glob in the last component.
+fn expand_include(pattern: &str, home: &Path) -> Vec<PathBuf> {
+    let resolved = if let Some(rest) = pattern.strip_prefix("~/") {
+        home.join(rest)
+    } else {
+        let p = Path::new(pattern);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            home.join(".ssh").join(p)
+        }
+    };
+    let Some(fname) = resolved.file_name().and_then(|s| s.to_str()) else {
+        return vec![resolved];
+    };
+    if !fname.contains(['*', '?']) {
+        return vec![resolved];
+    }
+    let dir = resolved.parent().unwrap_or_else(|| Path::new("."));
+    let mut out = Vec::new();
+    if let Ok(read) = std::fs::read_dir(dir) {
+        for entry in read.flatten() {
+            if let Some(name) = entry.file_name().to_str()
+                && glob_match(fname, name)
+            {
+                out.push(entry.path());
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Minimal shell-style wildcard match (`*` any run, `?` one char). ASCII paths.
+fn glob_match(pattern: &str, name: &str) -> bool {
+    let (pb, nb) = (pattern.as_bytes(), name.as_bytes());
+    let (mut pi, mut ni) = (0usize, 0usize);
+    let (mut star, mut mark) = (None, 0usize);
+    while ni < nb.len() {
+        if pi < pb.len() && (pb[pi] == b'?' || pb[pi] == nb[ni]) {
+            pi += 1;
+            ni += 1;
+        } else if pi < pb.len() && pb[pi] == b'*' {
+            star = Some(pi);
+            mark = ni;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ni = mark;
+        } else {
+            return false;
+        }
+    }
+    while pi < pb.len() && pb[pi] == b'*' {
+        pi += 1;
+    }
+    pi == pb.len()
 }
 
 /// Single-quote a string for a POSIX shell (wraps in `'...'`, escaping any
@@ -252,5 +391,51 @@ mod tests {
         assert_eq!(sh_quote("plain"), "'plain'");
         assert_eq!(sh_quote("a'b"), "'a'\\''b'");
         assert_eq!(sh_quote("/a b/c"), "'/a b/c'");
+    }
+
+    #[test]
+    fn glob_match_basics() {
+        assert!(glob_match("*", "anything"));
+        assert!(glob_match("config.d", "config.d"));
+        assert!(glob_match("*.conf", "work.conf"));
+        assert!(glob_match("host-*", "host-1"));
+        assert!(glob_match("a?c", "abc"));
+        assert!(!glob_match("*.conf", "work.cfg"));
+        assert!(!glob_match("a?c", "ac"));
+    }
+
+    #[test]
+    fn config_hosts_reads_aliases_and_follows_include() {
+        let base = std::env::temp_dir().join(format!(
+            "ph_ssh_cfg_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let ssh = base.join(".ssh");
+        let confd = ssh.join("config.d");
+        std::fs::create_dir_all(&confd).unwrap();
+
+        std::fs::write(
+            ssh.join("config"),
+            "# my hosts\n\
+             Host devbox prod\n    HostName 10.0.0.1\n\
+             Host *\n    User skip-me\n\
+             Host web-*\n    User skip-pattern\n\
+             Include config.d/*\n",
+        )
+        .unwrap();
+        std::fs::write(confd.join("extra.conf"), "Host buildbox\n    Port 2222\n").unwrap();
+
+        let hosts = config_hosts_in(&base);
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert!(hosts.contains(&"devbox".to_string()));
+        assert!(hosts.contains(&"prod".to_string()));
+        assert!(
+            hosts.contains(&"buildbox".to_string()),
+            "Include not followed: {hosts:?}"
+        );
+        assert!(!hosts.iter().any(|h| h.contains('*')));
     }
 }

@@ -225,12 +225,23 @@ impl Workspace {
                         });
                     });
                     ui.separator();
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .id_salt(("tree-scroll", id))
-                        .show(ui, |ui| {
-                            render_dir(ui, &*self.fs, &self.root, &markers, &mut acts);
-                        });
+                    if let Some(label) = &self.remote_label {
+                        // Remote workspace: the sidecar (chat) runs on `label`, but
+                        // the tree/git are still local-only until the remote fs/git
+                        // impls land. Be honest rather than show an empty tree.
+                        ui.add_space(8.0);
+                        ui.weak(format!("\u{1f517} Connected to {label}"));
+                        ui.add_space(4.0);
+                        ui.label("Chat runs on the remote host.");
+                        ui.weak("Remote file browsing & git are coming next.");
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .id_salt(("tree-scroll", id))
+                            .show(ui, |ui| {
+                                render_dir(ui, &*self.fs, &self.root, &markers, &mut acts);
+                            });
+                    }
                 });
 
             if do_refresh {

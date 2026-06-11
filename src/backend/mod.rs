@@ -738,10 +738,6 @@ impl CodePuppy {
     /// `sidecar.py` to the remote cache, then runs it; the returned handle and
     /// event stream are identical to [`spawn`](Self::spawn) -- the JSON protocol
     /// is transport-agnostic. `remote_cwd` is a path *on the remote*.
-    ///
-    /// Not yet wired to the UI (connection profiles land in a later increment),
-    /// so it is allowed to be unused for now.
-    #[allow(dead_code)]
     pub fn spawn_remote(
         ctx: egui::Context,
         target: &ssh::SshTarget,

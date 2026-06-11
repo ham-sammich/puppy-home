@@ -7,5 +7,6 @@ pub mod common;
 pub mod dashboard;
 pub mod mcp_manager;
 pub mod mcp_wizard;
+pub mod remote_connect;
 pub mod skills_manager;
 pub mod skills_wizard;

@@ -43,7 +43,13 @@ pub struct PuppyApp {
     skills: crate::views::skills_manager::SkillsManagerView,
     /// State for the Agent Manager tab (one instance).
     agents: crate::views::agent_manager::AgentManagerView,
+    /// The "Connect to remote" dialog, when open.
+    remote: Option<crate::views::remote_connect::RemoteConnect>,
+    /// An in-flight remote SSH connection (established on a worker thread).
+    remote_pending: Option<remote::RemotePending>,
 }
+
+mod remote;
 
 /// Apply a theme to the egui context (on launch and on change).
 fn apply_theme(ctx: &egui::Context, theme: &Theme, library: &[ThemePalette]) {
@@ -159,6 +165,8 @@ impl PuppyApp {
             mcp: crate::views::mcp_manager::McpManagerView::default(),
             skills: crate::views::skills_manager::SkillsManagerView::default(),
             agents: crate::views::agent_manager::AgentManagerView::default(),
+            remote: None,
+            remote_pending: None,
         }
     }
 
@@ -332,6 +340,7 @@ impl eframe::App for PuppyApp {
         self.perf.on_frame(frame);
         self.sup.drain();
         self.poll_folder_pick();
+        self.poll_remote();
 
         // Hand the resolved terminal palette to the embedded terminal renderer
         // via the per-context data store (avoids threading it through the dock).
@@ -344,6 +353,7 @@ impl eframe::App for PuppyApp {
 
         let mut actions: Vec<ShellAction> = Vec::new();
         let mut open_clicked = false;
+        let mut open_remote = false;
         let mut open_browser = false;
         let mut open_mcp = false;
         let mut open_skills = false;
@@ -373,6 +383,13 @@ impl eframe::App for PuppyApp {
                 }
                 if picking {
                     ui.label(egui::RichText::new("choosing folder…").weak());
+                }
+                if ui
+                    .button("\u{1f517} Connect Remote…")
+                    .on_hover_text("Run a Code Puppy on another host over SSH")
+                    .clicked()
+                {
+                    open_remote = true;
                 }
                 let browser_tip = if browser_available {
                     "Open a browser tab"
@@ -452,6 +469,28 @@ impl eframe::App for PuppyApp {
 
         if open_clicked {
             self.begin_folder_pick(ui.ctx());
+        }
+        if open_remote && self.remote.is_none() {
+            self.remote = Some(crate::views::remote_connect::RemoteConnect::new());
+        }
+        // Render the remote-connect dialog (if open) and act on its outcome.
+        let remote_outcome = self
+            .remote
+            .as_mut()
+            .map(|st| crate::views::remote_connect::render(ui.ctx(), st));
+        if let Some(outcome) = remote_outcome {
+            if let Some((target, path)) = outcome.connect {
+                if let Some(st) = self.remote.as_mut() {
+                    st.connecting = true;
+                    st.error = None;
+                }
+                self.begin_remote_connect(target, path, ui.ctx());
+            } else if outcome.cancel {
+                let connecting = self.remote.as_ref().is_some_and(|s| s.connecting);
+                if !connecting {
+                    self.remote = None;
+                }
+            }
         }
         if open_browser {
             let id = self.browser.open_tab(None, None);

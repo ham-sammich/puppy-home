@@ -2,10 +2,11 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::mpsc::Receiver;
 
 use eframe::egui;
 
-use crate::backend::CodePuppy;
+use crate::backend::{CodePuppy, UiEvent};
 use crate::workspace::{InstanceStatus, Workspace, WorkspaceId};
 
 pub struct Supervisor {
@@ -26,11 +27,24 @@ impl Supervisor {
     /// Open a folder as a new workspace: spawn a Code Puppy sidecar scoped to it.
     pub fn open(&mut self, root: PathBuf) -> Result<WorkspaceId, String> {
         let (backend, rx) = CodePuppy::spawn(self.ctx.clone(), Some(&root))?;
+        Ok(self.adopt(root, None, backend, rx))
+    }
+
+    /// Adopt an already-spawned backend (used for remote workspaces, whose SSH
+    /// connection is established off-thread). `remote_label` is `Some("user@host")`
+    /// for a remote sidecar, `None` for local.
+    pub fn adopt(
+        &mut self,
+        root: PathBuf,
+        remote_label: Option<String>,
+        backend: CodePuppy,
+        rx: Receiver<UiEvent>,
+    ) -> WorkspaceId {
         let id = WorkspaceId(self.next_id);
         self.next_id += 1;
         self.workspaces
-            .insert(id, Workspace::new(id, root, backend, rx));
-        Ok(id)
+            .insert(id, Workspace::new(id, root, remote_label, backend, rx));
+        id
     }
 
     /// Close a workspace (drops the handle → shuts down + kills the child).
