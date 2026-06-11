@@ -12,6 +12,7 @@ mod backend;
 mod browser;
 mod fonts;
 mod git;
+mod perf;
 mod plugin;
 mod session;
 mod shell;

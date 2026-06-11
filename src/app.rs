@@ -33,6 +33,7 @@ pub struct PuppyApp {
     theme_editor_open: bool,
     /// Optional browser plugin: discovery + open browser tabs.
     browser: BrowserManager,
+    perf: crate::perf::PerfStats,
 }
 
 /// Snapshot the open workspaces as a persistable session.
@@ -134,6 +135,7 @@ impl PuppyApp {
             terminal_theme,
             theme_editor_open: false,
             browser: BrowserManager::discover(),
+            perf: crate::perf::PerfStats::default(),
         }
     }
 
@@ -250,6 +252,7 @@ fn window_hwnd(_frame: &eframe::Frame) -> Option<i64> {
 
 impl eframe::App for PuppyApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        self.perf.on_frame(frame);
         self.sup.drain();
         self.poll_folder_pick();
 
@@ -271,6 +274,7 @@ impl eframe::App for PuppyApp {
         let browser_available = self.browser.is_available();
 
         // Copy the bits the menu needs so its closure doesn't borrow `self`.
+        let mut perf_visible = self.perf.visible;
         let picking = self.folder_pick.is_some();
         let ws_count = self.sup.len();
         let waiting = self.sup.waiting_count();
@@ -311,6 +315,8 @@ impl eframe::App for PuppyApp {
                     ui.label(egui::RichText::new(&status).weak());
                 }
                 ui.separator();
+                ui.toggle_value(&mut perf_visible, "perf")
+                    .on_hover_text("Performance HUD: frame cost, repaint rate, memory");
                 ui.menu_button(format!("Theme: {}", theme.label()), |ui| {
                     if ui.selectable_label(theme == Theme::Dark, "Dark").clicked() {
                         pick_theme = Some(Theme::Dark);
@@ -401,6 +407,8 @@ impl eframe::App for PuppyApp {
                 .show_inside(ui, &mut shell);
         }
         self.dock = Some(dock);
+        self.perf.visible = perf_visible;
+        self.perf.render(ui.ctx());
         self.browser.end_frame();
 
         // An embedded webview steals OS keyboard focus when clicked; if the user

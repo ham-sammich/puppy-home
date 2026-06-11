@@ -1,0 +1,79 @@
+name: release-builds
+
+# Build distributable artifacts for Windows + macOS.
+# Runs on demand (Actions tab -> Run workflow) or when pushing a v* tag.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build (app + browser plugin)
+        run: cargo build --release --workspace
+      - name: Package
+        shell: pwsh
+        run: |
+          $dist = "dist/puppy-home-windows"
+          New-Item -ItemType Directory -Force "$dist/plugins/browser" | Out-Null
+          Copy-Item target/release/puppy-home.exe "$dist/"
+          Copy-Item target/release/puppy-browser.exe "$dist/plugins/browser/"
+          '{ "id": "browser", "name": "Web Browser", "version": "1.0.0", "exe": "puppy-browser.exe", "min_host_version": "0.0.0" }' |
+            Set-Content "$dist/plugins/browser/plugin.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: puppy-home-windows
+          path: dist/puppy-home-windows
+
+  macos:
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin   # Apple Silicon (M1+)
+            name: puppy-home-macos-arm64
+          - target: x86_64-apple-darwin    # Intel Macs
+            name: puppy-home-macos-x64
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build (app + browser plugin)
+        run: cargo build --release --workspace --target ${{ matrix.target }}
+      - name: Bundle .app
+        run: |
+          APP="dist/puppy-home.app"
+          BIN="target/${{ matrix.target }}/release"
+          mkdir -p "$APP/Contents/MacOS/plugins/browser"
+          cp "$BIN/puppy-home" "$APP/Contents/MacOS/"
+          cp "$BIN/puppy-browser" "$APP/Contents/MacOS/plugins/browser/"
+          cat > "$APP/Contents/MacOS/plugins/browser/plugin.json" <<'EOF'
+          { "id": "browser", "name": "Web Browser", "version": "1.0.0", "exe": "puppy-browser", "min_host_version": "0.0.0" }
+          EOF
+          cat > "$APP/Contents/Info.plist" <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleName</key><string>puppy-home</string>
+            <key>CFBundleDisplayName</key><string>puppy-home</string>
+            <key>CFBundleIdentifier</key><string>dev.jacob.puppy-home</string>
+            <key>CFBundleExecutable</key><string>puppy-home</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleVersion</key><string>0.1.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict></plist>
+          EOF
+          # ad-hoc sign so macOS will run it after right-click -> Open
+          codesign --force --deep -s - "$APP"
+          ditto -c -k --keepParent "$APP" "dist/${{ matrix.name }}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/${{ matrix.name }}.zip

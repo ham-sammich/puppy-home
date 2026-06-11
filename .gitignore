@@ -1,4 +1,6 @@
 /target
+# packaged release builds (scripts/build-release.ps1 / CI)
+/dist
 # scratch artifacts from dev/screenshot verification
 /_*.png
 /_*.log
