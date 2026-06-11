@@ -1,8 +1,8 @@
 # Handoff Notes — Device Switch
 
-Date: 2026-06-11 (updated after Increment 3 + macOS bring-up)
+Date: 2026-06-11 (updated after Phase D: dock zone + layout persistence)
 Branch: feature/browser-plugin
-State: 115 tests green, zero warnings, zero clippy lints, cargo fmt clean
+State: 128 tests green, zero warnings, zero clippy lints, cargo fmt clean
 Coordinator: planning-agent-8a6233 / executor: code-puppy
 Agent session ids used so far: code-puppy increments under session
 "phase-c-mcp-manager"; plan updates under "plan-update-2026-06-11".
@@ -13,7 +13,9 @@ travel across devices.
 Key commits (verified via git log; the commit carrying this updated handoff is
 the new HEAD):
 
-- 71c8c06 — docs: handoff notes + reconciled plan for device switch
+- d812e7a — feat(dock): persist egui_dock split layout across restarts (Phase D)
+- ed15f83 — feat(managers): paste-and-validate mode for Agents, Skills, MCP
+- 3846e7e — feat(dock): open managers in a right-side dock zone (Phase D inc 1)
 - e7291f5 — feat(skills): Skills Manager end-to-end (Phase C increment 2)
 - b93e86d — feat(mcp): MCP Manager end-to-end (Phase C increment 1; also carried
   the reconciled .claude/claude_plan.md)
@@ -89,38 +91,70 @@ id `phase-c-mcp-manager` (code-puppy does the hands-on work).
   clone roundtrip). 115 tests green, zero warnings, zero clippy, fmt clean.
 - Test suite: 115 tests green, zero warnings, zero clippy lints, fmt clean.
 
+## Phase D — DONE (2026-06-11)
+
+- Inc 1 (3846e7e): right-side dock zone. Managers (MCP/Skills/Agent) split off a
+  ~28% right sidebar and cluster there as tabs via egui_dock (drag in/out,
+  resize). `app::open_panel_tab` + `is_panel_tab` own this; first panel carves
+  the sidebar, later panels reuse it.
+- Inc 2 (d812e7a): dock-layout persistence. `session.json` now stores the full
+  egui_dock tree (`Session.layout: Option<DockState<SavedTab>>`), not just the
+  open set. New `src/dock_layout.rs` is the glue:
+  - `SavedTab` mirrors `shell::Tab` with device-independent keys (workspace
+    PATHS, not runtime ids). Browser tabs are NOT persisted.
+  - Save: `DockState<Tab>` -> `DockState<SavedTab>` via egui_dock
+    `filter_map_tabs` (drops browsers/closed chats, collapses empty nodes),
+    then `session::normalize_layout_rects` zeroes node rects (fresh leaves carry
+    `Rect::NOTHING`/inf, which JSON writes as `null` and refuses to read back;
+    egui_dock recomputes rects each frame so zeroing is lossless).
+  - Restore: `DockState<SavedTab>` -> `DockState<Tab>`, remapping each chat's
+    path to its freshly spawned WorkspaceId via a path->id map built while
+    reopening folders; unmappable tabs drop. `ensure_core_tabs` backstops a
+    stale layout (guarantees Dashboard + a chat per reopened workspace).
+  - Writes gated on a rect-free STRUCTURAL signature (arrangement + active tab +
+    split fractions) so resizing the OS window doesn't churn the file. Verified
+    headlessly: layout round-trips on relaunch (path remaps, no crash), zeroed
+    rects deserialize, no idle file churn.
+  - Enabled egui_dock's `serde` feature; `Tab` gained `Debug`.
+
+## Also done this session — paste mode for the managers (ed15f83)
+
+Each create/edit wizard (Agents, Skills, MCP) gained a `Form | Paste` toggle:
+paste a whole config and **Format** (syntax-check + tidy) or **Save** (validate
++ write), errors shown inline. All funnel through the existing save ops. Shared
+`EditMode`/`mode_toggle`/`paste_editor` in `views/common`. To stay under 600
+lines this split two wizards into directory modules with a `steps` child
+(`views/agent_wizard/{mod,steps}.rs`, `views/mcp_wizard/{mod,steps}.rs`) and
+extracted the MCP wizard out of `mcp_manager.rs` (651 -> 222 lines). Paste
+formats: agents = full agent JSON (string or {name,..} mcp_servers); skills =
+full SKILL.md (frontmatter + body); mcp = a `{"name": {..}}` entry (unwraps an
+outer `mcpServers` wrapper, infers transport from a `type` field or command/url).
+
 ## Next up
 
-Phase C's three managers (MCP, Skills, Agent) are all DONE. Next is **Phase D**:
-
-- Right-side dock zone the managers (MCP/Skills/Agent), perf HUD, and future
-  Puppy Pack chat can be dragged into/out of via egui_dock.
-- Land dock-layout persistence: persist the egui_dock split layout in
-  session.json (not just the open set). Needs runtime workspace-id remapping on
-  restore (the WorkspaceId in saved Tabs won't match freshly-spawned ones).
-
-After Phase D: Phase A (SSH remote sidecar; WorkspaceFs trait refactor first),
-then Phase B (Puppy Pack). Full details and risks live in
-.claude/claude_plan.md.
+Phase C (3 managers) and Phase D (dock zone + persistence) are DONE. Next is
+**Phase A — Remote SSH** (run sidecar.py on the remote, tunnel the stdio JSON
+protocol over SSH). Big long pole is the `WorkspaceFs` trait refactor (extract
+local impl first as a pure refactor, then add the remote impl). Then Phase B
+(Puppy Pack). Full details and risks live in .claude/claude_plan.md.
 
 ## Open items / tech debt (from last increment reports)
 
-- Agent Manager (inc. 3): MCP bindings are saved as a plain name list
-  (shorthand -> auto_start=true). code-puppy also supports the dict form with
-  per-server auto_start; a future toggle could expose it. Also: save/delete
-  errors surface in the chat transcript, not the Agent panel (same gap as
-  add_mcp_server, below). Cloning a JSON agent that lives in a project dir
-  still clones into the USER agents dir (code-puppy's clone_agent behaviour) —
-  fine for now.
-- agent_wizard.rs is 587 lines (close to the 600 budget). If it grows, split
-  the per-step renderers (step_basics/step_prompt/step_tools/step_review) into
-  an agent_wizard_steps.rs.
-
-
-- src/views/mcp_manager.rs is 651 lines (over the 600-line budget). Extract its
-  add-server wizard into mcp_wizard.rs (mirror skills_wizard.rs) on next touch.
-- add_mcp_server errors surface in the chat transcript, not the MCP panel.
-  Route them to the panel for proper inline feedback.
+- Agent Manager: MCP bindings are saved as a plain name list (shorthand ->
+  auto_start=true). code-puppy also supports the dict form with per-server
+  auto_start; a future toggle could expose it. Cloning a JSON agent that lives
+  in a project dir still clones into the USER agents dir (code-puppy's
+  clone_agent behaviour) — fine for now.
+- RESOLVED (ed15f83): agent_wizard.rs split into a directory module; mcp_manager
+  wizard extracted to views/mcp_wizard/ (mcp_manager now 222 lines).
+- FORM-mode save/delete errors (Agent/Skills/MCP `add_mcp_server` etc.) still
+  surface in the chat transcript, not the manager panel. PASTE-mode errors DO
+  show inline in the wizard. Routing the form/op-result errors to the panels is
+  still open — good next small task (Jacob flagged interest).
+- Browser tabs are intentionally not restored by dock-layout persistence (the
+  plugin doesn't restore tabs across runs); a closed-then-saved layout simply
+  omits them. session.json now also carries egui_dock's i18n "translations"
+  block (harmless bloat from serializing DockState).
 - Editing a plugin-sourced skill re-saves it as a user copy
   (~/.code_puppy/skills) rather than editing in place. Acceptable for now;
   consider an explicit "fork to user" affordance later.

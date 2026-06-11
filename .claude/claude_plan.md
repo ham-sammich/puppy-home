@@ -280,9 +280,18 @@ clone_agent_config ops + src/views/agent_manager.rs + agent_wizard.rs, top-bar
 "Agents" button). Built-in agents are read-only + cloneable; JSON agents are
 editable/deletable. 115 tests green, zero warnings/clippy, fmt clean. All
 sidecar ops verified headlessly against real code-puppy. Project also now
-builds + runs on Apple Silicon macOS (see .claude/HANDOFF.md). Next: Phase D.
+builds + runs on Apple Silicon macOS (see .claude/HANDOFF.md).
 
-### Phase D — Right sidebar dock + layout persistence (small)
+Phase D is now also DONE (commits 3846e7e + d812e7a) and a paste-and-validate
+mode shipped for all three managers (ed15f83). Next: Phase A (Remote SSH).
+
+### Phase D — Right sidebar dock + layout persistence (small) — DONE
+- DONE (3846e7e): persistent right-side dock zone that panels (MCP/Skills/Agent
+  managers, perf HUD, future Puppy Pack chat) can be dragged into/out of via
+  egui_dock. DONE (d812e7a): dock-layout persistence in session.json with
+  workspace-path remapping on restore + a rect-free structural change signature
+  (no idle file churn). See src/dock_layout.rs and .claude/HANDOFF.md.
+- (original notes below, for reference)
 - Persistent right-side dock zone that panels (MCP/Skills/Agent managers, perf
   HUD, future Puppy Pack chat) can be dragged into/out of via egui_dock.
 - Land the existing "Dock-layout persistence" roadmap item (persist egui_dock
