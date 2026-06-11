@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use eframe::egui;
-use egui_dock::{DockArea, DockState, Style};
+use egui_dock::{DockArea, DockState, NodeIndex, NodePath, Style};
 
 use crate::browser::BrowserManager;
 use crate::session::Theme;
@@ -65,6 +65,16 @@ fn apply_theme(ctx: &egui::Context, theme: &Theme, library: &[ThemePalette]) {
 
 fn session_sig(session: &crate::session::Session) -> String {
     serde_json::to_string(session).unwrap_or_default()
+}
+
+/// Single-instance "panel" tabs that live in the right-side dock zone (the
+/// managers today; perf HUD / Puppy Pack chat later). Kept together so opening
+/// one carves out — or reuses — a sidebar rather than crowding the main area.
+fn is_panel_tab(tab: &Tab) -> bool {
+    matches!(
+        tab,
+        Tab::McpManager | Tab::SkillsManager | Tab::AgentManager
+    )
 }
 
 impl PuppyApp {
@@ -155,6 +165,31 @@ impl PuppyApp {
         if sig != self.last_session_sig {
             self.last_session_sig = sig;
             crate::session::save(&session);
+        }
+    }
+
+    /// Open (or focus) a single-instance panel tab in the right-side dock zone.
+    /// The first panel splits a sidebar off the main area; later panels cluster
+    /// into that same node. egui_dock then lets the user drag them in/out and
+    /// resize the split freely.
+    fn open_panel_tab(&mut self, tab: Tab) {
+        let Some(dock) = self.dock.as_mut() else {
+            return;
+        };
+        // Already open? Just focus it (one instance per kind).
+        if let Some(path) =
+            dock.find_tab_from(|t| std::mem::discriminant(t) == std::mem::discriminant(&tab))
+        {
+            let _ = dock.set_active_tab(path);
+            return;
+        }
+        // Cluster beside an existing panel, else carve out the sidebar.
+        if let Some(p) = dock.find_tab_from(is_panel_tab) {
+            dock.set_focused_node_and_surface(NodePath::new(p.surface, p.node));
+            dock.push_to_focused_leaf(tab);
+        } else {
+            dock.main_surface_mut()
+                .split_right(NodeIndex::root(), 0.72, vec![tab]);
         }
     }
 
@@ -419,29 +454,14 @@ impl eframe::App for PuppyApp {
                 dock.push_to_focused_leaf(Tab::Browser(id));
             }
         }
-        if open_mcp && let Some(dock) = self.dock.as_mut() {
-            // One instance: focus the existing tab if it's already open.
-            if let Some(path) = dock.find_tab_from(|t| matches!(t, Tab::McpManager)) {
-                let _ = dock.set_active_tab(path);
-            } else {
-                dock.push_to_focused_leaf(Tab::McpManager);
-            }
+        if open_mcp {
+            self.open_panel_tab(Tab::McpManager);
         }
-        if open_skills && let Some(dock) = self.dock.as_mut() {
-            // One instance: focus the existing tab if it's already open.
-            if let Some(path) = dock.find_tab_from(|t| matches!(t, Tab::SkillsManager)) {
-                let _ = dock.set_active_tab(path);
-            } else {
-                dock.push_to_focused_leaf(Tab::SkillsManager);
-            }
+        if open_skills {
+            self.open_panel_tab(Tab::SkillsManager);
         }
-        if open_agents && let Some(dock) = self.dock.as_mut() {
-            // One instance: focus the existing tab if it's already open.
-            if let Some(path) = dock.find_tab_from(|t| matches!(t, Tab::AgentManager)) {
-                let _ = dock.set_active_tab(path);
-            } else {
-                dock.push_to_focused_leaf(Tab::AgentManager);
-            }
+        if open_agents {
+            self.open_panel_tab(Tab::AgentManager);
         }
         if let Some(t) = pick_theme {
             self.theme = t;
