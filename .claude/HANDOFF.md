@@ -1,8 +1,8 @@
 # Handoff Notes — Device Switch
 
-Date: 2026-06-11 (updated after Phase D: dock zone + layout persistence)
+Date: 2026-06-11 (updated after Phase A inc 1+2: WorkspaceFs/WorkspaceGit traits)
 Branch: feature/browser-plugin
-State: 128 tests green, zero warnings, zero clippy lints, cargo fmt clean
+State: 129 tests green, zero warnings, zero clippy lints, cargo fmt clean
 Coordinator: planning-agent-8a6233 / executor: code-puppy
 Agent session ids used so far: code-puppy increments under session
 "phase-c-mcp-manager"; plan updates under "plan-update-2026-06-11".
@@ -13,6 +13,8 @@ travel across devices.
 Key commits (verified via git log; the commit carrying this updated handoff is
 the new HEAD):
 
+- d994c42 — refactor(workspace): WorkspaceGit trait + LocalGit (Phase A inc 2)
+- 37bd240 — refactor(workspace): WorkspaceFs trait + LocalFs (Phase A inc 1)
 - d812e7a — feat(dock): persist egui_dock split layout across restarts (Phase D)
 - ed15f83 — feat(managers): paste-and-validate mode for Agents, Skills, MCP
 - 3846e7e — feat(dock): open managers in a right-side dock zone (Phase D inc 1)
@@ -130,13 +132,33 @@ formats: agents = full agent JSON (string or {name,..} mcp_servers); skills =
 full SKILL.md (frontmatter + body); mcp = a `{"name": {..}}` entry (unwraps an
 outer `mcpServers` wrapper, infers transport from a `type` field or command/url).
 
-## Next up
+## Phase A — Remote SSH — IN PROGRESS
 
-Phase C (3 managers) and Phase D (dock zone + persistence) are DONE. Next is
-**Phase A — Remote SSH** (run sidecar.py on the remote, tunnel the stdio JSON
-protocol over SSH). Big long pole is the `WorkspaceFs` trait refactor (extract
-local impl first as a pure refactor, then add the remote impl). Then Phase B
-(Puppy Pack). Full details and risks live in .claude/claude_plan.md.
+The pure-refactor half (extract traits with local impls, no behaviour change)
+is DONE:
+- Inc 1 (37bd240): `WorkspaceFs` trait + `LocalFs` in src/workspace/fs.rs.
+  Workspace holds `Arc<dyn WorkspaceFs>`; the editor (open/save/delete/rename/
+  new), the file tree (`render_dir` takes `&dyn WorkspaceFs`), and the
+  AI-wrote-a-file refresh route through it. Host config/state stays on std::fs.
+- Inc 2 (d994c42): `WorkspaceGit` trait + `LocalGit { root }` in src/git.rs
+  (wraps the existing free fns). Workspace holds `Arc<dyn WorkspaceGit>`; ~30
+  call sites in git_view.rs/git_graph_view.rs/mod.rs call `self.git.<op>()`.
+  The async status worker clones the Arc (trait is Send+Sync).
+
+Still TODO for Phase A (the real remote work — needs decisions):
+- Out-of-scope-so-far local fs that a remote workspace will also need: the
+  `.puppy/browser.json` + `.gitignore` breadcrumb writes in view.rs (still
+  std::fs) and git.rs `untracked_content` reads the file via std::fs inside the
+  free fn (LocalGit path) — fine for local, revisit for remote.
+- SSH TRANSPORT DECISION (spike first): system `ssh` (simpler, respects
+  ~/.ssh/config) vs `russh` (programmatic channels/forwarding). Plan leans
+  spike-both; system ssh is the easy start.
+- Then: connection profiles + "Open Remote Folder..." flow; new sidecar
+  protocol ops (fs_list_dir/read/write/stat, git_status/diff/log/...) +
+  RemoteFs/RemoteGit impls; async + caching for fs ops (latency); terminal over
+  SSH PTY; port-forwarding for the in-app browser. See claude_plan.md Phase A.
+
+After Phase A: Phase B (Puppy Pack). Full details/risks in .claude/claude_plan.md.
 
 ## Open items / tech debt (from last increment reports)
 
