@@ -93,7 +93,21 @@ pub(crate) fn render_message(
                 .color(color)
                 .small(),
         );
-        ui.label(&msg.text);
+        // Tool output can be enormous (multi-KB JSON dumps); clamp what we
+        // render so a single message can't wreck layout or framerate.
+        const MAX_CHARS: usize = 4000;
+        if msg.text.len() > MAX_CHARS {
+            let cut: String = msg.text.chars().take(MAX_CHARS).collect();
+            let omitted = msg.text.len().saturating_sub(cut.len());
+            ui.label(cut);
+            ui.label(
+                egui::RichText::new(format!("… (+{omitted} bytes trimmed)"))
+                    .weak()
+                    .small(),
+            );
+        } else {
+            ui.label(&msg.text);
+        }
     });
     ui.add_space(2.0);
 }

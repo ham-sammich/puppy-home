@@ -85,6 +85,11 @@ pub struct Workspace {
     comp_request_id: u64,
     last_query: String,
 
+    // shell-style input history (Up/Down to recall sent messages)
+    input_history: Vec<String>,
+    history_pos: Option<usize>,
+    history_stash: String,
+
     // identity / status
     pub agent: String,
     pub model: String,
@@ -200,6 +205,10 @@ impl Workspace {
             comp_visible: false,
             comp_request_id: 0,
             last_query: String::new(),
+            input_history: Vec::new(),
+            history_pos: None,
+            history_stash: String::new(),
+
             agent: String::new(),
             model: String::new(),
             restore_agent: None,
@@ -466,7 +475,13 @@ impl Workspace {
                 self.set_status(InstanceStatus::Idle);
                 self.transcript.push(Entry::Error(message));
             }
-            UiEvent::Log(line) => self.logs.push(line),
+            UiEvent::Log(line) => {
+                self.logs.push(line);
+                // Keep the diagnostics buffer bounded (oldest dropped).
+                if self.logs.len() > 1200 {
+                    self.logs.drain(..self.logs.len() - 1000);
+                }
+            }
             UiEvent::Status {
                 stats,
                 token_rate,

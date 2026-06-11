@@ -44,12 +44,23 @@ impl Workspace {
         self.begin_turn();
     }
 
+    /// Remember a line sent from the composer for Up/Down recall (skips
+    /// consecutive duplicates, shell-style).
+    fn record_history(&mut self, text: &str) {
+        if self.input_history.last().map(String::as_str) != Some(text) {
+            self.input_history.push(text.to_string());
+        }
+        self.history_pos = None;
+        self.history_stash.clear();
+    }
+
     pub(crate) fn submit(&mut self) {
         let text = self.input.trim().to_string();
         if text.is_empty() || !self.ready || self.running {
             return;
         }
         self.input.clear();
+        self.record_history(&text);
         if text.starts_with('/') {
             self.dispatch_command(&text);
         } else if let Some(backend) = &self.backend {
@@ -78,6 +89,7 @@ impl Workspace {
         if text.is_empty() || !self.running {
             return;
         }
+        self.record_history(&text);
         let mode = if self.steer_queue_mode {
             "queue"
         } else {

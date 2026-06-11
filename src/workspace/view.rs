@@ -344,6 +344,7 @@ impl Workspace {
             egui::Panel::bottom(egui::Id::new(("ws-logs", id)))
                 .resizable(true)
                 .default_size(120.0)
+                .max_size(420.0)
                 .show_inside(ui, |ui| {
                     ui.label(egui::RichText::new("sidecar logs").weak());
                     egui::ScrollArea::vertical()

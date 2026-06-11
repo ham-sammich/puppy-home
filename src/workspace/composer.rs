@@ -98,6 +98,56 @@ impl Workspace {
             self.try_paste_image(ui.ctx());
         }
 
+        // Shell-style history: Up/Down in the (focused) input recalls previously
+        // sent messages for editing/resending. The completion popup gets the
+        // arrows when it's open; a singleline edit has no other use for them.
+        if ui.memory(|m| m.has_focus(input_id))
+            && !self.comp_visible
+            && !self.input_history.is_empty()
+        {
+            let m = egui::Modifiers::NONE;
+            let mut recalled = false;
+            if ui.input_mut(|i| i.consume_key(m, egui::Key::ArrowUp)) {
+                match self.history_pos {
+                    None => {
+                        self.history_stash = self.input.clone();
+                        self.history_pos = Some(self.input_history.len() - 1);
+                    }
+                    Some(0) => {}
+                    Some(p) => self.history_pos = Some(p - 1),
+                }
+                if let Some(p) = self.history_pos {
+                    self.input = self.input_history[p].clone();
+                    recalled = true;
+                }
+            } else if ui.input_mut(|i| i.consume_key(m, egui::Key::ArrowDown))
+                && let Some(p) = self.history_pos
+            {
+                if p + 1 < self.input_history.len() {
+                    self.history_pos = Some(p + 1);
+                    self.input = self.input_history[p + 1].clone();
+                } else {
+                    // Walked past the newest entry: restore the stashed draft.
+                    self.history_pos = None;
+                    self.input = std::mem::take(&mut self.history_stash);
+                }
+                recalled = true;
+            }
+            if recalled {
+                // Park the caret at the end of the recalled line and keep the
+                // completion engine from treating this as fresh typing.
+                if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), input_id) {
+                    let end = egui::text::CCursor::new(self.input.chars().count());
+                    state
+                        .cursor
+                        .set_char_range(Some(egui::text_selection::CCursorRange::one(end)));
+                    state.store(ui.ctx(), input_id);
+                }
+                self.last_query = self.input.clone();
+                self.comp_visible = false;
+            }
+        }
+
         let mut apply = false;
         if self.comp_visible && !self.completions.is_empty() {
             let len = self.completions.len();
