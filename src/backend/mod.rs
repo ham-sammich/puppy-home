@@ -13,15 +13,16 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 mod protocol;
+pub mod remote;
 pub mod ssh;
 
 /// The sidecar source, embedded so the executable is self-contained.
@@ -679,10 +680,19 @@ impl From<Wire> for UiEvent {
     }
 }
 
+/// A freshly spawned remote sidecar: the handle, its event stream, and the
+/// remote filesystem the workspace drives the tree/editor through.
+type RemoteHandle = (
+    CodePuppy,
+    Receiver<UiEvent>,
+    Arc<dyn crate::workspace::fs::WorkspaceFs>,
+);
+
 /// A running Code Puppy sidecar we can drive.
 pub struct CodePuppy {
     child: Child,
-    stdin: Mutex<ChildStdin>,
+    /// Shared so a [`remote::RemoteState`] can also send RPC ops down the pipe.
+    stdin: Arc<Mutex<ChildStdin>>,
     next_id: AtomicU64,
 }
 
@@ -719,15 +729,15 @@ impl CodePuppy {
 
         let (tx, rx) = mpsc::channel::<UiEvent>();
 
-        // stdout -> protocol events
-        spawn_stdout_reader(stdout, tx.clone(), ctx.clone());
+        // stdout -> protocol events (no RPC dispatch for a local sidecar)
+        spawn_stdout_reader(stdout, tx.clone(), ctx.clone(), None);
         // stderr -> log events
         spawn_stderr_reader(stderr, tx.clone(), ctx.clone());
 
         Ok((
             CodePuppy {
                 child,
-                stdin: Mutex::new(stdin),
+                stdin: Arc::new(Mutex::new(stdin)),
                 next_id: AtomicU64::new(1),
             },
             rx,
@@ -742,7 +752,7 @@ impl CodePuppy {
         ctx: egui::Context,
         target: &ssh::SshTarget,
         remote_cwd: Option<&str>,
-    ) -> Result<(Self, Receiver<UiEvent>), String> {
+    ) -> Result<RemoteHandle, String> {
         // 1. Provision: ship sidecar.py to the remote cache (bytes on stdin).
         let mut prov = target.provision_command();
         crate::proc::hide_console(&mut prov);
@@ -787,17 +797,26 @@ impl CodePuppy {
         let stdout = child.stdout.take().ok_or("no stdout pipe")?;
         let stderr = child.stderr.take().ok_or("no stderr pipe")?;
 
+        // Share the stdin so the remote fs can send RPC ops down the same pipe.
+        let stdin = Arc::new(Mutex::new(stdin));
+        let remote = remote::RemoteState::new(stdin.clone(), ctx.clone());
+        let remote_fs: Arc<dyn crate::workspace::fs::WorkspaceFs> =
+            Arc::new(remote::RemoteFs::new(remote.clone()));
+
         let (tx, rx) = mpsc::channel::<UiEvent>();
-        spawn_stdout_reader(stdout, tx.clone(), ctx.clone());
+        // The stdout reader routes `fs_result` lines to `remote` (off the UI
+        // thread, so a blocking remote read can't deadlock), the rest to `tx`.
+        spawn_stdout_reader(stdout, tx.clone(), ctx.clone(), Some(remote));
         spawn_stderr_reader(stderr, tx.clone(), ctx.clone());
 
         Ok((
             CodePuppy {
                 child,
-                stdin: Mutex::new(stdin),
+                stdin,
                 next_id: AtomicU64::new(1),
             },
             rx,
+            remote_fs,
         ))
     }
 
@@ -995,7 +1014,12 @@ impl Drop for CodePuppy {
     }
 }
 
-fn spawn_stdout_reader(stdout: std::process::ChildStdout, tx: Sender<UiEvent>, ctx: egui::Context) {
+fn spawn_stdout_reader(
+    stdout: std::process::ChildStdout,
+    tx: Sender<UiEvent>,
+    ctx: egui::Context,
+    rpc: Option<Arc<remote::RemoteState>>,
+) {
     std::thread::Builder::new()
         .name("cp-stdout".into())
         .spawn(move || {
@@ -1005,9 +1029,28 @@ fn spawn_stdout_reader(stdout: std::process::ChildStdout, tx: Sender<UiEvent>, c
                 if line.trim().is_empty() {
                     continue;
                 }
-                let event = match serde_json::from_str::<Wire>(&line) {
-                    Ok(wire) => UiEvent::from(wire),
-                    Err(e) => UiEvent::Log(format!("[unparsed] {e}: {line}")),
+                // For a remote sidecar, intercept `fs_result` RPC replies and
+                // hand them to the remote-fs state instead of the event stream.
+                let event = if let Some(rpc) = &rpc {
+                    match serde_json::from_str::<Value>(&line) {
+                        Ok(val) => {
+                            if val.get("event").and_then(|e| e.as_str()) == Some("fs_result") {
+                                rpc.handle_result(&val);
+                                ctx.request_repaint();
+                                continue;
+                            }
+                            match serde_json::from_value::<Wire>(val) {
+                                Ok(wire) => UiEvent::from(wire),
+                                Err(e) => UiEvent::Log(format!("[unparsed] {e}: {line}")),
+                            }
+                        }
+                        Err(e) => UiEvent::Log(format!("[unparsed] {e}: {line}")),
+                    }
+                } else {
+                    match serde_json::from_str::<Wire>(&line) {
+                        Ok(wire) => UiEvent::from(wire),
+                        Err(e) => UiEvent::Log(format!("[unparsed] {e}: {line}")),
+                    }
                 };
                 if tx.send(event).is_err() {
                     break;

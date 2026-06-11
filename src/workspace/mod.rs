@@ -25,7 +25,7 @@ mod composer;
 mod diff;
 mod editor;
 mod events;
-mod fs;
+pub(crate) mod fs;
 mod git_graph;
 mod git_graph_view;
 mod git_view;
@@ -215,6 +215,7 @@ impl Workspace {
         id: WorkspaceId,
         root: PathBuf,
         remote_label: Option<String>,
+        fs: Arc<dyn fs::WorkspaceFs>,
         backend: CodePuppy,
         rx: Receiver<UiEvent>,
     ) -> Self {
@@ -299,7 +300,7 @@ impl Workspace {
             current_diff: None,
             git_repo: is_git_repo,
             git,
-            fs: Arc::new(fs::LocalFs),
+            fs,
             remote_label,
             git_changes: Vec::new(),
             git_rx: None,

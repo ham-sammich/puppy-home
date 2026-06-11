@@ -30,7 +30,9 @@ Protocol (newline-delimited JSON, UTF-8):
     {"op": "set_skill_enabled", "name": "...", "enabled": true}
     {"op": "save_skill", "name": "...", "description": "...", "content": "...",
         "scope": "user"|"project"}                   # create/overwrite SKILL.md
-    {"op": "shutdown"}
+    {"op": "fs_list_dir", "id": <int>, "path": "..."}  # -> fs_result (remote file tree)
+{"op": "fs_read_file", "id": <int>, "path": "..."} # -> fs_result (remote editor)
+{"op": "shutdown"}
 
   sidecar -> Rust (stdout), one object per line:
     {"event": "ready",    "agent": "...", "model": "...", "cp_version": "...", "cwd": "..."}
@@ -1563,6 +1565,39 @@ class Bridge:
         if self.current_run is not None and not self.current_run.done():
             self.current_run.cancel()
 
+    # --- remote filesystem (for SSH-hosted workspaces) ---------------------
+    # These let the GUI browse + read files where the sidecar runs. They are
+    # synchronous and run on the stdin-reader thread; `send` is lock-guarded.
+    def fs_list_dir(self, cmd: dict) -> None:
+        rid = cmd.get("id")
+        path = cmd.get("path", "")
+        try:
+            entries = []
+            with os.scandir(path) as it:
+                for e in it:
+                    try:
+                        is_dir = e.is_dir()
+                    except OSError:
+                        is_dir = False
+                    entries.append({"name": e.name, "is_dir": is_dir})
+            send({"event": "fs_result", "id": rid, "op": "list_dir",
+                  "ok": True, "entries": entries})
+        except Exception as exc:
+            send({"event": "fs_result", "id": rid, "op": "list_dir",
+                  "ok": False, "error": str(exc)})
+
+    def fs_read_file(self, cmd: dict) -> None:
+        rid = cmd.get("id")
+        path = cmd.get("path", "")
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            send({"event": "fs_result", "id": rid, "op": "read_file",
+                  "ok": True, "content": content})
+        except Exception as exc:
+            send({"event": "fs_result", "id": rid, "op": "read_file",
+                  "ok": False, "error": str(exc)})
+
     def handle_command(self, cmd: dict) -> None:
         op = cmd.get("op")
         if op == "prompt":
@@ -1665,6 +1700,10 @@ class Bridge:
             self.delete_agent_config(cmd.get("name", ""))
         elif op == "clone_agent_config":
             self.clone_agent_config(cmd.get("name", ""))
+        elif op == "fs_list_dir":
+            self.fs_list_dir(cmd)
+        elif op == "fs_read_file":
+            self.fs_read_file(cmd)
         elif op == "shutdown":
             self._stop.set()
             self.loop.call_soon_threadsafe(self.loop.stop)

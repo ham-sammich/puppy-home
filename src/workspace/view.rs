@@ -207,41 +207,41 @@ impl Workspace {
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(format!("🗂 {}", self.name)).strong());
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .small_button("+ Folder")
-                                .on_hover_text("New folder in the project root")
-                                .clicked()
-                            {
-                                acts.new_in = Some((self.root.clone(), true));
-                            }
-                            if ui
-                                .small_button("+ File")
-                                .on_hover_text("New file in the project root")
-                                .clicked()
-                            {
-                                acts.new_in = Some((self.root.clone(), false));
-                            }
-                        });
+                        // Creating files/folders isn't supported on remote yet.
+                        if self.remote_label.is_none() {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui
+                                        .small_button("+ Folder")
+                                        .on_hover_text("New folder in the project root")
+                                        .clicked()
+                                    {
+                                        acts.new_in = Some((self.root.clone(), true));
+                                    }
+                                    if ui
+                                        .small_button("+ File")
+                                        .on_hover_text("New file in the project root")
+                                        .clicked()
+                                    {
+                                        acts.new_in = Some((self.root.clone(), false));
+                                    }
+                                },
+                            );
+                        }
                     });
-                    ui.separator();
                     if let Some(label) = &self.remote_label {
-                        // Remote workspace: the sidecar (chat) runs on `label`, but
-                        // the tree/git are still local-only until the remote fs/git
-                        // impls land. Be honest rather than show an empty tree.
-                        ui.add_space(8.0);
-                        ui.weak(format!("\u{1f517} Connected to {label}"));
-                        ui.add_space(4.0);
-                        ui.label("Chat runs on the remote host.");
-                        ui.weak("Remote file browsing & git are coming next.");
-                    } else {
-                        egui::ScrollArea::vertical()
-                            .auto_shrink([false, false])
-                            .id_salt(("tree-scroll", id))
-                            .show(ui, |ui| {
-                                render_dir(ui, &*self.fs, &self.root, &markers, &mut acts);
-                            });
+                        // Remote workspace: tree + editor read over SSH (read-only
+                        // for now -- git + editing land next).
+                        ui.weak(format!("\u{1f517} {label} \u{00b7} read-only"));
                     }
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .id_salt(("tree-scroll", id))
+                        .show(ui, |ui| {
+                            render_dir(ui, &*self.fs, &self.root, &markers, &mut acts);
+                        });
                 });
 
             if do_refresh {
