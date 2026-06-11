@@ -112,6 +112,36 @@ pub(crate) struct PendingNew {
     pub(crate) focus: bool,
 }
 
+/// Which authenticated network op a [`GitCredsPrompt`] will retry.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GitAuthOp {
+    Fetch,
+    Pull,
+    Push,
+}
+
+impl GitAuthOp {
+    pub(crate) fn verb(self) -> &'static str {
+        match self {
+            GitAuthOp::Fetch => "Fetch",
+            GitAuthOp::Pull => "Pull",
+            GitAuthOp::Push => "Push",
+        }
+    }
+}
+
+/// A "the remote wants a username/password" modal: collects HTTPS credentials
+/// and retries the op that triggered it. Nothing here is persisted.
+pub(crate) struct GitCredsPrompt {
+    pub(crate) op: GitAuthOp,
+    pub(crate) username: String,
+    pub(crate) password: String,
+    /// Error from a failed retry (e.g. wrong password), shown in the modal.
+    pub(crate) error: Option<String>,
+    /// One-shot: focus the username field the first frame the modal shows.
+    pub(crate) focus: bool,
+}
+
 /// Where the editor area (files / git / browser) sits relative to the chat.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum EditorSide {

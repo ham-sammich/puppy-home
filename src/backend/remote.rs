@@ -372,15 +372,25 @@ pub struct RemoteRunner {
 }
 
 impl RemoteRunner {
-    fn call_git(&self, args: &[&str]) -> Result<Value, String> {
-        self.state
-            .call("git_run", json!({ "root": self.root, "args": args }))
+    fn call_git(&self, args: &[&str], env: &[(&str, &str)]) -> Result<Value, String> {
+        let env_map: Map<String, Value> = env
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), json!(v)))
+            .collect();
+        self.state.call(
+            "git_run",
+            json!({ "root": self.root, "args": args, "env": Value::Object(env_map) }),
+        )
     }
 }
 
 impl crate::git::GitRunner for RemoteRunner {
     fn run(&self, args: &[&str]) -> Result<String, String> {
-        let reply = self.call_git(args)?;
+        self.run_env(args, &[])
+    }
+
+    fn run_env(&self, args: &[&str], env: &[(&str, &str)]) -> Result<String, String> {
+        let reply = self.call_git(args, env)?;
         let ok = reply.get("ok").and_then(Value::as_bool).unwrap_or(false);
         if ok {
             Ok(reply
@@ -400,7 +410,7 @@ impl crate::git::GitRunner for RemoteRunner {
     }
 
     fn output(&self, args: &[&str]) -> String {
-        self.call_git(args)
+        self.call_git(args, &[])
             .ok()
             .and_then(|r| r.get("stdout").and_then(Value::as_str).map(str::to_string))
             .unwrap_or_default()

@@ -7,7 +7,9 @@
 //! the sidecar. Both reuse the same porcelain parsing, so behaviour matches.
 
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+
+mod runner;
+pub(crate) use runner::{GitRunner, LocalRunner};
 
 /// A working-tree change for one path.
 #[derive(Clone)]
@@ -16,69 +18,6 @@ pub struct GitChange {
     pub path: String,
     /// 'A' added/new, 'M' modified, 'D' deleted, 'R' renamed, '?' untracked.
     pub marker: char,
-}
-
-// ---------------------------------------------------------------------------
-// Runner abstraction: how git is actually executed (local shell vs remote RPC).
-// ---------------------------------------------------------------------------
-
-/// Executes `git` for one repo. The free functions parse what it returns.
-pub(crate) trait GitRunner {
-    /// Run `git <args>`; stdout on success, a trimmed error on failure.
-    fn run(&self, args: &[&str]) -> Result<String, String>;
-    /// Run `git <args>`; stdout regardless of exit status (empty on failure).
-    fn output(&self, args: &[&str]) -> String;
-    /// Read a working-tree file by repo-relative path (for untracked diffs).
-    fn read_workfile(&self, rel: &str) -> Option<String>;
-}
-
-/// Runs git on the local machine via `git -C <root>`.
-pub(crate) struct LocalRunner {
-    root: PathBuf,
-}
-
-impl LocalRunner {
-    pub(crate) fn new(root: PathBuf) -> Self {
-        LocalRunner { root }
-    }
-
-    fn git(&self) -> Command {
-        let mut c = Command::new("git");
-        crate::proc::hide_console(&mut c);
-        c.arg("-C").arg(&self.root);
-        c
-    }
-}
-
-impl GitRunner for LocalRunner {
-    fn run(&self, args: &[&str]) -> Result<String, String> {
-        match self.git().args(args).stdin(Stdio::null()).output() {
-            Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).into_owned()),
-            Ok(o) => {
-                let err = String::from_utf8_lossy(&o.stderr);
-                let err = err.trim();
-                Err(if err.is_empty() {
-                    format!("git {} failed", args.first().copied().unwrap_or(""))
-                } else {
-                    err.to_string()
-                })
-            }
-            Err(e) => Err(e.to_string()),
-        }
-    }
-
-    fn output(&self, args: &[&str]) -> String {
-        self.git()
-            .args(args)
-            .stdin(Stdio::null())
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-            .unwrap_or_default()
-    }
-
-    fn read_workfile(&self, rel: &str) -> Option<String> {
-        std::fs::read_to_string(self.root.join(rel)).ok()
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -413,6 +352,59 @@ pub fn push(r: &dyn GitRunner) -> Result<String, String> {
     r.run(&["push"]).map(|s| s.trim().to_string())
 }
 
+// ---------------------------------------------------------------------------
+// Authenticated network ops: HTTPS remotes that want a username/password (or
+// PAT). When a plain push/pull/fetch fails for auth, the GUI collects creds and
+// retries via these, which feed them to git through a one-shot credential
+// helper reading `$GIT_USER`/`$GIT_PASS` from the env -- nothing is persisted,
+// and the password never appears in argv/`ps`.
+// ---------------------------------------------------------------------------
+
+/// Does a git error indicate it needs an HTTPS username/password? (Distinct
+/// from an SSH key problem like "Permission denied (publickey)".)
+pub fn is_auth_error(msg: &str) -> bool {
+    let m = msg.to_ascii_lowercase();
+    m.contains("could not read username")
+        || m.contains("could not read password")
+        || m.contains("authentication failed")
+        || m.contains("terminal prompts disabled")
+        || m.contains("invalid username or password")
+}
+
+/// A `credential.helper` that echoes `$GIT_USER`/`$GIT_PASS` on a `get`.
+const CRED_HELPER: &str = "credential.helper=!f() { test \"$1\" = get && \
+printf 'username=%s\\npassword=%s\\n' \"$GIT_USER\" \"$GIT_PASS\"; }; f";
+
+/// Run a network subcommand with credentials injected via the helper + env.
+/// The leading empty `credential.helper=` clears any system helpers first, so
+/// ours is the only one consulted.
+fn run_with_creds(
+    r: &dyn GitRunner,
+    subcmd: &[&str],
+    user: &str,
+    pass: &str,
+) -> Result<String, String> {
+    let mut args: Vec<&str> = vec!["-c", "credential.helper=", "-c", CRED_HELPER];
+    args.extend_from_slice(subcmd);
+    r.run_env(&args, &[("GIT_USER", user), ("GIT_PASS", pass)])
+        .map(|s| s.trim().to_string())
+}
+
+/// Push with explicit credentials.
+pub fn push_auth(r: &dyn GitRunner, user: &str, pass: &str) -> Result<String, String> {
+    run_with_creds(r, &["push"], user, pass)
+}
+
+/// Pull (fast-forward only) with explicit credentials.
+pub fn pull_auth(r: &dyn GitRunner, user: &str, pass: &str) -> Result<String, String> {
+    run_with_creds(r, &["pull", "--ff-only"], user, pass)
+}
+
+/// Fetch all remotes with explicit credentials.
+pub fn fetch_auth(r: &dyn GitRunner, user: &str, pass: &str) -> Result<String, String> {
+    run_with_creds(r, &["fetch", "--all", "--prune"], user, pass)
+}
+
 /// One blamed line: the commit that last touched it + the content.
 pub struct BlameLine {
     pub short: String,
@@ -486,6 +478,10 @@ pub trait WorkspaceGit: Send + Sync {
     fn fetch(&self) -> Result<String, String>;
     fn pull(&self) -> Result<String, String>;
     fn push(&self) -> Result<String, String>;
+    /// Retry fetch/pull/push with an explicit HTTPS username + password/token.
+    fn fetch_auth(&self, user: &str, pass: &str) -> Result<String, String>;
+    fn pull_auth(&self, user: &str, pass: &str) -> Result<String, String>;
+    fn push_auth(&self, user: &str, pass: &str) -> Result<String, String>;
     fn blame(&self, path: &str) -> Vec<BlameLine>;
 }
 
@@ -520,6 +516,9 @@ macro_rules! impl_workspace_git {
             fn fetch(&self) -> Result<String, String> { $crate::git::fetch(&self.runner) }
             fn pull(&self) -> Result<String, String> { $crate::git::pull(&self.runner) }
             fn push(&self) -> Result<String, String> { $crate::git::push(&self.runner) }
+            fn fetch_auth(&self, user: &str, pass: &str) -> Result<String, String> { $crate::git::fetch_auth(&self.runner, user, pass) }
+            fn pull_auth(&self, user: &str, pass: &str) -> Result<String, String> { $crate::git::pull_auth(&self.runner, user, pass) }
+            fn push_auth(&self, user: &str, pass: &str) -> Result<String, String> { $crate::git::push_auth(&self.runner, user, pass) }
             fn blame(&self, path: &str) -> Vec<$crate::git::BlameLine> { $crate::git::blame(&self.runner, path) }
         }
     };

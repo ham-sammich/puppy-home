@@ -26,6 +26,7 @@ mod diff;
 mod editor;
 mod events;
 pub(crate) mod fs;
+mod git_creds;
 mod git_graph;
 mod git_graph_view;
 mod git_view;
@@ -201,6 +202,8 @@ pub struct Workspace {
     git_branch_dialog: Option<git_graph::BranchDialog>,
     commit_msg: String,
     git_action_msg: Option<(bool, String)>,
+    /// Active credentials modal when a remote push/pull/fetch needs HTTPS auth.
+    git_creds: Option<crate::workspace::state::GitCredsPrompt>,
     commit_view: Option<(String, DiffRecord)>,
     blame_cache: HashMap<PathBuf, Vec<crate::git::BlameLine>>,
     /// Files currently showing the inline blame gutter (toggled per file).
@@ -321,6 +324,7 @@ impl Workspace {
             git_branch_dialog: None,
             commit_msg: String::new(),
             git_action_msg: None,
+            git_creds: None,
             commit_view: None,
             blame_cache: HashMap::new(),
             blame_files: std::collections::HashSet::new(),

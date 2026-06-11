@@ -11,7 +11,7 @@ use super::Workspace;
 use super::diff::{
     DiffLine, DiffRecord, file_name, marker_color, op_marker, parse_unified, render_diff_lines,
 };
-use super::state::{EditorItem, GitView};
+use super::state::{EditorItem, GitAuthOp, GitView};
 
 impl Workspace {
     /// Map each changed file (absolute path) to its change marker, for inline
@@ -460,7 +460,7 @@ impl Workspace {
                         "Fetched from remotes"
                     },
                 ),
-                Err(e) => self.git_action(Err(e), ""),
+                Err(e) => self.git_net_error(e, GitAuthOp::Fetch),
             }
         }
         if do_pull {
@@ -469,13 +469,13 @@ impl Workspace {
                     let line = s.lines().last().unwrap_or("Pulled").to_string();
                     self.git_action(Ok(()), &format!("Pulled · {line}"));
                 }
-                Err(e) => self.git_action(Err(e), ""),
+                Err(e) => self.git_net_error(e, GitAuthOp::Pull),
             }
         }
         if do_push {
             match self.git.push() {
                 Ok(_) => self.git_action(Ok(()), "Pushed to upstream"),
-                Err(e) => self.git_action(Err(e), ""),
+                Err(e) => self.git_net_error(e, GitAuthOp::Push),
             }
         }
         if let Some(p) = stage_path {

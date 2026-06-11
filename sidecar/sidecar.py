@@ -1660,10 +1660,15 @@ class Bridge:
         rid = cmd.get("id")
         root = cmd.get("root", "")
         args = [str(a) for a in (cmd.get("args") or [])]
+        # Never block on a tty prompt; merge any caller-supplied env (creds).
+        env = os.environ.copy()
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        for k, v in (cmd.get("env") or {}).items():
+            env[str(k)] = str(v)
         try:
             proc = subprocess.run(
                 ["git", "-C", root, *args],
-                capture_output=True, text=True, errors="replace")
+                capture_output=True, text=True, errors="replace", env=env)
             send({"event": "git_result", "id": rid, "ok": proc.returncode == 0,
                   "code": proc.returncode, "stdout": proc.stdout,
                   "stderr": proc.stderr})

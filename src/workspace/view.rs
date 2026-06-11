@@ -312,6 +312,9 @@ impl Workspace {
         if self.pending_new.is_some() {
             self.render_new_modal(ui.ctx());
         }
+        if self.git_creds.is_some() {
+            self.render_git_creds_modal(ui.ctx());
+        }
         if self.pending_ask.is_some() {
             self.render_ask_modal(ui.ctx());
         }
