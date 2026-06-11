@@ -1,8 +1,8 @@
 # Handoff Notes — Device Switch
 
-Date: 2026-06-11 (updated after Phase A inc 1+2: WorkspaceFs/WorkspaceGit traits)
+Date: 2026-06-11 (updated after Phase A inc 3: system-ssh transport spike)
 Branch: feature/browser-plugin
-State: 129 tests green, zero warnings, zero clippy lints, cargo fmt clean
+State: 138 tests green, zero warnings, zero clippy lints, cargo fmt clean
 Coordinator: planning-agent-8a6233 / executor: code-puppy
 Agent session ids used so far: code-puppy increments under session
 "phase-c-mcp-manager"; plan updates under "plan-update-2026-06-11".
@@ -145,14 +145,33 @@ is DONE:
   call sites in git_view.rs/git_graph_view.rs/mod.rs call `self.git.<op>()`.
   The async status worker clones the Arc (trait is Send+Sync).
 
-Still TODO for Phase A (the real remote work — needs decisions):
+- Cleanup (f570924): split editor.rs + mod.rs back under the 600-line budget.
+  New tree_ops.rs (file-tree create/rename/delete + modals) and events.rs
+  (UiEvent/BackendMessage folding: apply_event/on_message/set_status/etc).
+- Inc 3 (f4a5207): system-`ssh` transport spike. New src/backend/ssh.rs --
+  SshTarget{host,user,port,identity} + parse([user@]host[:port]), base_ssh()
+  (flags: -T, BatchMode=yes, ConnectTimeout=10, StrictHostKeyChecking=accept-new),
+  provision_command(), launch_command(cwd,launcher), sh_quote(); 9 offline unit
+  tests. CodePuppy::spawn_remote() (backend/mod.rs) provisions sidecar.py over
+  ssh ('mkdir -p ... && cat > ...', bytes on stdin) then launches it; stdio
+  carries the same JSON protocol. #[allow(dead_code)] until inc 4 wires it.
+  NOT live-validated (ssh localhost refused on this Mac -- Remote Login off).
+  Override remote launcher via PUPPY_HOME_REMOTE_CP_CMD.
+
+Still TODO for Phase A (the real remote work -- needs decisions):
+- Inc 4 NEXT: connection profiles + "Open Remote Folder..." flow that builds an
+  SshTarget and calls spawn_remote. Then wire RemoteFs/RemoteGit (the traits
+  from inc 1+2) to new sidecar protocol ops (fs_list_dir/read/write/stat,
+  git_status/diff/log/...) so the tree/editor/git work against the remote.
+- Live-validate spawn_remote against a real host (or enable Remote Login for
+  `ssh localhost`). backend/mod.rs is ~1370 lines (pre-existing, over budget)
+  -- candidate for its own split later.
 - Out-of-scope-so-far local fs that a remote workspace will also need: the
   `.puppy/browser.json` + `.gitignore` breadcrumb writes in view.rs (still
   std::fs) and git.rs `untracked_content` reads the file via std::fs inside the
   free fn (LocalGit path) — fine for local, revisit for remote.
-- SSH TRANSPORT DECISION (spike first): system `ssh` (simpler, respects
-  ~/.ssh/config) vs `russh` (programmatic channels/forwarding). Plan leans
-  spike-both; system ssh is the easy start.
+- SSH TRANSPORT DECISION: RESOLVED -> system `ssh` (see inc 3 above). Revisit
+  `russh` only if we later need programmatic port-forwarding the binary can't do.
 - Then: connection profiles + "Open Remote Folder..." flow; new sidecar
   protocol ops (fs_list_dir/read/write/stat, git_status/diff/log/...) +
   RemoteFs/RemoteGit impls; async + caching for fs ops (latency); terminal over
