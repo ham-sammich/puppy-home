@@ -25,6 +25,7 @@ impl BrowserHost {
     /// `cdp_port` is set, the page exposes a CDP remote-debugging endpoint there.
     pub fn spawn(exe: &Path, initial_url: &str, cdp_port: Option<u16>) -> std::io::Result<Self> {
         let mut cmd = Command::new(exe);
+        crate::proc::hide_console(&mut cmd);
         cmd.arg(initial_url);
         if let Some(port) = cdp_port {
             cmd.arg(port.to_string());

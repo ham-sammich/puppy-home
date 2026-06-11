@@ -10,6 +10,9 @@
 //!
 //! Keeping the webview in this separate process means a browser crash can't take
 //! the host IDE down with it, and the host stays free of heavy webview deps.
+//!
+//! Release builds are a GUI app (no console window of their own).
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::io::BufRead;
 

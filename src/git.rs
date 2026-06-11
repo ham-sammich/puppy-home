@@ -17,6 +17,7 @@ pub struct GitChange {
 
 fn git(root: &Path) -> Command {
     let mut c = Command::new("git");
+    crate::proc::hide_console(&mut c);
     c.arg("-C").arg(root);
     c
 }

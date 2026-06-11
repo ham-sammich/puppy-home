@@ -14,6 +14,7 @@ mod fonts;
 mod git;
 mod perf;
 mod plugin;
+mod proc;
 mod session;
 mod shell;
 mod supervisor;

@@ -462,6 +462,7 @@ impl CodePuppy {
         let sidecar_path = write_sidecar().map_err(|e| format!("writing sidecar: {e}"))?;
 
         let mut command = resolve_launch(&sidecar_path)?;
+        crate::proc::hide_console(&mut command);
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -731,8 +732,9 @@ fn resolve_launch(sidecar: &std::path::Path) -> Result<Command, String> {
 
 /// Does `<python> -c "import code_puppy"` succeed?
 fn can_import_code_puppy(python: &str) -> bool {
-    Command::new(python)
-        .args(["-c", "import code_puppy"])
+    let mut cmd = Command::new(python);
+    crate::proc::hide_console(&mut cmd);
+    cmd.args(["-c", "import code_puppy"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -743,8 +745,9 @@ fn can_import_code_puppy(python: &str) -> bool {
 
 /// Is a program resolvable on PATH (does `<prog> --version` run)?
 fn program_exists(prog: &str) -> bool {
-    Command::new(prog)
-        .arg("--version")
+    let mut cmd = Command::new(prog);
+    crate::proc::hide_console(&mut cmd);
+    cmd.arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
