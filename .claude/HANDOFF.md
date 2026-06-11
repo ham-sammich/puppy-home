@@ -1,6 +1,6 @@
 # Handoff Notes — Device Switch
 
-Date: 2026-06-11 (updated after Phase A inc 5a: read-only remote tree + editor)
+Date: 2026-06-11 (Phase A remote SSH FEATURE-COMPLETE: chat+fs+editor+git)
 Branch: feature/browser-plugin
 State: 140 tests green, zero warnings, zero clippy lints, cargo fmt clean
 Coordinator: planning-agent-8a6233 / executor: code-puppy
@@ -179,19 +179,36 @@ is DONE:
   injectable fs; Supervisor::adopt threads it. Mutations return 'not supported
   yet'; tree hides +File/+Folder and shows 'user@host - read-only'.
 
-Still TODO for Phase A:
-- Inc 5b: remote EDITING (fs_write_file/mkdir/create/remove/rename ops +
-  un-stub RemoteFs mutations, blocking-with-timeout like read_file; re-enable
-  the tree create/delete/rename for remote). Watch cache invalidation on write.
-- Inc 5c: RemoteGit -- either git ops via the sidecar (git_status/diff/log/...
-  run git on the remote, return parsed/raw output) wired to a RemoteGit impl of
-  the WorkspaceGit trait, installed on remote workspaces. Drop the read-only
-  hint once editing+git work.
-- Live-validate the full Rust<->SSH round trip against a real host (ssh localhost
-  is refused here -- Remote Login off). The PYTHON fs ops ARE validated locally.
+- Inc 5b (c61f54c): remote EDITING -- fs_stat/write/mkdir/create/remove/rename
+  ops; RemoteFs implements every WorkspaceFs method. Generalised RPC core:
+  call()/call_unit() block on a one-shot reply Value (20s); listings+stats
+  async-cached; mutations invalidate parent listings. Validated live
+  (mkdir->write->read->rename->list->remove round trip).
+- Inc 5c (8c6f292): git over SSH -- RemoteGit. git.rs refactored to a GitRunner
+  abstraction so PARSING is shared; LocalRunner shells out, RemoteRunner runs
+  'git_run' over the RPC channel; the 24-method WorkspaceGit impl is one
+  impl_workspace_git! macro reused by both. sidecar git_run validated live
+  (is-inside-work-tree, status --porcelain). Workspace::new now takes injectable
+  fs+git; Supervisor::adopt threads both; reader demuxes fs_result+git_result.
+
+>>> Phase A (Remote SSH) is FEATURE-COMPLETE: a remote workspace's chat, file
+    tree, editor (read+write), and full git all work on an SSH host, all over
+    the sidecar's single stdio channel. <<<
+
+Remaining / next:
+- LIVE-VALIDATE the full Rust<->SSH round trip against a real reachable host
+  (ssh localhost is off here -- Remote Login disabled). EVERY sidecar op (fs +
+  git) is validated locally by piping JSON to a local sidecar; the Rust RPC
+  layer compiles + is logically sound but hasn't driven a real remote sidecar.
+  First thing to do once a host exists: open the Connect dialog, point it at the
+  host + a repo path, confirm tree/editor/git light up.
+- Polish ideas: cache TTL/manual refresh for the remote tree; ControlMaster is
+  NOT used (we ride the sidecar pipe, so it's unnecessary); surface remote op
+  errors more visibly; consider a remote-git status poll interval.
+- After Phase A: Phase B (Puppy Pack).
 - Pre-existing over-budget files (NOT from this session; split later):
   src/workspace/view.rs (730, was 719 at session start) and
-  src/backend/mod.rs (~1410). Everything created this session is < 600.
+  src/backend/mod.rs (~1450). Everything created this session is < 600.
 - Out-of-scope-so-far local fs that a remote workspace will also need: the
   `.puppy/browser.json` + `.gitignore` breadcrumb writes in view.rs (still
   std::fs) and git.rs `untracked_content` reads the file via std::fs inside the
