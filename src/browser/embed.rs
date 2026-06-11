@@ -4,9 +4,6 @@
 //! Only Windows is wired today (via the `windows` crate). Other platforms get
 //! no-op stubs, so the browser simply stays in its own window there.
 
-/// Whether native embedding is supported on this platform.
-pub const SUPPORTED: bool = cfg!(windows);
-
 #[cfg(windows)]
 mod imp {
     use windows::Win32::Foundation::{BOOL, HWND};
@@ -82,7 +79,11 @@ mod imp {
     }
 }
 
+// Non-Windows: the browser is embedded via a borderless overlay window driven
+// over IPC (see `host.rs`/`mod.rs`), so these reparenting hooks are no-ops.
+// `focus_host` is still called (to no effect); the rest are unused here.
 #[cfg(not(windows))]
+#[allow(dead_code)]
 mod imp {
     pub fn reparent(_parent: i64, _child: i64) {}
     pub fn place(_child: i64, _x: i32, _y: i32, _w: i32, _h: i32) {}
@@ -91,4 +92,7 @@ mod imp {
     pub fn focus_host(_parent: i64, _child: i64) {}
 }
 
+// On non-Windows only `focus_host` is used (as a no-op); the rest are part of
+// the uniform embed API but unused there.
+#[allow(unused_imports)]
 pub use imp::{focus_host, hide, place, reparent, show};

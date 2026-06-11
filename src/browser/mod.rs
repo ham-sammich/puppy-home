@@ -55,7 +55,9 @@ struct BrowserTab {
     url: String,
     host: Option<BrowserHost>,
     launch_error: Option<String>,
-    /// Whether the plugin window has been reparented into our window yet.
+    /// Whether the plugin window has been reparented into our window yet
+    /// (Windows true-child embedding; unused on the macOS overlay path).
+    #[cfg_attr(not(windows), allow(dead_code))]
     embedded: bool,
     /// The workspace this browser tab belongs to (if opened from one).
     workspace: Option<WorkspaceId>,
@@ -157,8 +159,13 @@ impl BrowserManager {
             if self.placed.contains(id) || !tab.visible {
                 continue;
             }
+            #[cfg(windows)]
             if let Some(h) = tab.host.as_ref().and_then(|h| h.child_hwnd()) {
                 embed::hide(h);
+            }
+            #[cfg(target_os = "macos")]
+            if let Some(h) = tab.host.as_mut() {
+                h.hide();
             }
             tab.visible = false;
             // Force a reposition next time it's shown (layout may have changed).
@@ -461,40 +468,83 @@ impl BrowserManager {
             return;
         }
 
-        // The viewport region below the toolbar: the plugin window is placed here.
+        // The viewport region below the toolbar is where the plugin window goes.
         let rect = ui.available_rect_before_wrap();
-        let child = tab.host.as_ref().and_then(|h| h.child_hwnd());
-        match (embed::SUPPORTED, parent, child) {
-            (true, Some(parent), Some(child)) => {
-                if !tab.embedded {
-                    embed::reparent(parent, child);
-                    tab.embedded = true;
-                }
-                let ppp = ui.ctx().pixels_per_point();
-                let x = (rect.min.x * ppp).round() as i32;
-                let y = (rect.min.y * ppp).round() as i32;
-                let w = (rect.width() * ppp).round() as i32;
-                let h = (rect.height() * ppp).round() as i32;
-                if w > 0 && h > 0 {
-                    let r = (x, y, w, h);
-                    // Only move the native window when the rect actually changed.
-                    if tab.placed_rect != Some(r) {
-                        embed::place(child, x, y, w, h);
-                        tab.placed_rect = Some(r);
+
+        // Windows: reparent the plugin's window as a true child of the host.
+        #[cfg(windows)]
+        {
+            let child = tab.host.as_ref().and_then(|h| h.child_hwnd());
+            match (parent, child) {
+                (Some(parent), Some(child)) => {
+                    if !tab.embedded {
+                        embed::reparent(parent, child);
+                        tab.embedded = true;
                     }
-                    if !tab.visible {
-                        embed::show(child);
-                        tab.visible = true;
+                    let ppp = ui.ctx().pixels_per_point();
+                    let x = (rect.min.x * ppp).round() as i32;
+                    let y = (rect.min.y * ppp).round() as i32;
+                    let w = (rect.width() * ppp).round() as i32;
+                    let h = (rect.height() * ppp).round() as i32;
+                    if w > 0 && h > 0 {
+                        let r = (x, y, w, h);
+                        if tab.placed_rect != Some(r) {
+                            embed::place(child, x, y, w, h);
+                            tab.placed_rect = Some(r);
+                        }
+                        if !tab.visible {
+                            embed::show(child);
+                            tab.visible = true;
+                        }
+                        self.placed.insert(id);
                     }
-                    self.placed.insert(id);
                 }
+                _ => viewport_note(ui, rect, "starting browser\u{2026}"),
             }
-            (true, _, None) => viewport_note(ui, rect, "starting browser\u{2026}"),
-            _ => viewport_note(
+        }
+
+        // macOS: position the borderless plugin window over `rect` (physical
+        // screen px) via IPC and z-order it just above the host window. egui's
+        // (0,0) is the host content-area top-left, i.e. the viewport inner_rect.
+        #[cfg(target_os = "macos")]
+        {
+            let ready = tab.host.as_ref().map(|h| h.is_ready()).unwrap_or(false);
+            let inner = ui.ctx().input(|i| i.viewport().inner_rect);
+            match (ready, inner, parent) {
+                (true, Some(inner), Some(parent)) => {
+                    let ppp = ui.ctx().pixels_per_point();
+                    let x = ((inner.min.x + rect.min.x) * ppp).round() as i32;
+                    let y = ((inner.min.y + rect.min.y) * ppp).round() as i32;
+                    let w = (rect.width() * ppp).round() as i32;
+                    let h = (rect.height() * ppp).round() as i32;
+                    if w > 0 && h > 0 {
+                        // Re-place + re-order every frame: the overlay is a
+                        // separate window, so clicking the host (or another
+                        // app) can reshuffle z-order; re-asserting keeps it
+                        // glued above the host and tracking moves/resizes.
+                        if let Some(host) = tab.host.as_mut() {
+                            host.embed(x, y, w, h, parent);
+                        }
+                        tab.placed_rect = Some((x, y, w, h));
+                        tab.visible = true;
+                        self.placed.insert(id);
+                        ui.ctx().request_repaint();
+                    }
+                }
+                (false, _, _) => viewport_note(ui, rect, "starting browser\u{2026}"),
+                _ => viewport_note(ui, rect, "positioning browser\u{2026}"),
+            }
+        }
+
+        // Linux: no in-tab embedding yet; the webview stays a separate window.
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            let _ = (id, parent);
+            viewport_note(
                 ui,
                 rect,
-                "Browser running in a separate window.\n(Embedding is Windows-only for now.)",
-            ),
+                "Browser running in a separate window.\n(In-tab embedding isn't available on this platform yet.)",
+            );
         }
     }
 }

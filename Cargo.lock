@@ -3766,6 +3766,7 @@ dependencies = [
 name = "puppy-browser"
 version = "1.0.0"
 dependencies = [
+ "objc",
  "serde",
  "serde_json",
  "tao",
@@ -3782,6 +3783,7 @@ dependencies = [
  "egui_commonmark",
  "egui_dock",
  "egui_extras",
+ "objc",
  "png 0.17.16",
  "portable-pty",
  "raw-window-handle",

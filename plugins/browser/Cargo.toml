@@ -8,6 +8,12 @@ description = "Optional in-app browser plugin for puppy-home (wry webview + stdi
 name = "puppy-browser"
 path = "src/main.rs"
 
+# objc 0.2's msg_send! macros reference a long-dead `cargo-clippy` feature cfg;
+# declare it expected so `unexpected_cfgs` still flags real typos but not this
+# third-party macro noise (used by the macOS in-tab embedding).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
+
 [dependencies]
 # OS-native webview (WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux)
 # driven by a tao event loop. Kept entirely out of the base app.
@@ -15,3 +21,8 @@ wry = { version = "0.45", features = ["devtools"] }
 tao = "0.30"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# macOS in-tab embedding: the host positions this borderless window over the
+# Browser tab and z-orders it just above the host window (orderWindow:relativeTo:).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"

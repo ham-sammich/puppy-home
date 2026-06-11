@@ -34,6 +34,18 @@ enum WireCmd {
     Reload,
     /// Open the F12 DevTools window.
     Devtools,
+    /// macOS in-tab embedding: position this borderless window over the host's
+    /// Browser tab (physical screen px, top-left origin) and z-order it just
+    /// above the host window (`parent` is the host's NSWindow number).
+    Embed {
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        parent: i64,
+    },
+    /// macOS embedding: order this window out (tab inactive / hidden).
+    Hide,
     Close,
 }
 
@@ -70,14 +82,16 @@ fn main() -> wry::Result<()> {
     // host (and Code Puppy) can attach to this page over CDP at 127.0.0.1:PORT.
     let cdp_port: Option<u16> = std::env::args().nth(2).and_then(|s| s.parse().ok());
 
-    // Borderless: the host reparents this window into the Browser tab. On
-    // Windows we start hidden and let the host show it once embedded (no flash);
-    // elsewhere we stay a normal visible window (no embedding yet).
+    // Platforms that embed the webview into the host's Browser tab (Windows
+    // reparents; macOS overlays a borderless window the host positions) start
+    // borderless + hidden so there's no flash before the host places us. Other
+    // platforms (Linux) stay a normal visible window (no embedding yet).
+    let embeddable = cfg!(windows) || cfg!(target_os = "macos");
     let window = WindowBuilder::new()
         .with_title("Puppy Browser")
         .with_inner_size(tao::dpi::LogicalSize::new(1024.0, 720.0))
-        .with_decorations(!cfg!(windows))
-        .with_visible(!cfg!(windows))
+        .with_decorations(!embeddable)
+        .with_visible(!embeddable)
         .build(&event_loop)
         .expect("create window");
 
@@ -117,6 +131,23 @@ fn main() -> wry::Result<()> {
                     let _ = webview.evaluate_script("location.reload()");
                 }
                 WireCmd::Devtools => webview.open_devtools(),
+                WireCmd::Embed { x, y, w, h, parent } => {
+                    window.set_outer_position(tao::dpi::PhysicalPosition::new(x, y));
+                    window.set_inner_size(tao::dpi::PhysicalSize::new(
+                        w.max(1) as u32,
+                        h.max(1) as u32,
+                    ));
+                    #[cfg(target_os = "macos")]
+                    mac_order_above(&window, parent);
+                    #[cfg(not(target_os = "macos"))]
+                    let _ = parent;
+                }
+                WireCmd::Hide => {
+                    #[cfg(target_os = "macos")]
+                    mac_order_out(&window);
+                    #[cfg(not(target_os = "macos"))]
+                    window.set_visible(false);
+                }
                 WireCmd::Close => *control_flow = ControlFlow::Exit,
             },
             Event::WindowEvent {
@@ -126,6 +157,40 @@ fn main() -> wry::Result<()> {
             _ => {}
         }
     });
+}
+
+/// Order our borderless window just above the host window (`parent` = the
+/// host's NSWindow number). This also makes us visible without stealing key
+/// focus from the host (unlike `orderFront`/`makeKeyAndOrderFront`).
+#[cfg(target_os = "macos")]
+fn mac_order_above(window: &tao::window::Window, parent: i64) {
+    use objc::runtime::Object;
+    use objc::{msg_send, sel, sel_impl};
+    use tao::platform::macos::WindowExtMacOS;
+    let ns_window = window.ns_window() as *mut Object;
+    if ns_window.is_null() {
+        return;
+    }
+    // NSWindowOrderingMode::NSWindowAbove == 1.
+    unsafe {
+        let _: () = msg_send![ns_window, orderWindow: 1isize relativeTo: parent as isize];
+    }
+}
+
+/// Order our window out of the screen list (hidden while its tab is inactive).
+#[cfg(target_os = "macos")]
+fn mac_order_out(window: &tao::window::Window) {
+    use objc::runtime::Object;
+    use objc::{msg_send, sel, sel_impl};
+    use tao::platform::macos::WindowExtMacOS;
+    let ns_window = window.ns_window() as *mut Object;
+    if ns_window.is_null() {
+        return;
+    }
+    let nil: *mut Object = std::ptr::null_mut();
+    unsafe {
+        let _: () = msg_send![ns_window, orderOut: nil];
+    }
 }
 
 /// Print our native window handle so the host can reparent us. One JSON line:

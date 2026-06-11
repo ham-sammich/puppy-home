@@ -8,7 +8,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 use serde_json::json;
 
@@ -18,6 +18,9 @@ pub struct BrowserHost {
     stdin: Option<ChildStdin>,
     /// The plugin's native window handle (0 until it reports one over stdout).
     hwnd: Arc<AtomicI64>,
+    /// Set once the plugin reports its window exists (the `hwnd` event). On
+    /// macOS the handle value is 0, so this flag — not `hwnd` — gates embedding.
+    ready: Arc<AtomicBool>,
 }
 
 impl BrowserHost {
@@ -38,17 +41,25 @@ impl BrowserHost {
             .spawn()?;
         let stdin = child.stdin.take();
         let hwnd = Arc::new(AtomicI64::new(0));
+        let ready = Arc::new(AtomicBool::new(false));
         if let Some(out) = child.stdout.take() {
             let hwnd = hwnd.clone();
+            let ready = ready.clone();
             std::thread::spawn(move || {
                 for line in BufReader::new(out).lines().map_while(Result::ok) {
                     if let Some(h) = parse_hwnd(&line) {
                         hwnd.store(h, Ordering::Relaxed);
+                        ready.store(true, Ordering::Relaxed);
                     }
                 }
             });
         }
-        Ok(Self { child, stdin, hwnd })
+        Ok(Self {
+            child,
+            stdin,
+            hwnd,
+            ready,
+        })
     }
 
     /// The plugin's native window handle, once reported.
@@ -57,6 +68,29 @@ impl BrowserHost {
             0 => None,
             n => Some(n),
         }
+    }
+
+    /// Whether the plugin has reported its window exists (ready to be placed).
+    /// Used on macOS, where the handle value is 0 but the window is real.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn is_ready(&self) -> bool {
+        self.ready.load(Ordering::Relaxed)
+    }
+
+    /// macOS embedding: position the borderless plugin window over the host's
+    /// Browser tab (physical screen px, top-left origin) and z-order it just
+    /// above the host window (`parent` = the host's NSWindow number).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn embed(&mut self, x: i32, y: i32, w: i32, h: i32, parent: i64) {
+        self.send(
+            json!({ "cmd": "embed", "x": x, "y": y, "w": w, "h": h, "parent": parent }).to_string(),
+        );
+    }
+
+    /// macOS embedding: order the plugin window out (its tab is inactive).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn hide(&mut self) {
+        self.send(json!({ "cmd": "hide" }).to_string());
     }
 
     /// Write one JSON command line to the plugin.

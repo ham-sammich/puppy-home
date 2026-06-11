@@ -243,8 +243,9 @@ impl PuppyApp {
     }
 }
 
-/// The host window's native handle (Windows only), used to embed the browser
-/// plugin's window. `None` everywhere else (the browser stays a separate window).
+/// The host window's native id, used to embed the browser plugin's window:
+/// the HWND on Windows, the NSWindow number on macOS. `None` on Linux (the
+/// browser stays a separate window there).
 #[cfg(windows)]
 fn window_hwnd(frame: &eframe::Frame) -> Option<i64> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -254,7 +255,34 @@ fn window_hwnd(frame: &eframe::Frame) -> Option<i64> {
     }
 }
 
-#[cfg(not(windows))]
+/// macOS: derive the host NSWindow's global window number from the eframe
+/// window's NSView (`[[nsView window] windowNumber]`). The browser overlay
+/// orders itself just above this number.
+#[cfg(target_os = "macos")]
+fn window_hwnd(frame: &eframe::Frame) -> Option<i64> {
+    use objc::runtime::Object;
+    use objc::{msg_send, sel, sel_impl};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match frame.window_handle().ok()?.as_raw() {
+        RawWindowHandle::AppKit(h) => {
+            let ns_view = h.ns_view.as_ptr() as *mut Object;
+            if ns_view.is_null() {
+                return None;
+            }
+            unsafe {
+                let ns_window: *mut Object = msg_send![ns_view, window];
+                if ns_window.is_null() {
+                    return None;
+                }
+                let number: isize = msg_send![ns_window, windowNumber];
+                Some(number as i64)
+            }
+        }
+        _ => None,
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn window_hwnd(_frame: &eframe::Frame) -> Option<i64> {
     None
 }

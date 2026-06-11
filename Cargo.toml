@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2024"
 description = "An AI agent application — Code Puppy as the default agent."
 
+# objc 0.2's msg_send! macros reference a long-dead `cargo-clippy` feature cfg;
+# declare it expected so `unexpected_cfgs` still flags real typos but not this
+# third-party macro noise (used by the macOS browser-embedding FFI).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
+
 # The optional browser plugin is a SEPARATE crate so its heavy webview deps
 # (wry/tao) never bloat the base app — the app only ever launches its built exe.
 [workspace]
@@ -31,6 +37,12 @@ base64 = "0.22"
 # the webview renders inside the Browser tab (native-child-window embedding).
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading", "Win32_System_ProcessStatus"] }
+raw-window-handle = "0.6"
+
+# macOS-only: read the host NSWindow number (to z-order the browser overlay just
+# above us) from the eframe window's NSView.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"
 raw-window-handle = "0.6"
 
 # As we grow: tokio (async runtime), reqwest (HTTP), serde (config),
