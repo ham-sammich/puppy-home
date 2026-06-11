@@ -1,8 +1,8 @@
 # Handoff Notes — Device Switch
 
-Date: 2026-06-11 (updated after Phase A inc 3: system-ssh transport spike)
+Date: 2026-06-11 (updated after Phase A inc 4: connect-to-remote dialog)
 Branch: feature/browser-plugin
-State: 138 tests green, zero warnings, zero clippy lints, cargo fmt clean
+State: 140 tests green, zero warnings, zero clippy lints, cargo fmt clean
 Coordinator: planning-agent-8a6233 / executor: code-puppy
 Agent session ids used so far: code-puppy increments under session
 "phase-c-mcp-manager"; plan updates under "plan-update-2026-06-11".
@@ -158,13 +158,25 @@ is DONE:
   NOT live-validated (ssh localhost refused on this Mac -- Remote Login off).
   Override remote launcher via PUPPY_HOME_REMOTE_CP_CMD.
 
-Still TODO for Phase A (the real remote work -- needs decisions):
-- Inc 4 NEXT: connection profiles + "Open Remote Folder..." flow that builds an
-  SshTarget and calls spawn_remote. Then wire RemoteFs/RemoteGit (the traits
-  from inc 1+2) to new sidecar protocol ops (fs_list_dir/read/write/stat,
-  git_status/diff/log/...) so the tree/editor/git work against the remote.
+- Inc 4 (efb8df1): connect-to-remote dialog. ssh.rs config_hosts() reads Host
+  aliases from ~/.ssh/config (follows Include, single-level glob, skips
+  wildcards). views/remote_connect.rs = the dialog (host list + free-text
+  [user@]host[:port] + remote path + spinner). Connection runs off-thread
+  (PuppyApp::begin_remote_connect/poll_remote in app/remote.rs); Supervisor::
+  adopt() factored out. Workspace.remote_label drives an honest tree-panel
+  placeholder (chat works; files/git are inc 5). Split app.rs -> app/mod.rs
+  (587) + app/remote.rs (97) to stay under budget.
+
+Still TODO for Phase A (the real remote work):
+- Inc 5 NEXT: wire RemoteFs/RemoteGit (the traits from inc 1+2) to NEW sidecar
+  protocol ops (fs_list_dir/read/write/stat, git_status/diff/log/...) so a
+  remote workspace's tree/editor/git actually work. Needs: sidecar.py protocol
+  additions + Rust RemoteFs/RemoteGit impls that round-trip over the existing
+  stdio channel (or a side channel) + async/caching for fs latency. Then have
+  Supervisor::adopt() install RemoteFs/RemoteGit on remote workspaces and drop
+  the remote_label tree placeholder.
 - Live-validate spawn_remote against a real host (or enable Remote Login for
-  `ssh localhost`). backend/mod.rs is ~1370 lines (pre-existing, over budget)
+  `ssh localhost`). backend/mod.rs is ~1440 lines (pre-existing, over budget)
   -- candidate for its own split later.
 - Out-of-scope-so-far local fs that a remote workspace will also need: the
   `.puppy/browser.json` + `.gitignore` breadcrumb writes in view.rs (still
