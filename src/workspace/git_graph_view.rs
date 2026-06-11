@@ -79,10 +79,10 @@ impl Workspace {
         match action {
             GraphAction::Open(c) => self.open_commit(&c),
             GraphAction::Checkout(name) => {
-                let r = crate::git::checkout(&self.root, &name);
+                let r = self.git.checkout(&name);
                 self.git_action(r, &format!("Checked out {name}"));
             }
-            GraphAction::Merge(name) => match crate::git::merge(&self.root, &name) {
+            GraphAction::Merge(name) => match self.git.merge(&name) {
                 Ok(s) => {
                     let line = s.lines().last().unwrap_or("merged").to_string();
                     self.git_action(Ok(()), &format!("Merged {name} · {line}"));
@@ -90,22 +90,22 @@ impl Workspace {
                 Err(e) => self.git_action(Err(e), ""),
             },
             GraphAction::CherryPick(hash) => {
-                let r = crate::git::cherry_pick(&self.root, &hash);
+                let r = self.git.cherry_pick(&hash);
                 self.git_action(r, "Cherry-picked commit");
             }
             GraphAction::Revert(hash) => {
-                let r = crate::git::revert(&self.root, &hash);
+                let r = self.git.revert(&hash);
                 self.git_action(r, "Reverted commit");
             }
             GraphAction::Reset(hash, mode) => {
-                let r = crate::git::reset(&self.root, &hash, mode);
+                let r = self.git.reset(&hash, mode);
                 self.git_action(
                     r,
                     &format!("Reset {} to commit", mode.trim_start_matches('-')),
                 );
             }
             GraphAction::DeleteBranch(name) => {
-                let r = crate::git::delete_branch(&self.root, &name);
+                let r = self.git.delete_branch(&name);
                 self.git_action(r, &format!("Deleted branch {name}"));
             }
             GraphAction::NewBranch { at, short } => {
@@ -158,7 +158,7 @@ impl Workspace {
 
         if create && !dlg.name.trim().is_empty() {
             let name = dlg.name.trim().to_string();
-            let r = crate::git::create_branch(&self.root, &name, &dlg.at);
+            let r = self.git.create_branch(&name, &dlg.at);
             self.git_action(r, &format!("Created branch {name}"));
         } else if !cancel && open {
             self.git_branch_dialog = Some(dlg); // keep the modal up

@@ -3,7 +3,7 @@
 //! Used to drive the Changes panel from the real working-tree status instead of
 //! only the edits Code Puppy reports — so locally-made changes show up too.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// A working-tree change for one path.
@@ -421,4 +421,81 @@ pub fn blame(root: &Path, path: &str) -> Vec<BlameLine> {
         });
     }
     lines
+}
+
+// ---------------------------------------------------------------------------
+// Trait wrapper: lets a workspace hold a git backend it can later swap for a
+// remote one (Phase A). `LocalGit` captures the repo root and delegates to the
+// free functions above, so the IDE calls `self.git.<op>()` instead of
+// `crate::git::<op>(&self.root, ...)`.
+// ---------------------------------------------------------------------------
+
+/// A workspace's git backend. Mirrors the free functions in this module with
+/// the repo root captured, so a remote impl can route them over the protocol.
+pub trait WorkspaceGit: Send + Sync {
+    fn is_repo(&self) -> bool;
+    fn status(&self) -> Vec<GitChange>;
+    fn diff(&self, path: &str) -> String;
+    fn untracked_content(&self, path: &str) -> Option<String>;
+    fn head_info(&self) -> RepoInfo;
+    fn log(&self, limit: usize) -> Vec<Commit>;
+    fn graph_log(&self, limit: usize) -> Vec<Commit>;
+    fn show(&self, hash: &str) -> String;
+    fn status_full(&self) -> Vec<GitStatusEntry>;
+    fn stage(&self, path: &str) -> Result<(), String>;
+    fn unstage(&self, path: &str) -> Result<(), String>;
+    fn stage_all(&self) -> Result<(), String>;
+    fn unstage_all(&self) -> Result<(), String>;
+    fn commit(&self, message: &str) -> Result<String, String>;
+    fn checkout(&self, name: &str) -> Result<(), String>;
+    fn create_branch(&self, name: &str, at: &str) -> Result<(), String>;
+    fn delete_branch(&self, name: &str) -> Result<(), String>;
+    fn merge(&self, target: &str) -> Result<String, String>;
+    fn cherry_pick(&self, hash: &str) -> Result<(), String>;
+    fn revert(&self, hash: &str) -> Result<(), String>;
+    fn reset(&self, hash: &str, mode: &str) -> Result<(), String>;
+    fn fetch(&self) -> Result<String, String>;
+    fn pull(&self) -> Result<String, String>;
+    fn push(&self) -> Result<String, String>;
+    fn blame(&self, path: &str) -> Vec<BlameLine>;
+}
+
+/// The local-git backend: shells out to `git -C <root>` via the free functions.
+pub struct LocalGit {
+    root: PathBuf,
+}
+
+impl LocalGit {
+    pub fn new(root: PathBuf) -> Self {
+        LocalGit { root }
+    }
+}
+
+#[rustfmt::skip]
+impl WorkspaceGit for LocalGit {
+    fn is_repo(&self) -> bool { is_repo(&self.root) }
+    fn status(&self) -> Vec<GitChange> { status(&self.root) }
+    fn diff(&self, path: &str) -> String { diff(&self.root, path) }
+    fn untracked_content(&self, path: &str) -> Option<String> { untracked_content(&self.root, path) }
+    fn head_info(&self) -> RepoInfo { head_info(&self.root) }
+    fn log(&self, limit: usize) -> Vec<Commit> { log(&self.root, limit) }
+    fn graph_log(&self, limit: usize) -> Vec<Commit> { graph_log(&self.root, limit) }
+    fn show(&self, hash: &str) -> String { show(&self.root, hash) }
+    fn status_full(&self) -> Vec<GitStatusEntry> { status_full(&self.root) }
+    fn stage(&self, path: &str) -> Result<(), String> { stage(&self.root, path) }
+    fn unstage(&self, path: &str) -> Result<(), String> { unstage(&self.root, path) }
+    fn stage_all(&self) -> Result<(), String> { stage_all(&self.root) }
+    fn unstage_all(&self) -> Result<(), String> { unstage_all(&self.root) }
+    fn commit(&self, message: &str) -> Result<String, String> { commit(&self.root, message) }
+    fn checkout(&self, name: &str) -> Result<(), String> { checkout(&self.root, name) }
+    fn create_branch(&self, name: &str, at: &str) -> Result<(), String> { create_branch(&self.root, name, at) }
+    fn delete_branch(&self, name: &str) -> Result<(), String> { delete_branch(&self.root, name) }
+    fn merge(&self, target: &str) -> Result<String, String> { merge(&self.root, target) }
+    fn cherry_pick(&self, hash: &str) -> Result<(), String> { cherry_pick(&self.root, hash) }
+    fn revert(&self, hash: &str) -> Result<(), String> { revert(&self.root, hash) }
+    fn reset(&self, hash: &str, mode: &str) -> Result<(), String> { reset(&self.root, hash, mode) }
+    fn fetch(&self) -> Result<String, String> { fetch(&self.root) }
+    fn pull(&self) -> Result<String, String> { pull(&self.root) }
+    fn push(&self) -> Result<String, String> { push(&self.root) }
+    fn blame(&self, path: &str) -> Vec<BlameLine> { blame(&self.root, path) }
 }

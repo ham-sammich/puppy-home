@@ -59,14 +59,14 @@ impl Workspace {
             self.git_rx = None;
         }
         if !self.git_pending && Instant::now() >= self.git_refresh_at {
-            let root = self.root.clone();
+            let git = self.git.clone();
             let ctx2 = ctx.clone();
             let (tx, rx) = std::sync::mpsc::channel();
             self.git_rx = Some(rx);
             self.git_pending = true;
             self.git_refresh_at = Instant::now() + std::time::Duration::from_millis(2000);
             std::thread::spawn(move || {
-                let _ = tx.send(crate::git::status(&root));
+                let _ = tx.send(git.status());
                 ctx2.request_repaint();
             });
         }
@@ -77,7 +77,7 @@ impl Workspace {
     /// Show the diff for a git-tracked change.
     pub(crate) fn load_git_diff(&mut self, path: &str, marker: char) {
         let (lines, adds, dels) = if marker == '?' {
-            let content = crate::git::untracked_content(&self.root, path).unwrap_or_default();
+            let content = self.git.untracked_content(path).unwrap_or_default();
             let lines: Vec<DiffLine> = content
                 .lines()
                 .map(|l| DiffLine {
@@ -88,7 +88,7 @@ impl Workspace {
             let n = lines.len();
             (lines, n, 0)
         } else {
-            parse_unified(&crate::git::diff(&self.root, path))
+            parse_unified(&self.git.diff(path))
         };
         let operation = match marker {
             '?' | 'A' => "create",
@@ -116,10 +116,10 @@ impl Workspace {
 
     /// Rebuild the cached Git-page snapshot (branch, staging, recent history).
     pub(crate) fn refresh_git_view(&mut self) {
-        let info = crate::git::head_info(&self.root);
+        let info = self.git.head_info();
         let mut staged = Vec::new();
         let mut unstaged = Vec::new();
-        for e in crate::git::status_full(&self.root) {
+        for e in self.git.status_full() {
             if e.is_staged() {
                 staged.push(e.clone());
             }
@@ -134,9 +134,9 @@ impl Workspace {
             behind: info.behind,
             staged,
             unstaged,
-            log: crate::git::log(&self.root, 50),
+            log: self.git.log(50),
         });
-        self.git_graph_commits = crate::git::graph_log(&self.root, 200);
+        self.git_graph_commits = self.git.graph_log(200);
     }
 
     /// Open (or focus) the Source Control / Git page.
@@ -147,7 +147,7 @@ impl Workspace {
 
     /// Open (or focus) a single commit's patch.
     pub(crate) fn open_commit(&mut self, c: &crate::git::Commit) {
-        let text = crate::git::show(&self.root, &c.hash);
+        let text = self.git.show(&c.hash);
         let (lines, adds, dels) = parse_unified(&text);
         self.commit_view = Some((
             c.hash.clone(),
@@ -172,8 +172,8 @@ impl Workspace {
             return; // was on → turned off
         }
         let target = path.to_string_lossy().into_owned();
-        self.blame_cache
-            .insert(path.to_path_buf(), crate::git::blame(&self.root, &target));
+        let blame = self.git.blame(&target);
+        self.blame_cache.insert(path.to_path_buf(), blame);
         self.blame_files.insert(path.to_path_buf());
     }
 
@@ -451,7 +451,7 @@ impl Workspace {
             self.refresh_git_view();
         }
         if do_fetch {
-            match crate::git::fetch(&self.root) {
+            match self.git.fetch() {
                 Ok(s) => self.git_action(
                     Ok(()),
                     if s.is_empty() {
@@ -464,7 +464,7 @@ impl Workspace {
             }
         }
         if do_pull {
-            match crate::git::pull(&self.root) {
+            match self.git.pull() {
                 Ok(s) => {
                     let line = s.lines().last().unwrap_or("Pulled").to_string();
                     self.git_action(Ok(()), &format!("Pulled · {line}"));
@@ -473,30 +473,30 @@ impl Workspace {
             }
         }
         if do_push {
-            match crate::git::push(&self.root) {
+            match self.git.push() {
                 Ok(_) => self.git_action(Ok(()), "Pushed to upstream"),
                 Err(e) => self.git_action(Err(e), ""),
             }
         }
         if let Some(p) = stage_path {
-            let r = crate::git::stage(&self.root, &p);
+            let r = self.git.stage(&p);
             self.git_action(r, &format!("Staged {}", file_name(&p)));
         }
         if let Some(p) = unstage_path {
-            let r = crate::git::unstage(&self.root, &p);
+            let r = self.git.unstage(&p);
             self.git_action(r, &format!("Unstaged {}", file_name(&p)));
         }
         if do_stage_all {
-            let r = crate::git::stage_all(&self.root);
+            let r = self.git.stage_all();
             self.git_action(r, "Staged all changes");
         }
         if do_unstage_all {
-            let r = crate::git::unstage_all(&self.root);
+            let r = self.git.unstage_all();
             self.git_action(r, "Unstaged all");
         }
         if do_commit {
             let msg = self.commit_msg.clone();
-            match crate::git::commit(&self.root, &msg) {
+            match self.git.commit(&msg) {
                 Ok(summary) => {
                     self.commit_msg.clear();
                     let line = summary.lines().next().unwrap_or("committed").to_string();
@@ -523,7 +523,7 @@ impl Workspace {
             .unwrap_or(false);
         if !matches {
             // A different commit tab is active; re-fetch this one.
-            let text = crate::git::show(&self.root, hash);
+            let text = self.git.show(hash);
             let (lines, adds, dels) = parse_unified(&text);
             self.commit_view = Some((
                 hash.to_string(),

@@ -160,6 +160,9 @@ pub struct Workspace {
     current_diff: Option<DiffRecord>,
     // git working-tree status (preferred when the folder is a repo)
     git_repo: bool,
+    /// Git backend for this workspace. Local today; a future remote impl routes
+    /// these over the sidecar protocol. The IDE calls `self.git.<op>()`.
+    git: Arc<dyn crate::git::WorkspaceGit>,
     git_changes: Vec<crate::git::GitChange>,
     git_rx: Option<Receiver<Vec<crate::git::GitChange>>>,
     git_refresh_at: Instant,
@@ -210,7 +213,9 @@ impl Workspace {
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| root.to_string_lossy().into_owned());
-        let is_git_repo = crate::git::is_repo(&root);
+        let git: Arc<dyn crate::git::WorkspaceGit> =
+            Arc::new(crate::git::LocalGit::new(root.clone()));
+        let is_git_repo = git.is_repo();
         Workspace {
             id,
             root,
@@ -284,6 +289,7 @@ impl Workspace {
             diffs: Vec::new(),
             current_diff: None,
             git_repo: is_git_repo,
+            git,
             fs: Arc::new(fs::LocalFs),
             git_changes: Vec::new(),
             git_rx: None,
