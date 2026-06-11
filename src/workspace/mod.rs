@@ -132,6 +132,13 @@ pub struct Workspace {
     pub mcp_servers: Option<Vec<crate::backend::McpServerInfo>>,
     /// Bumped on every `mcp_servers` event so views can drop optimistic state.
     pub mcp_generation: u64,
+    /// Skill catalog (global + project Code Puppy config, fetched via this
+    /// workspace's sidecar). `None` until the first `skills` event.
+    pub skills: Option<Vec<crate::backend::SkillInfo>>,
+    /// Bumped on every `skills` event so views can drop optimistic state.
+    pub skills_generation: u64,
+    /// The most recent `skill_detail` answer (the Skills tab's detail pane).
+    pub skill_detail: Option<crate::backend::SkillDetail>,
     status_req_at: Instant,
     md_cache: CommonMarkCache,
     // changes: Code-Puppy-reported diffs (fallback for non-git folders) + the
@@ -247,6 +254,9 @@ impl Workspace {
             sub_agents: Vec::new(),
             mcp_servers: None,
             mcp_generation: 0,
+            skills: None,
+            skills_generation: 0,
+            skill_detail: None,
             status_req_at: Instant::now(),
             md_cache: CommonMarkCache::default(),
             diffs: Vec::new(),
@@ -541,6 +551,13 @@ impl Workspace {
             UiEvent::McpServers(items) => {
                 self.mcp_servers = Some(items);
                 self.mcp_generation += 1;
+            }
+            UiEvent::Skills(items) => {
+                self.skills = Some(items);
+                self.skills_generation += 1;
+            }
+            UiEvent::SkillDetail(detail) => {
+                self.skill_detail = Some(detail);
             }
             UiEvent::Exited { code } => {
                 self.ready = false;

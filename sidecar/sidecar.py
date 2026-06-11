@@ -25,6 +25,11 @@ Protocol (newline-delimited JSON, UTF-8):
     {"op": "list_mcp_servers"}                       # -> mcp_servers event
     {"op": "set_mcp_enabled", "name": "...", "enabled": true}
     {"op": "add_mcp_server", "name": "...", "type": "stdio"|"sse"|"http", "config": {...}}
+    {"op": "list_skills"}                            # -> skills event
+    {"op": "get_skill", "name": "..."}               # -> skill_detail event
+    {"op": "set_skill_enabled", "name": "...", "enabled": true}
+    {"op": "save_skill", "name": "...", "description": "...", "content": "...",
+        "scope": "user"|"project"}                   # create/overwrite SKILL.md
     {"op": "shutdown"}
 
   sidecar -> Rust (stdout), one object per line:
@@ -41,6 +46,8 @@ Protocol (newline-delimited JSON, UTF-8):
     {"event": "error",        "id": <int|null>, "message": "..."}
     {"event": "log",          "text": "..."}
     {"event": "mcp_servers",  "items": [{"id","name","type","enabled","state","summary","error"}]}
+    {"event": "skills",       "items": [{"name","description","path","enabled","source"}]}
+    {"event": "skill_detail", "name": "...", "description": "...", "path": "...", "content": "..."}
 
 stdout is reserved exclusively for the protocol. Any stray library `print()` is
 redirected to stderr so it can never corrupt a JSON line.
@@ -555,6 +562,149 @@ class Bridge:
         os.makedirs(os.path.dirname(MCP_SERVERS_FILE), exist_ok=True)
         with open(MCP_SERVERS_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+
+    # --- Skills (Code Puppy's agent_skills plugin) ---------------------------
+
+    @staticmethod
+    def _classify_skill_source(path) -> str:
+        """user / plugin / project / other, by where the skill dir lives."""
+        from pathlib import Path
+        from code_puppy.config import CACHE_DIR
+        p = Path(path).resolve()
+        roots = (
+            ("user", Path.home() / ".code_puppy" / "skills"),
+            ("plugin", Path(CACHE_DIR) / "plugin-skills"),
+            ("project", Path.cwd()),
+        )
+        for label, root in roots:
+            try:
+                p.relative_to(root.resolve())
+                return label
+            except (ValueError, OSError):
+                continue
+        return "other"
+
+    def emit_skills(self) -> None:
+        """List discovered skills with frontmatter metadata + enabled flag.
+
+        Reuses Code Puppy's own machinery (the same path /skills walks):
+        discovery.discover_skills + metadata.parse_skill_metadata + the
+        disabled_skills config set. Skill dirs without a SKILL.md are
+        skipped - they can't be activated anyway.
+        """
+        items = []
+        try:
+            from code_puppy.plugins.agent_skills import config as sk_config
+            from code_puppy.plugins.agent_skills import discovery, metadata
+            disabled = sk_config.get_disabled_skills()
+            for info in discovery.discover_skills():
+                if not info.has_skill_md:
+                    continue
+                meta = metadata.parse_skill_metadata(info.path)
+                items.append({
+                    "name": info.name,
+                    "description": meta.description if meta else "",
+                    "path": str(info.path),
+                    "enabled": info.name not in disabled,
+                    "source": self._classify_skill_source(info.path),
+                })
+        except Exception:
+            log("skills enumeration failed:\n" + traceback.format_exc())
+        send({"event": "skills", "items": items})
+
+    def get_skill(self, name: str) -> None:
+        """Send one skill's full SKILL.md text (skill_detail event)."""
+        try:
+            from code_puppy.plugins.agent_skills import discovery, metadata
+            info = next(
+                (i for i in discovery.discover_skills()
+                 if i.name == name and i.has_skill_md),
+                None,
+            )
+            if info is None:
+                send({"event": "error", "id": None,
+                      "message": f"unknown skill: {name}"})
+                return
+            meta = metadata.parse_skill_metadata(info.path)
+            send({
+                "event": "skill_detail",
+                "name": info.name,
+                "description": meta.description if meta else "",
+                "path": str(info.path),
+                "content": metadata.load_full_skill_content(info.path) or "",
+            })
+        except Exception as exc:
+            send({"event": "error", "id": None,
+                  "message": f"get_skill failed: {type(exc).__name__}: {exc}"})
+            log(traceback.format_exc())
+
+    def set_skill_enabled(self, name: str, enabled: bool) -> None:
+        """Enable/disable one skill (Code Puppy's disabled_skills config)."""
+        try:
+            from code_puppy.plugins.agent_skills import config as sk_config
+            sk_config.set_skill_disabled(name, not enabled)
+        except Exception as exc:
+            send({"event": "error", "id": None,
+                  "message": f"set_skill_enabled failed: "
+                             f"{type(exc).__name__}: {exc}"})
+            log(traceback.format_exc())
+        self.emit_skills()
+
+    @staticmethod
+    def _valid_skill_name(name: str) -> bool:
+        """Alphanumeric plus - and _ only: blocks path traversal by shape."""
+        return bool(name) and all(c.isalnum() or c in "-_" for c in name)
+
+    @staticmethod
+    def _compose_skill_md(name: str, description: str, body: str) -> str:
+        """Frontmatter + body - unless the body is already a full document."""
+        if body.lstrip().startswith("---"):
+            return body
+        head = "\n".join(
+            ["---", f"name: {name}", f"description: {description}", "---"])
+        return head + "\n\n" + body.rstrip() + "\n"
+
+    def save_skill(self, cmd: dict) -> None:
+        """Create or overwrite <skills dir>/<name>/SKILL.md, then re-list.
+
+        scope "user" -> ~/.code_puppy/skills, "project" -> ./.code_puppy/skills
+        (both are default discovery directories, so the new skill is live
+        immediately).
+        """
+        from pathlib import Path
+        name = str(cmd.get("name") or "").strip()
+        description = str(cmd.get("description") or "").strip()
+        content = str(cmd.get("content") or "")
+        scope = str(cmd.get("scope") or "user").strip().lower()
+        if not self._valid_skill_name(name):
+            send({"event": "error", "id": None,
+                  "message": "save_skill: name must be alphanumeric "
+                             "(hyphens and underscores allowed)"})
+            return
+        if scope not in ("user", "project"):
+            send({"event": "error", "id": None,
+                  "message": f"save_skill: invalid scope {scope!r} "
+                             "(expected user or project)"})
+            return
+        if scope == "user":
+            base = Path.home() / ".code_puppy" / "skills"
+        else:
+            base = Path.cwd() / ".code_puppy" / "skills"
+        try:
+            skill_dir = base / name
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "SKILL.md").write_text(
+                self._compose_skill_md(name, description, content),
+                encoding="utf-8",
+            )
+            from code_puppy.plugins.agent_skills import discovery
+            discovery.refresh_skill_cache()
+        except Exception as exc:
+            send({"event": "error", "id": None,
+                  "message": f"save_skill failed: {type(exc).__name__}: {exc}"})
+            log(traceback.format_exc())
+            return
+        self.emit_skills()
 
     # --- Code Puppy sessions (autosave + named contexts) --------------------
 
@@ -1206,6 +1356,15 @@ class Bridge:
                                  bool(cmd.get("enabled", False)))
         elif op == "add_mcp_server":
             self.add_mcp_server(cmd)
+        elif op == "list_skills":
+            self.emit_skills()
+        elif op == "get_skill":
+            self.get_skill(str(cmd.get("name", "")))
+        elif op == "set_skill_enabled":
+            self.set_skill_enabled(str(cmd.get("name", "")),
+                                   bool(cmd.get("enabled", False)))
+        elif op == "save_skill":
+            self.save_skill(cmd)
         elif op == "shutdown":
             self._stop.set()
             self.loop.call_soon_threadsafe(self.loop.stop)

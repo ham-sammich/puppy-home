@@ -4,3 +4,4 @@
 # scratch artifacts from dev/screenshot verification
 /_*.png
 /_*.log
+__pycache__/ 

@@ -36,6 +36,8 @@ pub struct PuppyApp {
     perf: crate::perf::PerfStats,
     /// State for the MCP Manager tab (one instance).
     mcp: crate::views::mcp_manager::McpManagerView,
+    /// State for the Skills Manager tab (one instance).
+    skills: crate::views::skills_manager::SkillsManagerView,
 }
 
 /// Snapshot the open workspaces as a persistable session.
@@ -139,6 +141,7 @@ impl PuppyApp {
             browser: BrowserManager::discover(),
             perf: crate::perf::PerfStats::default(),
             mcp: crate::views::mcp_manager::McpManagerView::default(),
+            skills: crate::views::skills_manager::SkillsManagerView::default(),
         }
     }
 
@@ -272,6 +275,7 @@ impl eframe::App for PuppyApp {
         let mut open_clicked = false;
         let mut open_browser = false;
         let mut open_mcp = false;
+        let mut open_skills = false;
         let mut pick_theme: Option<Theme> = None;
         let mut open_editor = false;
         let theme = self.theme.clone();
@@ -312,6 +316,13 @@ impl eframe::App for PuppyApp {
                     .clicked()
                 {
                     open_mcp = true;
+                }
+                if ui
+                    .button("Skills")
+                    .on_hover_text("Manage Code Puppy's skills (SKILL.md)")
+                    .clicked()
+                {
+                    open_skills = true;
                 }
                 ui.label(egui::RichText::new(format!("{ws_count} workspace(s)")).weak());
                 if waiting > 0 {
@@ -377,6 +388,14 @@ impl eframe::App for PuppyApp {
                 dock.push_to_focused_leaf(Tab::McpManager);
             }
         }
+        if open_skills && let Some(dock) = self.dock.as_mut() {
+            // One instance: focus the existing tab if it's already open.
+            if let Some(path) = dock.find_tab_from(|t| matches!(t, Tab::SkillsManager)) {
+                let _ = dock.set_active_tab(path);
+            } else {
+                dock.push_to_focused_leaf(Tab::SkillsManager);
+            }
+        }
         if let Some(t) = pick_theme {
             self.theme = t;
             // Sync the editor buffer to the freshly-picked custom theme.
@@ -423,6 +442,7 @@ impl eframe::App for PuppyApp {
                 sup: &mut self.sup,
                 browser: &mut self.browser,
                 mcp: &mut self.mcp,
+                skills: &mut self.skills,
                 actions: &mut actions,
             };
             DockArea::new(&mut dock)

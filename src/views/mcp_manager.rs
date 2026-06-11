@@ -12,6 +12,7 @@ use eframe::egui;
 use serde_json::{Map, Value, json};
 
 use crate::supervisor::Supervisor;
+use crate::views::common::{no_workspace_hint, serving_workspace, toggle_switch, validate_name};
 use crate::workspace::{Workspace, WorkspaceId};
 
 /// Re-poll cadence while the tab is visible (server state settles async).
@@ -97,21 +98,6 @@ impl Wizard {
 // Pure helpers (unit-tested below)
 // ---------------------------------------------------------------------------
 
-/// Mirror Code Puppy's registry rule: alphanumeric plus `-`/`_`, non-empty.
-fn validate_name(name: &str) -> Result<(), String> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err("a server name is required".into());
-    }
-    if !name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
-    {
-        return Err("name must be alphanumeric (hyphens and underscores allowed)".into());
-    }
-    Ok(())
-}
-
 /// Split the args textarea: one argument per line, trimmed, empties dropped.
 fn split_args(text: &str) -> Vec<String> {
     text.lines()
@@ -195,55 +181,10 @@ fn state_color(state: &str) -> egui::Color32 {
 // Rendering
 // ---------------------------------------------------------------------------
 
-/// A small animated on/off switch (the canonical egui toggle widget).
-fn toggle_switch(ui: &mut egui::Ui, on: &mut bool) -> egui::Response {
-    let desired_size = ui.spacing().interact_size.y * egui::vec2(2.0, 1.0);
-    let (rect, mut response) = ui.allocate_exact_size(desired_size, egui::Sense::click());
-    if response.clicked() {
-        *on = !*on;
-        response.mark_changed();
-    }
-    if ui.is_rect_visible(rect) {
-        let how_on = ui.ctx().animate_bool_responsive(response.id, *on);
-        let visuals = ui.style().interact_selectable(&response, *on);
-        let rect = rect.expand(visuals.expansion);
-        let radius = 0.5 * rect.height();
-        ui.painter().rect_filled(rect, radius, visuals.bg_fill);
-        let circle_x = egui::lerp((rect.left() + radius)..=(rect.right() - radius), how_on);
-        let center = egui::pos2(circle_x, rect.center().y);
-        ui.painter().circle(
-            center,
-            0.75 * radius,
-            visuals.fg_stroke.color,
-            visuals.fg_stroke,
-        );
-    }
-    response
-}
-
-/// Pick the workspace that serves MCP data: the first ready one.
-fn serving_workspace(sup: &Supervisor) -> Option<&Workspace> {
-    sup.iter().find(|w| w.is_ready())
-}
-
 /// Render the MCP Manager tab.
 pub fn render(ui: &mut egui::Ui, sup: &Supervisor, view: &mut McpManagerView) {
     let Some(ws) = serving_workspace(sup) else {
-        ui.centered_and_justified(|ui| {
-            ui.vertical_centered(|ui| {
-                ui.label(
-                    egui::RichText::new("No Code Puppy connected")
-                        .heading()
-                        .weak(),
-                );
-                ui.add_space(4.0);
-                ui.weak(if sup.is_empty() {
-                    "Open a folder to start a workspace - MCP data is read through its sidecar."
-                } else {
-                    "Waiting for a workspace's Code Puppy to become ready..."
-                });
-            });
-        });
+        no_workspace_hint(ui, sup, "MCP data");
         return;
     };
 
@@ -639,15 +580,6 @@ mod tests {
             ("".into(), "ignored".into()),
         ];
         w
-    }
-
-    #[test]
-    fn name_validation() {
-        assert!(validate_name("my-server_2").is_ok());
-        assert!(validate_name("").is_err());
-        assert!(validate_name("   ").is_err());
-        assert!(validate_name("has space").is_err());
-        assert!(validate_name("bad/slash").is_err());
     }
 
     #[test]

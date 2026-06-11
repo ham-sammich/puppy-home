@@ -128,6 +128,33 @@ pub struct McpServerInfo {
     pub error: String,
 }
 
+/// A discovered Code Puppy skill (agent_skills plugin: a SKILL.md on disk).
+#[derive(Debug, Clone, Deserialize)]
+pub struct SkillInfo {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub enabled: bool,
+    /// Where the skill lives: "user" | "project" | "plugin" | "other".
+    #[serde(default)]
+    pub source: String,
+}
+
+/// One skill's full SKILL.md text (answer to `get_skill`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct SkillDetail {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub content: String,
+}
+
 /// A concurrent sub-agent Code Puppy spawned via `invoke_agent` (dashboard row).
 #[derive(Debug, Clone, Deserialize)]
 pub struct SubAgentInfo {
@@ -263,6 +290,10 @@ pub enum UiEvent {
     },
     /// The catalog of registered MCP servers (answer to `list_mcp_servers`).
     McpServers(Vec<McpServerInfo>),
+    /// The catalog of discovered skills (answer to `list_skills`).
+    Skills(Vec<SkillInfo>),
+    /// One skill's full SKILL.md content (answer to `get_skill`).
+    SkillDetail(SkillDetail),
     /// The sidecar process exited.
     Exited { code: Option<i32> },
 }
@@ -385,6 +416,20 @@ enum Wire {
         #[serde(default)]
         items: Vec<McpServerInfo>,
     },
+    Skills {
+        #[serde(default)]
+        items: Vec<SkillInfo>,
+    },
+    SkillDetail {
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        description: String,
+        #[serde(default)]
+        path: String,
+        #[serde(default)]
+        content: String,
+    },
 }
 
 impl From<Wire> for UiEvent {
@@ -467,6 +512,18 @@ impl From<Wire> for UiEvent {
                 entries,
             },
             Wire::McpServers { items } => UiEvent::McpServers(items),
+            Wire::Skills { items } => UiEvent::Skills(items),
+            Wire::SkillDetail {
+                name,
+                description,
+                path,
+                content,
+            } => UiEvent::SkillDetail(SkillDetail {
+                name,
+                description,
+                path,
+                content,
+            }),
         }
     }
 }
@@ -664,6 +721,26 @@ impl CodePuppy {
     /// Register a new MCP server; the sidecar re-lists (or emits `Error`).
     pub fn add_mcp_server(&self, name: &str, transport: &str, config: &Value) {
         self.write(protocol::add_mcp_server(name, transport, config));
+    }
+
+    /// Ask the sidecar for the skill catalog (`Skills` event).
+    pub fn list_skills(&self) {
+        self.write(protocol::list_skills());
+    }
+
+    /// Ask for one skill's full SKILL.md (`SkillDetail` event).
+    pub fn get_skill(&self, name: &str) {
+        self.write(protocol::get_skill(name));
+    }
+
+    /// Enable (`true`) or disable (`false`) a skill; the sidecar re-lists.
+    pub fn set_skill_enabled(&self, name: &str, enabled: bool) {
+        self.write(protocol::set_skill_enabled(name, enabled));
+    }
+
+    /// Create or overwrite a skill; the sidecar re-lists (or emits `Error`).
+    pub fn save_skill(&self, name: &str, description: &str, content: &str, scope: &str) {
+        self.write(protocol::save_skill(name, description, content, scope));
     }
 }
 
@@ -989,6 +1066,53 @@ mod tests {
                 assert_eq!(items[0].state, "");
             }
             other => panic!("expected McpServers, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn skills_event() {
+        let ev = decode(
+            r#"{"event":"skills","items":[{"name":"git-flow","description":"Release flow","path":"C:/u/.code_puppy/skills/git-flow","enabled":true,"source":"user"}]}"#,
+        );
+        match ev {
+            UiEvent::Skills(items) => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].name, "git-flow");
+                assert_eq!(items[0].description, "Release flow");
+                assert_eq!(items[0].path, "C:/u/.code_puppy/skills/git-flow");
+                assert!(items[0].enabled);
+                assert_eq!(items[0].source, "user");
+            }
+            other => panic!("expected Skills, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn skills_event_defaults_optional_fields() {
+        match decode(r#"{"event":"skills","items":[{"name":"bare"}]}"#) {
+            UiEvent::Skills(items) => {
+                assert_eq!(items[0].name, "bare");
+                assert_eq!(items[0].description, "");
+                assert!(!items[0].enabled);
+                assert_eq!(items[0].source, "");
+            }
+            other => panic!("expected Skills, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn skill_detail_event() {
+        let ev = decode(
+            r#"{"event":"skill_detail","name":"git-flow","description":"Release flow","path":"/s/git-flow","content":"---\nname: git-flow\n---\nBody"}"#,
+        );
+        match ev {
+            UiEvent::SkillDetail(d) => {
+                assert_eq!(d.name, "git-flow");
+                assert_eq!(d.description, "Release flow");
+                assert_eq!(d.path, "/s/git-flow");
+                assert!(d.content.starts_with("---"));
+            }
+            other => panic!("expected SkillDetail, got {other:?}"),
         }
     }
 

@@ -135,6 +135,30 @@ pub(super) fn add_mcp_server(name: &str, transport: &str, config: &Value) -> Val
     json!({ "op": "add_mcp_server", "name": name, "type": transport, "config": config })
 }
 
+pub(super) fn list_skills() -> Value {
+    json!({ "op": "list_skills" })
+}
+
+pub(super) fn get_skill(name: &str) -> Value {
+    json!({ "op": "get_skill", "name": name })
+}
+
+pub(super) fn set_skill_enabled(name: &str, enabled: bool) -> Value {
+    json!({ "op": "set_skill_enabled", "name": name, "enabled": enabled })
+}
+
+/// `content` is the markdown body (the sidecar wraps it in name/description
+/// frontmatter); `scope` is "user" (global) or "project" (this folder).
+pub(super) fn save_skill(name: &str, description: &str, content: &str, scope: &str) -> Value {
+    json!({
+        "op": "save_skill",
+        "name": name,
+        "description": description,
+        "content": content,
+        "scope": scope,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,6 +172,7 @@ mod tests {
         assert_eq!(status(), json!({"op": "status"}));
         assert_eq!(list_sessions(), json!({"op": "list_sessions"}));
         assert_eq!(list_mcp_servers(), json!({"op": "list_mcp_servers"}));
+        assert_eq!(list_skills(), json!({"op": "list_skills"}));
         assert_eq!(pause(), json!({"op": "pause"}));
         assert_eq!(resume(), json!({"op": "resume"}));
         assert_eq!(shutdown(), json!({"op": "shutdown"}));
@@ -258,6 +283,32 @@ mod tests {
                 "name": "remote",
                 "type": "sse",
                 "config": {"url": "https://example.com/sse", "headers": {"Authorization": "Bearer x"}}
+            })
+        );
+    }
+
+    #[test]
+    fn skill_ops() {
+        assert_eq!(
+            get_skill("git-flow"),
+            json!({"op": "get_skill", "name": "git-flow"})
+        );
+        assert_eq!(
+            set_skill_enabled("git-flow", true),
+            json!({"op": "set_skill_enabled", "name": "git-flow", "enabled": true})
+        );
+        assert_eq!(
+            set_skill_enabled("git-flow", false),
+            json!({"op": "set_skill_enabled", "name": "git-flow", "enabled": false})
+        );
+        assert_eq!(
+            save_skill("git-flow", "Git release flow", "## Steps\n", "user"),
+            json!({
+                "op": "save_skill",
+                "name": "git-flow",
+                "description": "Git release flow",
+                "content": "## Steps\n",
+                "scope": "user"
             })
         );
     }
