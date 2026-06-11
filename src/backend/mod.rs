@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 mod protocol;
+pub mod ssh;
 
 /// The sidecar source, embedded so the executable is self-contained.
 const SIDECAR_PY: &str = include_str!("../../sidecar/sidecar.py");
@@ -721,6 +722,77 @@ impl CodePuppy {
         // stdout -> protocol events
         spawn_stdout_reader(stdout, tx.clone(), ctx.clone());
         // stderr -> log events
+        spawn_stderr_reader(stderr, tx.clone(), ctx.clone());
+
+        Ok((
+            CodePuppy {
+                child,
+                stdin: Mutex::new(stdin),
+                next_id: AtomicU64::new(1),
+            },
+            rx,
+        ))
+    }
+
+    /// Launch the sidecar on a remote host over the user's `ssh`. Provisions
+    /// `sidecar.py` to the remote cache, then runs it; the returned handle and
+    /// event stream are identical to [`spawn`](Self::spawn) -- the JSON protocol
+    /// is transport-agnostic. `remote_cwd` is a path *on the remote*.
+    ///
+    /// Not yet wired to the UI (connection profiles land in a later increment),
+    /// so it is allowed to be unused for now.
+    #[allow(dead_code)]
+    pub fn spawn_remote(
+        ctx: egui::Context,
+        target: &ssh::SshTarget,
+        remote_cwd: Option<&str>,
+    ) -> Result<(Self, Receiver<UiEvent>), String> {
+        // 1. Provision: ship sidecar.py to the remote cache (bytes on stdin).
+        let mut prov = target.provision_command();
+        crate::proc::hide_console(&mut prov);
+        prov.stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        let mut prov_child = prov
+            .spawn()
+            .map_err(|e| format!("starting ssh to provision sidecar: {e}"))?;
+        {
+            let mut si = prov_child.stdin.take().ok_or("no stdin pipe (provision)")?;
+            si.write_all(SIDECAR_PY.as_bytes())
+                .map_err(|e| format!("sending sidecar to remote: {e}"))?;
+            // `si` drops here -> EOF, so the remote `cat` finishes.
+        }
+        let prov_out = prov_child
+            .wait_with_output()
+            .map_err(|e| format!("waiting on remote provisioning: {e}"))?;
+        if !prov_out.status.success() {
+            let err = String::from_utf8_lossy(&prov_out.stderr);
+            let err = err.trim();
+            return Err(if err.is_empty() {
+                "remote provisioning failed (check the SSH target and auth)".to_string()
+            } else {
+                format!("remote provisioning failed: {err}")
+            });
+        }
+
+        // 2. Launch: run the remote sidecar; stdio carries the protocol.
+        let launcher = ssh::default_remote_launcher();
+        let mut command = target.launch_command(remote_cwd, &launcher);
+        crate::proc::hide_console(&mut command);
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command
+            .spawn()
+            .map_err(|e| format!("spawning remote sidecar over ssh: {e}"))?;
+
+        let stdin = child.stdin.take().ok_or("no stdin pipe")?;
+        let stdout = child.stdout.take().ok_or("no stdout pipe")?;
+        let stderr = child.stderr.take().ok_or("no stderr pipe")?;
+
+        let (tx, rx) = mpsc::channel::<UiEvent>();
+        spawn_stdout_reader(stdout, tx.clone(), ctx.clone());
         spawn_stderr_reader(stderr, tx.clone(), ctx.clone());
 
         Ok((
