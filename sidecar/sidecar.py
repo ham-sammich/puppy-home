@@ -59,6 +59,7 @@ import asyncio
 import base64
 import json
 import os
+import shutil
 import sys
 import threading
 import traceback
@@ -1598,6 +1599,60 @@ class Bridge:
             send({"event": "fs_result", "id": rid, "op": "read_file",
                   "ok": False, "error": str(exc)})
 
+    def fs_stat(self, cmd: dict) -> None:
+        rid = cmd.get("id")
+        path = cmd.get("path", "")
+        send({"event": "fs_result", "id": rid, "op": "stat", "ok": True,
+              "exists": os.path.exists(path), "is_dir": os.path.isdir(path)})
+
+    def _fs_mutate(self, rid, op, fn) -> None:
+        """Run a mutating fs op, reporting ok/error uniformly."""
+        try:
+            fn()
+            send({"event": "fs_result", "id": rid, "op": op, "ok": True})
+        except Exception as exc:
+            send({"event": "fs_result", "id": rid, "op": op,
+                  "ok": False, "error": str(exc)})
+
+    def fs_write_file(self, cmd: dict) -> None:
+        path = cmd.get("path", "")
+        content = cmd.get("content", "")
+
+        def do() -> None:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+        self._fs_mutate(cmd.get("id"), "write_file", do)
+
+    def fs_mkdir(self, cmd: dict) -> None:
+        path = cmd.get("path", "")
+        self._fs_mutate(cmd.get("id"), "mkdir", lambda: os.mkdir(path))
+
+    def fs_create_file(self, cmd: dict) -> None:
+        path = cmd.get("path", "")
+        # 'x' = exclusive create: error if it already exists.
+        self._fs_mutate(cmd.get("id"), "create_file",
+                        lambda: open(path, "x").close())
+
+    def fs_remove(self, cmd: dict) -> None:
+        path = cmd.get("path", "")
+
+        def do() -> None:
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+        self._fs_mutate(cmd.get("id"), "remove", do)
+
+    def fs_rename(self, cmd: dict) -> None:
+        src = cmd.get("from", "")
+        dst = cmd.get("to", "")
+
+        def do() -> None:
+            if os.path.exists(dst):  # refuse to clobber
+                raise FileExistsError(dst)
+            os.rename(src, dst)
+        self._fs_mutate(cmd.get("id"), "rename", do)
+
     def handle_command(self, cmd: dict) -> None:
         op = cmd.get("op")
         if op == "prompt":
@@ -1704,6 +1759,18 @@ class Bridge:
             self.fs_list_dir(cmd)
         elif op == "fs_read_file":
             self.fs_read_file(cmd)
+        elif op == "fs_stat":
+            self.fs_stat(cmd)
+        elif op == "fs_write_file":
+            self.fs_write_file(cmd)
+        elif op == "fs_mkdir":
+            self.fs_mkdir(cmd)
+        elif op == "fs_create_file":
+            self.fs_create_file(cmd)
+        elif op == "fs_remove":
+            self.fs_remove(cmd)
+        elif op == "fs_rename":
+            self.fs_rename(cmd)
         elif op == "shutdown":
             self._stop.set()
             self.loop.call_soon_threadsafe(self.loop.stop)

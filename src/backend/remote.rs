@@ -1,17 +1,19 @@
 //! Remote filesystem access for SSH-hosted workspaces.
 //!
 //! A remote workspace's sidecar runs on the far host, so the file tree + editor
-//! read files by RPC over the *same* stdio channel the chat uses: the GUI sends
-//! `fs_list_dir` / `fs_read_file` ops and the sidecar replies with `fs_result`
-//! lines. The stdout reader thread routes those replies here (via
-//! [`RemoteState::handle_result`]) rather than through the `UiEvent` path -- a
-//! blocking `read_to_string` runs on the UI thread, so its reply must be
-//! delivered off that thread or we'd deadlock.
+//! talk to it by RPC over the *same* stdio channel the chat uses: the GUI sends
+//! `fs_*` ops and the sidecar replies with `fs_result` lines. The stdout reader
+//! thread routes those replies here (via [`RemoteState::handle_result`]) rather
+//! than through the `UiEvent` path -- a blocking op runs on the UI thread, so
+//! its reply must be delivered off that thread or we'd deadlock.
 //!
-//! Directory listings are cached and filled asynchronously (the tree renders
-//! every frame, so listing must never block); file reads block on a one-shot
-//! channel with a timeout. Writes/mutations aren't supported yet -- a remote
-//! workspace is read-only for now (browse + view).
+//! Latency strategy:
+//! * **Listings + stats** are cached and filled asynchronously -- the tree
+//!   renders every frame, so they must never block. A cache miss kicks off a
+//!   request and shows nothing until the reply repaints.
+//! * **Reads + mutations** block on a one-shot channel with a timeout. They run
+//!   on the UI thread but only in response to a user action (open/save/delete),
+//!   so a brief wait is acceptable.
 
 use std::collections::HashMap;
 use std::io;
@@ -23,12 +25,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use eframe::egui;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::workspace::fs::{DirEntry, WorkspaceFs};
 
-/// How long a blocking remote file read waits before giving up.
-const READ_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long a blocking remote op waits before giving up.
+const OP_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Cache state for one directory listing.
 enum DirState {
@@ -37,19 +39,32 @@ enum DirState {
     Failed,
 }
 
+/// Cached `exists`/`is_dir` for one path (`None` while the stat is in flight).
+#[derive(Clone, Copy)]
+struct StatInfo {
+    exists: bool,
+    is_dir: bool,
+}
+
 /// A pending RPC awaiting its `fs_result` reply.
 enum Pending {
+    /// Fill the listing cache + repaint.
     ListDir(PathBuf),
-    ReadFile(SyncSender<Result<String, String>>),
+    /// Fill the stat cache + repaint.
+    Stat(PathBuf),
+    /// Deliver the whole reply to a blocked caller.
+    Reply(SyncSender<Value>),
 }
 
 /// Shared state behind a [`RemoteFs`]: the sidecar stdin (to send ops), the
-/// listing cache, and the in-flight request table. Filled by the stdout reader.
+/// listing/stat caches, and the in-flight request table. Filled by the stdout
+/// reader thread.
 pub struct RemoteState {
     stdin: Arc<Mutex<ChildStdin>>,
     ctx: egui::Context,
     next_id: AtomicU64,
     dirs: Mutex<HashMap<PathBuf, DirState>>,
+    stats: Mutex<HashMap<PathBuf, Option<StatInfo>>>,
     pending: Mutex<HashMap<u64, Pending>>,
 }
 
@@ -60,8 +75,13 @@ impl RemoteState {
             ctx,
             next_id: AtomicU64::new(1),
             dirs: Mutex::new(HashMap::new()),
+            stats: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
         })
+    }
+
+    fn next_id(&self) -> u64 {
+        self.next_id.fetch_add(1, Ordering::SeqCst)
     }
 
     fn send(&self, obj: Value) {
@@ -72,8 +92,8 @@ impl RemoteState {
         }
     }
 
-    /// Dispatch one `fs_result` line. Called from the stdout reader thread, so
-    /// it never runs on (and never blocks) the UI thread.
+    /// Dispatch one `fs_result` line. Runs on the stdout reader thread, so it
+    /// never blocks the UI thread.
     pub fn handle_result(&self, val: &Value) {
         let Some(id) = val.get("id").and_then(Value::as_u64) else {
             return;
@@ -92,27 +112,21 @@ impl RemoteState {
                 self.dirs.lock().unwrap().insert(path, state);
                 self.ctx.request_repaint();
             }
-            Pending::ReadFile(tx) => {
-                let result = if ok {
-                    Ok(val
-                        .get("content")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string())
-                } else {
-                    Err(val
-                        .get("error")
-                        .and_then(Value::as_str)
-                        .unwrap_or("remote read failed")
-                        .to_string())
+            Pending::Stat(path) => {
+                let info = StatInfo {
+                    exists: ok && val.get("exists").and_then(Value::as_bool).unwrap_or(false),
+                    is_dir: ok && val.get("is_dir").and_then(Value::as_bool).unwrap_or(false),
                 };
-                let _ = tx.send(result);
+                self.stats.lock().unwrap().insert(path, Some(info));
+                self.ctx.request_repaint();
+            }
+            Pending::Reply(tx) => {
+                let _ = tx.send(val.clone());
             }
         }
     }
 
-    /// Non-blocking: return the cached listing (empty while it loads), kicking
-    /// off a fetch on a cache miss. The reply triggers a repaint to refill.
+    /// Non-blocking: cached listing (empty while it loads); a miss fetches.
     fn list_dir(&self, path: &Path) -> Vec<DirEntry> {
         {
             let dirs = self.dirs.lock().unwrap();
@@ -127,8 +141,7 @@ impl RemoteState {
                         })
                         .collect();
                 }
-                // Pending or failed: show nothing this frame.
-                Some(_) => return Vec::new(),
+                Some(_) => return Vec::new(), // pending or failed
                 None => {}
             }
         }
@@ -136,7 +149,7 @@ impl RemoteState {
             .lock()
             .unwrap()
             .insert(path.to_path_buf(), DirState::Pending);
-        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let id = self.next_id();
         self.pending
             .lock()
             .unwrap()
@@ -145,24 +158,84 @@ impl RemoteState {
         Vec::new()
     }
 
-    /// Blocking (off the UI thread is fine -- the reply lands on the reader
-    /// thread): request a file's contents and wait, bounded by `READ_TIMEOUT`.
-    fn read_file(&self, path: &Path) -> io::Result<String> {
-        let (tx, rx) = sync_channel(1);
-        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+    /// Non-blocking: cached stat (defaults to absent while it loads).
+    fn stat(&self, path: &Path) -> StatInfo {
+        {
+            let stats = self.stats.lock().unwrap();
+            match stats.get(path) {
+                Some(Some(info)) => return *info,
+                Some(None) => {
+                    return StatInfo {
+                        exists: false,
+                        is_dir: false,
+                    };
+                }
+                None => {}
+            }
+        }
+        self.stats.lock().unwrap().insert(path.to_path_buf(), None);
+        let id = self.next_id();
         self.pending
             .lock()
             .unwrap()
-            .insert(id, Pending::ReadFile(tx));
-        self.send(json!({ "op": "fs_read_file", "id": id, "path": path.to_string_lossy() }));
-        match rx.recv_timeout(READ_TIMEOUT) {
-            Ok(Ok(content)) => Ok(content),
-            Ok(Err(e)) => Err(io::Error::other(e)),
+            .insert(id, Pending::Stat(path.to_path_buf()));
+        self.send(json!({ "op": "fs_stat", "id": id, "path": path.to_string_lossy() }));
+        StatInfo {
+            exists: false,
+            is_dir: false,
+        }
+    }
+
+    /// Blocking: send an op and wait for its reply `Value` (bounded by
+    /// `OP_TIMEOUT`). Safe on the UI thread -- the reply lands on the reader.
+    fn call(&self, op: &str, extra: Value) -> Result<Value, String> {
+        let id = self.next_id();
+        let mut obj = match extra {
+            Value::Object(m) => m,
+            _ => Map::new(),
+        };
+        obj.insert("op".into(), json!(op));
+        obj.insert("id".into(), json!(id));
+        let (tx, rx) = sync_channel(1);
+        self.pending.lock().unwrap().insert(id, Pending::Reply(tx));
+        self.send(Value::Object(obj));
+        match rx.recv_timeout(OP_TIMEOUT) {
+            Ok(v) => Ok(v),
             Err(_) => {
                 self.pending.lock().unwrap().remove(&id);
-                Err(io::Error::other("remote read timed out"))
+                Err("remote operation timed out".to_string())
             }
         }
+    }
+
+    /// A blocking op whose reply we only check for ok/error.
+    fn call_unit(&self, op: &str, extra: Value) -> io::Result<()> {
+        let reply = self.call(op, extra).map_err(io::Error::other)?;
+        reply_ok(&reply)
+    }
+
+    fn read_file(&self, path: &Path) -> io::Result<String> {
+        let reply = self
+            .call("fs_read_file", json!({ "path": path.to_string_lossy() }))
+            .map_err(io::Error::other)?;
+        if reply.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+            Ok(reply
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string())
+        } else {
+            Err(io::Error::other(reply_error(&reply)))
+        }
+    }
+
+    /// Drop a directory from the listing cache (so it re-fetches) + repaint.
+    fn invalidate(&self, dir: Option<&Path>) {
+        if let Some(dir) = dir {
+            self.dirs.lock().unwrap().remove(dir);
+            self.stats.lock().unwrap().remove(dir);
+        }
+        self.ctx.request_repaint();
     }
 }
 
@@ -184,8 +257,25 @@ fn parse_entries(val: &Value) -> Vec<(String, bool)> {
         .collect()
 }
 
-/// A [`WorkspaceFs`] backed by a remote sidecar over RPC. Read-only for now;
-/// mutations return an error until remote editing lands.
+/// The error string from a failed reply (or a generic fallback).
+fn reply_error(reply: &Value) -> String {
+    reply
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or("remote operation failed")
+        .to_string()
+}
+
+/// Turn an ok/error reply into a unit `io::Result`.
+fn reply_ok(reply: &Value) -> io::Result<()> {
+    if reply.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(io::Error::other(reply_error(reply)))
+    }
+}
+
+/// A [`WorkspaceFs`] backed by a remote sidecar over RPC.
 pub struct RemoteFs {
     state: Arc<RemoteState>,
 }
@@ -196,39 +286,75 @@ impl RemoteFs {
     }
 }
 
-fn unsupported() -> io::Error {
-    io::Error::other("editing remote files isn't supported yet")
-}
-
 impl WorkspaceFs for RemoteFs {
     fn read_to_string(&self, path: &Path) -> io::Result<String> {
         self.state.read_file(path)
     }
-    fn write(&self, _path: &Path, _contents: &[u8]) -> io::Result<()> {
-        Err(unsupported())
+
+    fn write(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
+        let text = String::from_utf8_lossy(contents);
+        self.state.call_unit(
+            "fs_write_file",
+            json!({ "path": path.to_string_lossy(), "content": text }),
+        )
     }
+
     fn read_dir(&self, path: &Path) -> io::Result<Vec<DirEntry>> {
         Ok(self.state.list_dir(path))
     }
-    fn create_dir(&self, _path: &Path) -> io::Result<()> {
-        Err(unsupported())
+
+    fn create_dir(&self, path: &Path) -> io::Result<()> {
+        let r = self
+            .state
+            .call_unit("fs_mkdir", json!({ "path": path.to_string_lossy() }));
+        if r.is_ok() {
+            self.state.invalidate(path.parent());
+        }
+        r
     }
-    fn create_file(&self, _path: &Path) -> io::Result<()> {
-        Err(unsupported())
+
+    fn create_file(&self, path: &Path) -> io::Result<()> {
+        let r = self
+            .state
+            .call_unit("fs_create_file", json!({ "path": path.to_string_lossy() }));
+        if r.is_ok() {
+            self.state.invalidate(path.parent());
+        }
+        r
     }
-    fn remove_file(&self, _path: &Path) -> io::Result<()> {
-        Err(unsupported())
+
+    fn remove_file(&self, path: &Path) -> io::Result<()> {
+        // The sidecar auto-detects file vs dir, so both removes map here.
+        let r = self
+            .state
+            .call_unit("fs_remove", json!({ "path": path.to_string_lossy() }));
+        if r.is_ok() {
+            self.state.invalidate(path.parent());
+        }
+        r
     }
-    fn remove_dir_all(&self, _path: &Path) -> io::Result<()> {
-        Err(unsupported())
+
+    fn remove_dir_all(&self, path: &Path) -> io::Result<()> {
+        self.remove_file(path)
     }
-    fn rename(&self, _from: &Path, _to: &Path) -> io::Result<()> {
-        Err(unsupported())
+
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        let r = self.state.call_unit(
+            "fs_rename",
+            json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() }),
+        );
+        if r.is_ok() {
+            self.state.invalidate(from.parent());
+            self.state.invalidate(to.parent());
+        }
+        r
     }
-    fn exists(&self, _path: &Path) -> bool {
-        false
+
+    fn exists(&self, path: &Path) -> bool {
+        self.state.stat(path).exists
     }
-    fn is_dir(&self, _path: &Path) -> bool {
-        false
+
+    fn is_dir(&self, path: &Path) -> bool {
+        self.state.stat(path).is_dir
     }
 }

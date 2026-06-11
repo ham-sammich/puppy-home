@@ -207,33 +207,26 @@ impl Workspace {
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(format!("🗂 {}", self.name)).strong());
-                        // Creating files/folders isn't supported on remote yet.
-                        if self.remote_label.is_none() {
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if ui
-                                        .small_button("+ Folder")
-                                        .on_hover_text("New folder in the project root")
-                                        .clicked()
-                                    {
-                                        acts.new_in = Some((self.root.clone(), true));
-                                    }
-                                    if ui
-                                        .small_button("+ File")
-                                        .on_hover_text("New file in the project root")
-                                        .clicked()
-                                    {
-                                        acts.new_in = Some((self.root.clone(), false));
-                                    }
-                                },
-                            );
-                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .small_button("+ Folder")
+                                .on_hover_text("New folder in the project root")
+                                .clicked()
+                            {
+                                acts.new_in = Some((self.root.clone(), true));
+                            }
+                            if ui
+                                .small_button("+ File")
+                                .on_hover_text("New file in the project root")
+                                .clicked()
+                            {
+                                acts.new_in = Some((self.root.clone(), false));
+                            }
+                        });
                     });
                     if let Some(label) = &self.remote_label {
-                        // Remote workspace: tree + editor read over SSH (read-only
-                        // for now -- git + editing land next).
-                        ui.weak(format!("\u{1f517} {label} \u{00b7} read-only"));
+                        // Remote workspace: tree + editor work over SSH.
+                        ui.weak(format!("\u{1f517} {label}"));
                     }
                     ui.separator();
                     egui::ScrollArea::vertical()
