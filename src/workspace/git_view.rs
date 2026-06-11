@@ -290,136 +290,160 @@ impl Workspace {
         }
         ui.separator();
 
-        // Commit box.
-        ui.add(
-            egui::TextEdit::multiline(&mut self.commit_msg)
-                .id_salt(("commit-msg", id))
-                .desired_rows(2)
-                .desired_width(f32::INFINITY)
-                .hint_text("Commit message…"),
-        );
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(can_commit, egui::Button::new("✓ Commit"))
-                .on_hover_text(if staged.is_empty() {
-                    "Stage something first"
-                } else {
-                    "Commit staged changes"
-                })
-                .clicked()
-            {
-                do_commit = true;
-            }
-            ui.label(
-                egui::RichText::new(format!("{} staged", staged.len()))
-                    .weak()
-                    .small(),
-            );
-        });
-        ui.separator();
-
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .max_height(ui.available_height() * 0.5)
-            .id_salt(("git-stage-scroll", id))
-            .show(ui, |ui| {
-                // Staged.
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(format!("Staged ({})", staged.len())).strong());
-                    if !staged.is_empty() && ui.small_button("Unstage all").clicked() {
-                        do_unstage_all = true;
-                    }
-                });
-                if staged.is_empty() {
-                    ui.weak("Nothing staged.");
-                }
-                for (path, marker) in &staged {
+        // Commit message area — drag its bottom edge to give the box more room
+        // (so it never clips on a short window).
+        egui::Panel::top(egui::Id::new(("git-commit", id)))
+            .resizable(true)
+            .min_size(52.0)
+            .default_size(74.0)
+            .show_inside(ui, |ui| {
+                ui.add_space(4.0);
+                // Button row pinned to the bottom; the message box fills above it.
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                     ui.horizontal(|ui| {
-                        if ui.small_button("−").on_hover_text("Unstage").clicked() {
-                            unstage_path = Some(path.clone());
-                        }
-                        ui.colored_label(marker_color(*marker), marker.to_string());
                         if ui
-                            .selectable_label(false, file_name(path))
-                            .on_hover_text(path)
+                            .add_enabled(can_commit, egui::Button::new("✓ Commit"))
+                            .on_hover_text(if staged.is_empty() {
+                                "Stage something first"
+                            } else {
+                                "Commit staged changes"
+                            })
                             .clicked()
                         {
-                            diff_click = Some((path.clone(), *marker));
+                            do_commit = true;
                         }
+                        ui.label(
+                            egui::RichText::new(format!("{} staged", staged.len()))
+                                .weak()
+                                .small(),
+                        );
                     });
-                }
-
-                ui.add_space(6.0);
-
-                // Unstaged / untracked.
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(format!("Changes ({})", unstaged.len())).strong());
-                    if !unstaged.is_empty() && ui.small_button("Stage all").clicked() {
-                        do_stage_all = true;
-                    }
+                    ui.add_space(4.0);
+                    let box_h = ui.available_height();
+                    ui.add_sized(
+                        egui::vec2(ui.available_width(), box_h),
+                        egui::TextEdit::multiline(&mut self.commit_msg)
+                            .id_salt(("commit-msg", id))
+                            .desired_width(f32::INFINITY)
+                            .hint_text("Commit message…"),
+                    );
                 });
-                if unstaged.is_empty() {
-                    ui.weak("No unstaged changes.");
-                }
-                for (path, marker) in &unstaged {
-                    ui.horizontal(|ui| {
-                        if ui.small_button("+").on_hover_text("Stage").clicked() {
-                            stage_path = Some(path.clone());
-                        }
-                        ui.colored_label(marker_color(*marker), marker.to_string());
-                        if ui
-                            .selectable_label(false, file_name(path))
-                            .on_hover_text(path)
-                            .clicked()
-                        {
-                            diff_click = Some((path.clone(), *marker));
-                        }
-                    });
-                }
             });
 
-        ui.add_space(6.0);
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("History").strong());
-            ui.label(
-                egui::RichText::new(if self.git_show_graph {
-                    "(graph — all branches)"
-                } else {
-                    "(current branch)"
-                })
-                .weak()
-                .small(),
-            );
-        });
-
-        if self.git_show_graph {
-            // GitKraken-style commit tree (owns its own scroll area).
-            self.render_graph(ui);
-        } else {
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .id_salt(("git-log-scroll", id))
-                .show(ui, |ui| {
-                    for c in &log {
+        // Staged + changed files — drag its bottom edge to resize the list.
+        egui::Panel::top(egui::Id::new(("git-stage", id)))
+            .resizable(true)
+            .min_size(64.0)
+            .default_size(190.0)
+            .show_inside(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .id_salt(("git-stage-scroll", id))
+                    .show(ui, |ui| {
+                        // Staged.
                         ui.horizontal(|ui| {
                             ui.label(
-                                egui::RichText::new(&c.short)
-                                    .monospace()
-                                    .small()
-                                    .color(egui::Color32::from_rgb(180, 150, 220)),
+                                egui::RichText::new(format!("Staged ({})", staged.len())).strong(),
                             );
-                            if ui
-                                .selectable_label(false, &c.subject)
-                                .on_hover_text(format!("{} · {}", c.author, c.when))
-                                .clicked()
-                            {
-                                commit_click = Some(c.clone());
+                            if !staged.is_empty() && ui.small_button("Unstage all").clicked() {
+                                do_unstage_all = true;
                             }
                         });
-                    }
-                });
-        }
+                        if staged.is_empty() {
+                            ui.weak("Nothing staged.");
+                        }
+                        for (path, marker) in &staged {
+                            ui.horizontal(|ui| {
+                                if ui.small_button("−").on_hover_text("Unstage").clicked() {
+                                    unstage_path = Some(path.clone());
+                                }
+                                ui.colored_label(marker_color(*marker), marker.to_string());
+                                if ui
+                                    .selectable_label(false, file_name(path))
+                                    .on_hover_text(path)
+                                    .clicked()
+                                {
+                                    diff_click = Some((path.clone(), *marker));
+                                }
+                            });
+                        }
+
+                        ui.add_space(6.0);
+
+                        // Unstaged / untracked.
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("Changes ({})", unstaged.len()))
+                                    .strong(),
+                            );
+                            if !unstaged.is_empty() && ui.small_button("Stage all").clicked() {
+                                do_stage_all = true;
+                            }
+                        });
+                        if unstaged.is_empty() {
+                            ui.weak("No unstaged changes.");
+                        }
+                        for (path, marker) in &unstaged {
+                            ui.horizontal(|ui| {
+                                if ui.small_button("+").on_hover_text("Stage").clicked() {
+                                    stage_path = Some(path.clone());
+                                }
+                                ui.colored_label(marker_color(*marker), marker.to_string());
+                                if ui
+                                    .selectable_label(false, file_name(path))
+                                    .on_hover_text(path)
+                                    .clicked()
+                                {
+                                    diff_click = Some((path.clone(), *marker));
+                                }
+                            });
+                        }
+                    });
+            });
+
+        // History fills the remaining space below the resizable sections.
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("History").strong());
+                ui.label(
+                    egui::RichText::new(if self.git_show_graph {
+                        "(graph — all branches)"
+                    } else {
+                        "(current branch)"
+                    })
+                    .weak()
+                    .small(),
+                );
+            });
+
+            if self.git_show_graph {
+                // GitKraken-style commit tree (owns its own scroll area).
+                self.render_graph(ui);
+            } else {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .id_salt(("git-log-scroll", id))
+                    .show(ui, |ui| {
+                        for c in &log {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(&c.short)
+                                        .monospace()
+                                        .small()
+                                        .color(egui::Color32::from_rgb(180, 150, 220)),
+                                );
+                                if ui
+                                    .selectable_label(false, &c.subject)
+                                    .on_hover_text(format!("{} · {}", c.author, c.when))
+                                    .clicked()
+                                {
+                                    commit_click = Some(c.clone());
+                                }
+                            });
+                        }
+                    });
+            }
+        });
 
         // Apply deferred actions.
         if do_refresh {
