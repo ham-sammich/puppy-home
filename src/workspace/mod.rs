@@ -139,6 +139,17 @@ pub struct Workspace {
     pub skills_generation: u64,
     /// The most recent `skill_detail` answer (the Skills tab's detail pane).
     pub skill_detail: Option<crate::backend::SkillDetail>,
+    /// Agent catalog (JSON-editable + built-in), fetched via this sidecar.
+    /// `None` until the first `agent_configs` event.
+    pub agent_configs: Option<Vec<crate::backend::AgentConfigInfo>>,
+    /// Bumped on every `agent_configs` event so views drop optimistic state.
+    pub agent_configs_generation: u64,
+    /// Available tool names for the visual builder (from `agent_configs`).
+    pub agent_tool_catalog: Vec<String>,
+    /// Available MCP server names for agent bindings (from `agent_configs`).
+    pub agent_mcp_catalog: Vec<String>,
+    /// The most recent `agent_config` answer (the Agent tab's detail pane).
+    pub agent_config_detail: Option<crate::backend::AgentConfigDetail>,
     status_req_at: Instant,
     md_cache: CommonMarkCache,
     // changes: Code-Puppy-reported diffs (fallback for non-git folders) + the
@@ -257,6 +268,11 @@ impl Workspace {
             skills: None,
             skills_generation: 0,
             skill_detail: None,
+            agent_configs: None,
+            agent_configs_generation: 0,
+            agent_tool_catalog: Vec::new(),
+            agent_mcp_catalog: Vec::new(),
+            agent_config_detail: None,
             status_req_at: Instant::now(),
             md_cache: CommonMarkCache::default(),
             diffs: Vec::new(),
@@ -558,6 +574,19 @@ impl Workspace {
             }
             UiEvent::SkillDetail(detail) => {
                 self.skill_detail = Some(detail);
+            }
+            UiEvent::AgentConfigs {
+                items,
+                available_tools,
+                available_mcp,
+            } => {
+                self.agent_configs = Some(items);
+                self.agent_tool_catalog = available_tools;
+                self.agent_mcp_catalog = available_mcp;
+                self.agent_configs_generation += 1;
+            }
+            UiEvent::AgentConfigDetail(detail) => {
+                self.agent_config_detail = Some(detail);
             }
             UiEvent::Exited { code } => {
                 self.ready = false;

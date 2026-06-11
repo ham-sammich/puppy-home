@@ -1,8 +1,8 @@
 # Handoff Notes — Device Switch
 
-Date: 2026-06-11
+Date: 2026-06-11 (updated after Increment 3 + macOS bring-up)
 Branch: feature/browser-plugin
-State: 106 tests green, zero warnings, zero clippy lints, cargo fmt clean
+State: 115 tests green, zero warnings, zero clippy lints, cargo fmt clean
 Coordinator: planning-agent-8a6233 / executor: code-puppy
 Agent session ids used so far: code-puppy increments under session
 "phase-c-mcp-manager"; plan updates under "plan-update-2026-06-11".
@@ -18,6 +18,30 @@ the new HEAD):
 - b93e86d — feat(mcp): MCP Manager end-to-end (Phase C increment 1; also carried
   the reconciled .claude/claude_plan.md)
 
+## Running on macOS (NEW 2026-06-11 — first Mac session)
+
+This project now builds + runs on Apple Silicon. Setup that worked on
+Jacobs-MacBook-Air (repo at /Users/jacob/dev/puppy-home):
+
+- brew + uv were already installed; Rust was NOT. Installed with:
+  `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y`
+  (got rustc/cargo 1.96.0, aarch64-apple-darwin). In a non-login shell you
+  must `source "$HOME/.cargo/env"` before cargo is on PATH.
+- Build the app only (skips the heavy wry browser plugin):
+  `cargo build -p puppy-home`. Tests: `cargo test -p puppy-home`.
+- Run: the backend's resolve_launch() auto-provisions via
+  `uv run --with code-puppy` when uv is present, so the app JUST WORKS with no
+  env var. For a deterministic version matching your own code-puppy, set
+  `PUPPY_HOME_CP_CMD="$(which python3)"` from inside the code-puppy venv, then
+  `./target/debug/puppy-home`. A real Aqua-session window opens (verified via
+  osascript). On Mac there's no LOCALAPPDATA, so app_data_dir() falls back to
+  $TMPDIR/puppy-home (sidecar.py extracted there).
+- Force-kill a locked/running binary (Mac analogue of taskkill):
+  `pkill -9 -f target/debug/puppy-home`.
+- Verification standing order on Mac: drive sidecar.py headlessly over stdio
+  (spawn `python3 sidecar/sidecar.py`, write JSON ops, read JSON events) +
+  `cargo test`. GUI screenshots remain unreliable.
+
 ## Where we are
 
 Executing the "New feature roadmap (2026-06-11)" in .claude/claude_plan.md,
@@ -30,26 +54,49 @@ id `phase-c-mcp-manager` (code-puppy does the hands-on work).
 - Increment 2 — Skills Manager — DONE (e7291f5): sidecar ops list_skills /
   get_skill / set_skill_enabled / save_skill, src/views/skills_manager.rs +
   skills_wizard.rs + views/common.rs (shared helpers), top-bar Skills button.
-- Test suite: 106 tests green, zero warnings, zero clippy lints, fmt clean.
+- Increment 3 — Agent Manager + visual builder — DONE (uncommitted as of this
+  edit; see below): sidecar ops list_agent_configs / get_agent_config /
+  save_agent_config / delete_agent_config / clone_agent_config (wrapping
+  code-puppy's json_agent + agent_manager APIs). New src/views/agent_manager.rs
+  (panel) + agent_wizard.rs (4-step visual builder: Basics, Prompt, Tools,
+  Review). Top-bar "Agents" button -> dockable Tab::AgentManager. Built-in
+  Python agents shown read-only with a Clone-to-editable-JSON button; JSON
+  agents are editable + deletable (with an inline delete confirmation; can't
+  delete the active agent). Builder covers name/display_name/description/model/
+  system_prompt/user_prompt/tool-multiselect/MCP-bindings; the Review step
+  renders the exact on-disk JSON (compose_preview mirrors the sidecar's
+  json.dumps insertion order + optional-field omission, unit-tested). All 5
+  ops verified headlessly against real code-puppy (list/get/save/delete +
+  clone roundtrip). 115 tests green, zero warnings, zero clippy, fmt clean.
+- Test suite: 115 tests green, zero warnings, zero clippy lints, fmt clean.
 
 ## Next up
 
-Increment 3 — Agent Manager + visual guided agent builder:
+Phase C's three managers (MCP, Skills, Agent) are all DONE. Next is **Phase D**:
 
-- New sidecar ops: list_agent_configs / get_agent_config / save_agent_config /
-  delete_agent_config, wrapping code-puppy's JSON agent configs
-  (sidecar/sidecar.py + src/backend/protocol.rs wires).
-- New panel: src/views/agent_manager.rs + builder wizard covering name / model /
-  system prompt / tool selection, following the same dockable Tab + top-bar
-  button pattern as mcp_manager.rs / skills_manager.rs. Reuse the shared
-  helpers in src/views/common.rs. Keep the wizard in its own file from day one
-  (see skills_wizard.rs precedent).
+- Right-side dock zone the managers (MCP/Skills/Agent), perf HUD, and future
+  Puppy Pack chat can be dragged into/out of via egui_dock.
+- Land dock-layout persistence: persist the egui_dock split layout in
+  session.json (not just the open set). Needs runtime workspace-id remapping on
+  restore (the WorkspaceId in saved Tabs won't match freshly-spawned ones).
 
-After Phase C: Phase D (right sidebar dock + dock-layout persistence with
-workspace-id remapping), then Phase A (SSH remote sidecar), then Phase B
-(Puppy Pack). Full details and risks live in .claude/claude_plan.md.
+After Phase D: Phase A (SSH remote sidecar; WorkspaceFs trait refactor first),
+then Phase B (Puppy Pack). Full details and risks live in
+.claude/claude_plan.md.
 
 ## Open items / tech debt (from last increment reports)
+
+- Agent Manager (inc. 3): MCP bindings are saved as a plain name list
+  (shorthand -> auto_start=true). code-puppy also supports the dict form with
+  per-server auto_start; a future toggle could expose it. Also: save/delete
+  errors surface in the chat transcript, not the Agent panel (same gap as
+  add_mcp_server, below). Cloning a JSON agent that lives in a project dir
+  still clones into the USER agents dir (code-puppy's clone_agent behaviour) —
+  fine for now.
+- agent_wizard.rs is 587 lines (close to the 600 budget). If it grows, split
+  the per-step renderers (step_basics/step_prompt/step_tools/step_review) into
+  an agent_wizard_steps.rs.
+
 
 - src/views/mcp_manager.rs is 651 lines (over the 600-line budget). Extract its
   add-server wizard into mcp_wizard.rs (mirror skills_wizard.rs) on next touch.

@@ -706,6 +706,296 @@ class Bridge:
             return
         self.emit_skills()
 
+    # --- Agent configs (Code Puppy JSON agents) -----------------------------
+
+    @staticmethod
+    def _valid_agent_name(name: str) -> bool:
+        """Alphanumeric plus - and _ only: blocks path traversal by shape."""
+        return bool(name) and all(c.isalnum() or c in "-_" for c in name)
+
+    @staticmethod
+    def _discover_json_paths() -> dict:
+        """Map agent name -> JSON file path for editable JSON agents."""
+        try:
+            from code_puppy.agents.json_agent import discover_json_agents
+            return discover_json_agents()
+        except Exception:
+            log("json agent discovery failed:\n" + traceback.format_exc())
+            return {}
+
+    @staticmethod
+    def _classify_agent_source(path) -> str:
+        """user / project, by which agents directory the JSON file lives in."""
+        from pathlib import Path
+        from code_puppy.config import (
+            get_project_agents_directory,
+            get_user_agents_directory,
+        )
+        p = Path(path).resolve()
+        try:
+            if p.parent == Path(get_user_agents_directory()).resolve():
+                return "user"
+        except Exception:
+            pass
+        proj = get_project_agents_directory()
+        if proj:
+            try:
+                if p.parent == Path(proj).resolve():
+                    return "project"
+            except Exception:
+                pass
+        return "user"
+
+    @staticmethod
+    def _available_tool_names() -> list:
+        """Sorted list of built-in tool names an agent may enable."""
+        try:
+            from code_puppy.tools import get_available_tool_names
+            return sorted(get_available_tool_names())
+        except Exception:
+            return []
+
+    def _available_mcp_names(self) -> list:
+        """Sorted list of registered MCP server names (for bindings)."""
+        try:
+            return sorted(i.name for i in self._mcp_manager().list_servers())
+        except Exception:
+            return []
+
+    def emit_agent_configs(self) -> None:
+        """Send the agent catalog (JSON-editable + read-only built-ins)."""
+        items = []
+        try:
+            from code_puppy.agents.agent_manager import (
+                get_agent_descriptions,
+                get_available_agents,
+                refresh_agents,
+            )
+            refresh_agents()
+            available = get_available_agents()      # {name: display_name}
+            descriptions = get_agent_descriptions()
+            json_paths = self._discover_json_paths()
+            current = getattr(self.agent, "name", None)
+            for name, display in sorted(
+                    available.items(), key=lambda kv: kv[1].lower()):
+                path = json_paths.get(name)
+                model = ""
+                tool_count = 0
+                if path:
+                    try:
+                        with open(path, "r", encoding="utf-8") as f:
+                            cfg = json.load(f)
+                        model = str(cfg.get("model") or "")
+                        tools = cfg.get("tools")
+                        tool_count = len(tools) if isinstance(tools, list) else 0
+                    except Exception:
+                        pass
+                items.append({
+                    "name": name,
+                    "display_name": display,
+                    "description": descriptions.get(name, ""),
+                    "model": model,
+                    "tool_count": tool_count,
+                    "source": self._classify_agent_source(path) if path else "builtin",
+                    "editable": path is not None,
+                    "path": path or "",
+                    "current": name == current,
+                })
+        except Exception:
+            log("agent config enumeration failed:\n" + traceback.format_exc())
+        send({
+            "event": "agent_configs",
+            "items": items,
+            "available_tools": self._available_tool_names(),
+            "available_mcp": self._available_mcp_names(),
+        })
+
+    def get_agent_config(self, name: str) -> None:
+        """Send one agent's full config (agent_config event).
+
+        Editable JSON agents are read straight off disk; built-in (Python)
+        agents are instantiated and their authored fields surfaced read-only.
+        """
+        name = str(name or "").strip()
+        try:
+            from code_puppy.agents.agent_manager import (
+                _AGENT_REGISTRY,
+                refresh_agents,
+            )
+            refresh_agents()
+            ref = _AGENT_REGISTRY.get(name)
+            if ref is None:
+                send({"event": "error", "id": None,
+                      "message": f"unknown agent: {name}"})
+                return
+            path = self._discover_json_paths().get(name)
+            if path:
+                with open(path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                source = self._classify_agent_source(path)
+                editable = True
+            else:
+                inst = ref() if not isinstance(ref, str) else None
+                cfg = {
+                    "name": name,
+                    "display_name": getattr(inst, "display_name", name),
+                    "description": getattr(inst, "description", ""),
+                    "system_prompt": inst.get_system_prompt() if inst else "",
+                    "tools": inst.get_available_tools() if inst else [],
+                }
+                source = "builtin"
+                editable = False
+            system_prompt = cfg.get("system_prompt", "")
+            if isinstance(system_prompt, list):
+                system_prompt = "\n".join(str(s) for s in system_prompt)
+            raw_tools = cfg.get("tools")
+            tools = [str(t) for t in raw_tools] if isinstance(raw_tools, list) else []
+            raw_mcp = cfg.get("mcp_servers")
+            if isinstance(raw_mcp, list):
+                mcp_servers = [str(s) for s in raw_mcp]
+            elif isinstance(raw_mcp, dict):
+                mcp_servers = [str(s) for s in raw_mcp.keys()]
+            else:
+                mcp_servers = []
+            user_prompt = cfg.get("user_prompt")
+            send({
+                "event": "agent_config",
+                "name": name,
+                "display_name": str(cfg.get("display_name") or ""),
+                "description": str(cfg.get("description") or ""),
+                "system_prompt": str(system_prompt or ""),
+                "user_prompt": user_prompt if user_prompt is None else str(user_prompt),
+                "model": str(cfg.get("model") or ""),
+                "tools": tools,
+                "mcp_servers": mcp_servers,
+                "editable": editable,
+                "source": source,
+                "path": path or "",
+                "content": json.dumps(cfg, indent=2, ensure_ascii=False),
+            })
+        except Exception as exc:
+            send({"event": "error", "id": None,
+                  "message": f"get_agent_config failed: "
+                             f"{type(exc).__name__}: {exc}"})
+            log(traceback.format_exc())
+
+    def save_agent_config(self, cmd: dict) -> None:
+        """Create or overwrite <agents dir>/<name>.json, then re-list.
+
+        scope "user" -> ~/.code_puppy/agents, "project" -> ./.code_puppy/agents
+        (both are discovery directories, so the agent is live immediately).
+        """
+        from pathlib import Path
+        name = str(cmd.get("name") or "").strip()
+        if not self._valid_agent_name(name):
+            send({"event": "error", "id": None,
+                  "message": "save_agent_config: name must be alphanumeric "
+                             "(hyphens and underscores allowed)"})
+            return
+        scope = str(cmd.get("scope") or "user").strip().lower()
+        if scope not in ("user", "project"):
+            send({"event": "error", "id": None,
+                  "message": f"save_agent_config: invalid scope {scope!r} "
+                             "(expected user or project)"})
+            return
+        description = str(cmd.get("description") or "").strip()
+        if not description:
+            send({"event": "error", "id": None,
+                  "message": "save_agent_config: a description is required"})
+            return
+        tools = cmd.get("tools")
+        if not isinstance(tools, list):
+            tools = []
+        config = {
+            "name": name,
+            "description": description,
+            "system_prompt": str(cmd.get("system_prompt") or ""),
+            "tools": [str(t) for t in tools],
+        }
+        display_name = str(cmd.get("display_name") or "").strip()
+        if display_name:
+            config["display_name"] = display_name
+        model = str(cmd.get("model") or "").strip()
+        if model:
+            config["model"] = model
+        user_prompt = cmd.get("user_prompt")
+        if user_prompt is not None and str(user_prompt).strip():
+            config["user_prompt"] = str(user_prompt)
+        mcp = cmd.get("mcp_servers")
+        if isinstance(mcp, list) and mcp:
+            config["mcp_servers"] = [str(s) for s in mcp]
+        try:
+            from code_puppy.config import get_user_agents_directory
+            if scope == "user":
+                base = Path(get_user_agents_directory())
+            else:
+                base = Path.cwd() / ".code_puppy" / "agents"
+            base.mkdir(parents=True, exist_ok=True)
+            (base / f"{name}.json").write_text(
+                json.dumps(config, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            from code_puppy.agents.agent_manager import refresh_agents
+            refresh_agents()
+        except Exception as exc:
+            send({"event": "error", "id": None,
+                  "message": f"save_agent_config failed: "
+                             f"{type(exc).__name__}: {exc}"})
+            log(traceback.format_exc())
+            return
+        self.emit_agent_configs()
+
+    def delete_agent_config(self, name: str) -> None:
+        """Delete a JSON agent file (user/project only), then re-list."""
+        from pathlib import Path
+        name = str(name or "").strip()
+        path = self._discover_json_paths().get(name)
+        if not path:
+            send({"event": "error", "id": None,
+                  "message": f"delete_agent_config: {name!r} is not an "
+                             "editable JSON agent"})
+            return
+        if getattr(self.agent, "name", None) == name:
+            send({"event": "error", "id": None,
+                  "message": "delete_agent_config: cannot delete the active "
+                             "agent; switch agents first"})
+            return
+        try:
+            Path(path).unlink()
+            from code_puppy.agents.agent_manager import (
+                _AGENT_REGISTRY,
+                refresh_agents,
+            )
+            _AGENT_REGISTRY.pop(name, None)
+            refresh_agents()
+        except Exception as exc:
+            send({"event": "error", "id": None,
+                  "message": f"delete_agent_config failed: "
+                             f"{type(exc).__name__}: {exc}"})
+            log(traceback.format_exc())
+            return
+        self.emit_agent_configs()
+
+    def clone_agent_config(self, name: str) -> None:
+        """Clone an agent (built-in or JSON) into a user JSON copy, re-list."""
+        name = str(name or "").strip()
+        try:
+            from code_puppy.agents.agent_manager import (
+                clone_agent,
+                refresh_agents,
+            )
+            new_name = clone_agent(name)
+            refresh_agents()
+            if not new_name:
+                send({"event": "error", "id": None,
+                      "message": f"clone_agent_config: clone failed for {name!r}"})
+        except Exception as exc:
+            send({"event": "error", "id": None,
+                  "message": f"clone_agent_config failed: "
+                             f"{type(exc).__name__}: {exc}"})
+            log(traceback.format_exc())
+        self.emit_agent_configs()
+
     # --- Code Puppy sessions (autosave + named contexts) --------------------
 
     def set_puppy_name(self, name: str) -> None:
@@ -1365,6 +1655,16 @@ class Bridge:
                                    bool(cmd.get("enabled", False)))
         elif op == "save_skill":
             self.save_skill(cmd)
+        elif op == "list_agent_configs":
+            self.emit_agent_configs()
+        elif op == "get_agent_config":
+            self.get_agent_config(cmd.get("name", ""))
+        elif op == "save_agent_config":
+            self.save_agent_config(cmd)
+        elif op == "delete_agent_config":
+            self.delete_agent_config(cmd.get("name", ""))
+        elif op == "clone_agent_config":
+            self.clone_agent_config(cmd.get("name", ""))
         elif op == "shutdown":
             self._stop.set()
             self.loop.call_soon_threadsafe(self.loop.stop)

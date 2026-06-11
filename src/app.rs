@@ -38,6 +38,8 @@ pub struct PuppyApp {
     mcp: crate::views::mcp_manager::McpManagerView,
     /// State for the Skills Manager tab (one instance).
     skills: crate::views::skills_manager::SkillsManagerView,
+    /// State for the Agent Manager tab (one instance).
+    agents: crate::views::agent_manager::AgentManagerView,
 }
 
 /// Snapshot the open workspaces as a persistable session.
@@ -142,6 +144,7 @@ impl PuppyApp {
             perf: crate::perf::PerfStats::default(),
             mcp: crate::views::mcp_manager::McpManagerView::default(),
             skills: crate::views::skills_manager::SkillsManagerView::default(),
+            agents: crate::views::agent_manager::AgentManagerView::default(),
         }
     }
 
@@ -276,6 +279,7 @@ impl eframe::App for PuppyApp {
         let mut open_browser = false;
         let mut open_mcp = false;
         let mut open_skills = false;
+        let mut open_agents = false;
         let mut pick_theme: Option<Theme> = None;
         let mut open_editor = false;
         let theme = self.theme.clone();
@@ -323,6 +327,13 @@ impl eframe::App for PuppyApp {
                     .clicked()
                 {
                     open_skills = true;
+                }
+                if ui
+                    .button("Agents")
+                    .on_hover_text("Manage Code Puppy's agents (visual builder)")
+                    .clicked()
+                {
+                    open_agents = true;
                 }
                 ui.label(egui::RichText::new(format!("{ws_count} workspace(s)")).weak());
                 if waiting > 0 {
@@ -396,6 +407,14 @@ impl eframe::App for PuppyApp {
                 dock.push_to_focused_leaf(Tab::SkillsManager);
             }
         }
+        if open_agents && let Some(dock) = self.dock.as_mut() {
+            // One instance: focus the existing tab if it's already open.
+            if let Some(path) = dock.find_tab_from(|t| matches!(t, Tab::AgentManager)) {
+                let _ = dock.set_active_tab(path);
+            } else {
+                dock.push_to_focused_leaf(Tab::AgentManager);
+            }
+        }
         if let Some(t) = pick_theme {
             self.theme = t;
             // Sync the editor buffer to the freshly-picked custom theme.
@@ -443,6 +462,7 @@ impl eframe::App for PuppyApp {
                 browser: &mut self.browser,
                 mcp: &mut self.mcp,
                 skills: &mut self.skills,
+                agents: &mut self.agents,
                 actions: &mut actions,
             };
             DockArea::new(&mut dock)

@@ -155,6 +155,77 @@ pub struct SkillDetail {
     pub content: String,
 }
 
+/// One agent in the catalog (answer to `list_agent_configs`). JSON agents are
+/// `editable`; built-in Python agents are read-only (clone them to edit).
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentConfigInfo {
+    pub name: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub tool_count: u64,
+    /// Where it lives: "user" | "project" | "builtin".
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub editable: bool,
+    #[serde(default)]
+    pub path: String,
+    /// True when this is the workspace's active agent (can't be deleted).
+    #[serde(default)]
+    pub current: bool,
+}
+
+/// One agent's full config (answer to `get_agent_config`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentConfigDetail {
+    pub name: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub system_prompt: String,
+    /// Optional custom user prompt (absent for most agents).
+    #[serde(default)]
+    pub user_prompt: Option<String>,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub tools: Vec<String>,
+    #[serde(default)]
+    pub mcp_servers: Vec<String>,
+    #[serde(default)]
+    pub editable: bool,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub path: String,
+    /// The pretty-printed JSON that lands on disk (review pane).
+    #[serde(default)]
+    pub content: String,
+}
+
+/// A draft agent config the visual builder sends to `save_agent_config`.
+/// Empty `model`/`user_prompt` are omitted from the on-disk JSON by the sidecar.
+#[derive(Debug, Clone, Default)]
+pub struct AgentConfigDraft {
+    pub name: String,
+    pub display_name: String,
+    pub description: String,
+    pub system_prompt: String,
+    pub user_prompt: String,
+    pub model: String,
+    pub tools: Vec<String>,
+    pub mcp_servers: Vec<String>,
+    /// "user" or "project".
+    pub scope: String,
+}
+
 /// A concurrent sub-agent Code Puppy spawned via `invoke_agent` (dashboard row).
 #[derive(Debug, Clone, Deserialize)]
 pub struct SubAgentInfo {
@@ -294,6 +365,15 @@ pub enum UiEvent {
     Skills(Vec<SkillInfo>),
     /// One skill's full SKILL.md content (answer to `get_skill`).
     SkillDetail(SkillDetail),
+    /// The agent catalog + tool/MCP option lists (answer to
+    /// `list_agent_configs`). The catalogs feed the visual builder.
+    AgentConfigs {
+        items: Vec<AgentConfigInfo>,
+        available_tools: Vec<String>,
+        available_mcp: Vec<String>,
+    },
+    /// One agent's full config (answer to `get_agent_config`).
+    AgentConfigDetail(AgentConfigDetail),
     /// The sidecar process exited.
     Exited { code: Option<i32> },
 }
@@ -430,6 +510,40 @@ enum Wire {
         #[serde(default)]
         content: String,
     },
+    AgentConfigs {
+        #[serde(default)]
+        items: Vec<AgentConfigInfo>,
+        #[serde(default)]
+        available_tools: Vec<String>,
+        #[serde(default)]
+        available_mcp: Vec<String>,
+    },
+    AgentConfig {
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        display_name: String,
+        #[serde(default)]
+        description: String,
+        #[serde(default)]
+        system_prompt: String,
+        #[serde(default)]
+        user_prompt: Option<String>,
+        #[serde(default)]
+        model: String,
+        #[serde(default)]
+        tools: Vec<String>,
+        #[serde(default)]
+        mcp_servers: Vec<String>,
+        #[serde(default)]
+        editable: bool,
+        #[serde(default)]
+        source: String,
+        #[serde(default)]
+        path: String,
+        #[serde(default)]
+        content: String,
+    },
 }
 
 impl From<Wire> for UiEvent {
@@ -521,6 +635,42 @@ impl From<Wire> for UiEvent {
             } => UiEvent::SkillDetail(SkillDetail {
                 name,
                 description,
+                path,
+                content,
+            }),
+            Wire::AgentConfigs {
+                items,
+                available_tools,
+                available_mcp,
+            } => UiEvent::AgentConfigs {
+                items,
+                available_tools,
+                available_mcp,
+            },
+            Wire::AgentConfig {
+                name,
+                display_name,
+                description,
+                system_prompt,
+                user_prompt,
+                model,
+                tools,
+                mcp_servers,
+                editable,
+                source,
+                path,
+                content,
+            } => UiEvent::AgentConfigDetail(AgentConfigDetail {
+                name,
+                display_name,
+                description,
+                system_prompt,
+                user_prompt,
+                model,
+                tools,
+                mcp_servers,
+                editable,
+                source,
                 path,
                 content,
             }),
@@ -741,6 +891,31 @@ impl CodePuppy {
     /// Create or overwrite a skill; the sidecar re-lists (or emits `Error`).
     pub fn save_skill(&self, name: &str, description: &str, content: &str, scope: &str) {
         self.write(protocol::save_skill(name, description, content, scope));
+    }
+
+    /// Ask the sidecar for the agent catalog (`AgentConfigs` event).
+    pub fn list_agent_configs(&self) {
+        self.write(protocol::list_agent_configs());
+    }
+
+    /// Ask for one agent's full config (`AgentConfigDetail` event).
+    pub fn get_agent_config(&self, name: &str) {
+        self.write(protocol::get_agent_config(name));
+    }
+
+    /// Create or overwrite a JSON agent; the sidecar re-lists (or emits `Error`).
+    pub fn save_agent_config(&self, draft: &AgentConfigDraft) {
+        self.write(protocol::save_agent_config(draft));
+    }
+
+    /// Delete a JSON agent config; the sidecar re-lists (or emits `Error`).
+    pub fn delete_agent_config(&self, name: &str) {
+        self.write(protocol::delete_agent_config(name));
+    }
+
+    /// Clone an agent into an editable user JSON copy; the sidecar re-lists.
+    pub fn clone_agent_config(&self, name: &str) {
+        self.write(protocol::clone_agent_config(name));
     }
 }
 

@@ -274,6 +274,14 @@ code-puppy's existing managers.
 - Each manager is a dockable Tab (reuses shell Tab/TabViewer pattern).
   Estimated: 3-5 increments.
 
+**STATUS 2026-06-11: Phase C DONE.** All three managers landed (MCP inc.1
+b93e86d, Skills inc.2 e7291f5, Agent inc.3 — adds list/get/save/delete/
+clone_agent_config ops + src/views/agent_manager.rs + agent_wizard.rs, top-bar
+"Agents" button). Built-in agents are read-only + cloneable; JSON agents are
+editable/deletable. 115 tests green, zero warnings/clippy, fmt clean. All
+sidecar ops verified headlessly against real code-puppy. Project also now
+builds + runs on Apple Silicon macOS (see .claude/HANDOFF.md). Next: Phase D.
+
 ### Phase D — Right sidebar dock + layout persistence (small)
 - Persistent right-side dock zone that panels (MCP/Skills/Agent managers, perf
   HUD, future Puppy Pack chat) can be dragged into/out of via egui_dock.

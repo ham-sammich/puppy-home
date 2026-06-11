@@ -7,7 +7,7 @@
 
 use serde_json::{Value, json};
 
-use super::AskAnswer;
+use super::{AgentConfigDraft, AskAnswer};
 
 pub(super) fn prompt(id: u64, text: &str, images: &[String]) -> Value {
     let mut op = json!({ "op": "prompt", "id": id, "text": text });
@@ -159,6 +159,39 @@ pub(super) fn save_skill(name: &str, description: &str, content: &str, scope: &s
     })
 }
 
+pub(super) fn list_agent_configs() -> Value {
+    json!({ "op": "list_agent_configs" })
+}
+
+pub(super) fn get_agent_config(name: &str) -> Value {
+    json!({ "op": "get_agent_config", "name": name })
+}
+
+/// The full agent draft from the visual builder. Empty `model`/`user_prompt`
+/// are still sent; the sidecar omits them from the on-disk JSON.
+pub(super) fn save_agent_config(d: &AgentConfigDraft) -> Value {
+    json!({
+        "op": "save_agent_config",
+        "name": d.name,
+        "display_name": d.display_name,
+        "description": d.description,
+        "system_prompt": d.system_prompt,
+        "user_prompt": d.user_prompt,
+        "model": d.model,
+        "tools": d.tools,
+        "mcp_servers": d.mcp_servers,
+        "scope": d.scope,
+    })
+}
+
+pub(super) fn delete_agent_config(name: &str) -> Value {
+    json!({ "op": "delete_agent_config", "name": name })
+}
+
+pub(super) fn clone_agent_config(name: &str) -> Value {
+    json!({ "op": "clone_agent_config", "name": name })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,6 +206,7 @@ mod tests {
         assert_eq!(list_sessions(), json!({"op": "list_sessions"}));
         assert_eq!(list_mcp_servers(), json!({"op": "list_mcp_servers"}));
         assert_eq!(list_skills(), json!({"op": "list_skills"}));
+        assert_eq!(list_agent_configs(), json!({"op": "list_agent_configs"}));
         assert_eq!(pause(), json!({"op": "pause"}));
         assert_eq!(resume(), json!({"op": "resume"}));
         assert_eq!(shutdown(), json!({"op": "shutdown"}));
@@ -308,6 +342,48 @@ mod tests {
                 "name": "git-flow",
                 "description": "Git release flow",
                 "content": "## Steps\n",
+                "scope": "user"
+            })
+        );
+    }
+
+    #[test]
+    fn agent_config_ops() {
+        assert_eq!(
+            get_agent_config("helios"),
+            json!({"op": "get_agent_config", "name": "helios"})
+        );
+        assert_eq!(
+            delete_agent_config("my-bot"),
+            json!({"op": "delete_agent_config", "name": "my-bot"})
+        );
+        assert_eq!(
+            clone_agent_config("code-puppy"),
+            json!({"op": "clone_agent_config", "name": "code-puppy"})
+        );
+        let draft = AgentConfigDraft {
+            name: "my-bot".into(),
+            display_name: "My Bot".into(),
+            description: "does things".into(),
+            system_prompt: "You are helpful.".into(),
+            user_prompt: String::new(),
+            model: "gpt".into(),
+            tools: vec!["list_files".into(), "edit_file".into()],
+            mcp_servers: vec!["serena".into()],
+            scope: "user".into(),
+        };
+        assert_eq!(
+            save_agent_config(&draft),
+            json!({
+                "op": "save_agent_config",
+                "name": "my-bot",
+                "display_name": "My Bot",
+                "description": "does things",
+                "system_prompt": "You are helpful.",
+                "user_prompt": "",
+                "model": "gpt",
+                "tools": ["list_files", "edit_file"],
+                "mcp_servers": ["serena"],
                 "scope": "user"
             })
         );

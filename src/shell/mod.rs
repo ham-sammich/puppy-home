@@ -22,6 +22,8 @@ pub enum Tab {
     McpManager,
     /// Code Puppy's skills: list, toggle, create/edit (one instance).
     SkillsManager,
+    /// Code Puppy's agents: list, edit, clone, visual builder (one instance).
+    AgentManager,
 }
 
 /// Structural changes requested during rendering, applied after the dock draws.
@@ -40,6 +42,7 @@ pub struct Shell<'a> {
     pub browser: &'a mut BrowserManager,
     pub mcp: &'a mut views::mcp_manager::McpManagerView,
     pub skills: &'a mut views::skills_manager::SkillsManagerView,
+    pub agents: &'a mut views::agent_manager::AgentManagerView,
     pub actions: &'a mut Vec<ShellAction>,
 }
 
@@ -63,6 +66,7 @@ impl TabViewer for Shell<'_> {
             Tab::Browser(id) => self.browser.tab_title(*id).into(),
             Tab::McpManager => "MCP Servers".into(),
             Tab::SkillsManager => "Skills".into(),
+            Tab::AgentManager => "Agents".into(),
         }
     }
 
@@ -76,6 +80,7 @@ impl TabViewer for Shell<'_> {
             Tab::Browser(id) => self.browser.render_tab(ui, *id),
             Tab::McpManager => views::mcp_manager::render(ui, self.sup, self.mcp),
             Tab::SkillsManager => views::skills_manager::render(ui, self.sup, self.skills),
+            Tab::AgentManager => views::agent_manager::render(ui, self.sup, self.agents),
         }
     }
 
@@ -86,6 +91,7 @@ impl TabViewer for Shell<'_> {
             Tab::Browser(id) => egui::Id::new(("tab-browser", id.0)),
             Tab::McpManager => egui::Id::new("tab-mcp-manager"),
             Tab::SkillsManager => egui::Id::new("tab-skills-manager"),
+            Tab::AgentManager => egui::Id::new("tab-agent-manager"),
         }
     }
 
@@ -99,7 +105,7 @@ impl TabViewer for Shell<'_> {
         match tab {
             Tab::Chat(id) => self.actions.push(ShellAction::Close(*id)),
             Tab::Browser(id) => self.browser.close_tab(*id),
-            Tab::Dashboard | Tab::McpManager | Tab::SkillsManager => {}
+            Tab::Dashboard | Tab::McpManager | Tab::SkillsManager | Tab::AgentManager => {}
         }
         OnCloseResponse::Close
     }
