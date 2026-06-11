@@ -198,11 +198,7 @@ pub fn graph_log(root: &Path, limit: usize) -> Vec<Commit> {
             let mut f = line.split('\u{1f}');
             let hash = f.next()?.to_string();
             let short = f.next()?.to_string();
-            let parents = f
-                .next()?
-                .split_whitespace()
-                .map(str::to_string)
-                .collect();
+            let parents = f.next()?.split_whitespace().map(str::to_string).collect();
             let author = f.next()?.to_string();
             let when = f.next()?.to_string();
             let refs = parse_refs(f.next().unwrap_or(""));

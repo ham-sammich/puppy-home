@@ -26,7 +26,9 @@ use wry::WebViewBuilder;
 #[derive(Debug, Deserialize)]
 #[serde(tag = "cmd", rename_all = "lowercase")]
 enum WireCmd {
-    Navigate { url: String },
+    Navigate {
+        url: String,
+    },
     Back,
     Forward,
     Reload,
@@ -61,8 +63,9 @@ fn main() -> wry::Result<()> {
         let _ = proxy.send_event(WireCmd::Close);
     });
 
-    let initial_url =
-        std::env::args().nth(1).unwrap_or_else(|| "https://example.com".to_string());
+    let initial_url = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "https://example.com".to_string());
     // Optional 2nd arg: a Chrome DevTools Protocol remote-debugging port, so the
     // host (and Code Puppy) can attach to this page over CDP at 127.0.0.1:PORT.
     let cdp_port: Option<u16> = std::env::args().nth(2).and_then(|s| s.parse().ok());

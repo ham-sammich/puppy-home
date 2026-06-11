@@ -6,8 +6,11 @@ MCP server, skill) is the genuine `code-puppy` package, driven over a JSON
 protocol via an embedded Python **sidecar**. Code Puppy's source is **never
 modified** — only puppy-home and `sidecar/sidecar.py`._
 
-Last updated: 2026-06-10 · Canonical plan (merged from `claude_plan.md` +
+Last updated: 2026-06-11 · Canonical plan (merged from `claude_plan.md` +
 Rufus's `PLAN.md`). This is the single source of truth — don't fork it.
+Reconciled with reality (browser plugin, git graph, perf HUD, release builds
+had landed unrecorded) and extended with a new feature roadmap planned by
+planning-agent-8a6233 with Jacob (see "New feature roadmap (2026-06-11)").
 
 **2026-06-10:** Priority 0 landed — the 2,919-line `workspace.rs` is now an
 11-file `src/workspace/` module (largest 507 lines). Mechanical move only, no
@@ -112,6 +115,29 @@ deferred `ShellAction`s. Do not bypass this. Ever.
 - Targets Windows / macOS / Linux: per-OS shell + fonts, native PTY, no
   compile-time Windows paths.
 
+### Landed 2026-06-10/11 (branch `feature/browser-plugin`, head `e5bfe9b`, 81 tests green)
+- **Browser plugin (Architecture C)**: optional separately-installed wry
+  companion exe, discovered via `src/plugin.rs` `PluginRegistry` (`plugin.json`
+  manifests, semver host-compat), supervised like a sidecar, native-window
+  overlay on the Browser tab; CDP breadcrumb at `{workspace}/.puppy/browser.json`
+  injected as prompt context by the sidecar so the agent can attach to the
+  in-app browser; self-cleaning on tab/workspace close.
+- **Git commit graph (GitKraken-style)**: pure lane-layout algorithm in
+  `workspace/git_graph.rs` (unit-tested) + rendering/interactions in
+  `git_graph_view.rs`; right-click context menu (checkout, create/delete branch,
+  cherry-pick, revert, reset soft/mixed/hard, merge branch-or-commit, copy hash)
+  and header Fetch/Pull/Push.
+- **Performance HUD** (`src/perf.rs`): frame cost avg/max vs 60fps budget,
+  repaints/sec, memory (1Hz while visible), toggled from the top bar.
+- **Theme module split** (`src/theme/{mod,editor,terminal}.rs`).
+- **Image paste**: clipboard images attach to prompts as base64 PNG ->
+  pydantic-ai `BinaryContent`.
+- **Release builds**: `scripts/build-release.ps1` -> `dist/` standalone Windows
+  build (thin-LTO, stripped, `windows_subsystem=windows`),
+  `.github/workflows/release.yml` for macOS/tagged releases; console-flash fix
+  via `src/proc.rs` `hide_console()` (`CREATE_NO_WINDOW`) applied at every
+  `Command` spawn site.
+
 ---
 
 ## Critical fixes (recent)
@@ -188,14 +214,14 @@ indent matching) — never retyping the UI glyphs. Reuse that trick for
 | ~~Med~~ | ~~**Output backpressure**~~ DONE 2026-06-10 (transcript ring-buffer cap @ 1500 + "trimmed" banner; terminal scrollback already bounded by vt100) | runaway tool/terminal output shouldn't lock the UI — cap/virtualize transcript + scrollback (ring buffer, "… N lines collapsed") |
 | Med | **Color emoji** | egui rasterizes monochrome only; image-based via `egui-twemoji` or a glyph-image atlas |
 | Med | **"Save as named context"** action | snapshot the current conversation to `CONTEXTS_DIR` under a name (uses `save_session`) |
-| Med | **Dock-layout persistence** | persist the egui_dock split layout, not just the open set |
+| ~~Med~~ | ~~**Dock-layout persistence**~~ SUPERSEDED by **Phase D** (see "New feature roadmap (2026-06-11)") | persist the egui_dock split layout, not just the open set — now a prerequisite of the right-sidebar dock |
 | Low | **Command palette (Ctrl+P)** | fuzzy switcher across workspaces / files / commands — ergonomics win as workspace count grows |
 | ~~Low~~ | ~~**Theme toggle**~~ DONE 2026-06-10 (light/dark toggle in the top bar, persisted in `session.json`; "system" mode + custom accents not done) |
 | Low | **Keyboard shortcuts** + `?` overlay | Ctrl+W close · Ctrl+Enter send · Ctrl+L focus composer · Ctrl+` terminal |
 | Low | Session list niceties | preview-on-hover; group by date; delete a session |
 | Low | Per-workspace unique autosave id | two sidecars opened in the same second share a timestamp id (Code Puppy's `auto_session_\d{8}_\d{6}` regex forbids a suffix) |
 | Low | Terminal polish | copy/paste selection, font-size control, split terminal+chat |
-| Low | MCP & Skills panels | surface Code Puppy's MCP servers / skills |
+| ~~Low~~ | ~~MCP & Skills panels~~ SUPERSEDED by **Phase C** (see "New feature roadmap (2026-06-11)") | surface Code Puppy's MCP servers / skills — absorbed into the GUI managers & visual builders phase |
 
 > **Status note (2026-06-10):** every roadmap item implementable *and verifiable
 > headlessly* is now done — P0 split, full protocol-contract tests (52 total),
@@ -224,6 +250,100 @@ indent matching) — never retyping the UI glyphs. Reuse that trick for
 
 ---
 
+## New feature roadmap (2026-06-11) — decided with Jacob
+
+Planned with planning-agent-8a6233. Priority order: **C -> D -> A -> B**.
+
+### Phase C — GUI managers & visual builders (first; small-to-medium, low risk)
+Goal: surface code-puppy's agents/skills/MCP servers in the GUI. No core
+code-puppy changes — everything via new sidecar protocol ops wrapping
+code-puppy's existing managers.
+- New sidecar ops (and matching Wire events + protocol-contract tests in
+  `backend/protocol.rs`): `list_mcp_servers`, `set_mcp_enabled` (per-server
+  on/off toggle), `add_mcp_server`, `list_skills` (with metadata), `get_skill`,
+  `save_skill`, `list_agent_configs`, `get_agent_config`, `save_agent_config`,
+  `delete_agent_config`.
+- MCP Manager panel: list servers with status, on/off toggles, "Add MCP server"
+  guided wizard (transport type, command/url, env vars, test-connection step).
+- Skills Manager panel: searchable skill list, enable/disable if supported,
+  view skill detail; "Create skill" guided wizard generating the skill file
+  scaffold.
+- Agent Manager panel: list agents, edit existing; "Visual agent builder"
+  wizard (name, model, system prompt, tool selection, output settings) writing
+  code-puppy JSON agent configs.
+- Each manager is a dockable Tab (reuses shell Tab/TabViewer pattern).
+  Estimated: 3-5 increments.
+
+### Phase D — Right sidebar dock + layout persistence (small)
+- Persistent right-side dock zone that panels (MCP/Skills/Agent managers, perf
+  HUD, future Puppy Pack chat) can be dragged into/out of via egui_dock.
+- Land the existing "Dock-layout persistence" roadmap item (persist egui_dock
+  split layout in `session.json`; needs runtime workspace-id remapping on
+  restore). This is a prerequisite so the sidebar arrangement survives
+  restarts. Estimated: 1-2 increments.
+
+### Phase A — Remote SSH ("Remote Sidecar", full remote IDE)
+Architecture decision: run `sidecar.py` ON the remote host and tunnel the
+existing line-delimited JSON stdio protocol over SSH (the protocol design makes
+this nearly free). Rejected alternatives: SFTP-mount with local agent (tools
+would run on the wrong machine); remote-desktop approaches (heavy).
+- Connection profiles: per-host config (host, user, auth, code-puppy location,
+  ports to forward) stored in session/config; new "Open Remote Folder..." flow.
+- Config strategy (both modes day one, per-profile toggle):
+  - "Respect host": use the remote machine's own `~/.code_puppy` as-is.
+  - "Bring my puppy": on connect, sync local agents/skills/config to a
+    session-scoped remote dir (never clobbers the host's config) and point the
+    sidecar at it via env.
+  - Auto-provision code-puppy via uv on the remote if not installed (model on
+    the existing local provisioning logic in `backend/mod.rs`).
+- Full remote IDE from the start: introduce a `WorkspaceFs` trait — local impl
+  wraps current `std::fs`/`git.rs` code paths; remote impl routes through NEW
+  sidecar protocol ops (`fs_list_dir`, `fs_read_file`, `fs_write_file`,
+  `fs_stat`, `git_status`, `git_diff`, `git_log`, `git_stage`, `git_commit`,
+  ...). File tree, editor tabs, Git page/graph, and blame all go through the
+  trait. This is the big refactor — do it incrementally: trait extraction with
+  local impl first (pure refactor, tests green), then the remote impl.
+- Terminal: SSH PTY channel (`ssh -t` or russh) feeding the existing vt100 grid
+  instead of portable-pty.
+- Browser stays LOCAL (native window). Bridge: automatic SSH `-L` port
+  forwarding for declared/detected remote dev-server ports so the in-app
+  browser reaches them at localhost; the `.puppy/browser.json` CDP breadcrumb
+  keeps working (sidecar writes it on the remote, context note carries the
+  forwarded URL).
+- Risks: SSH transport library choice (russh vs spawning system ssh — spike
+  first; system ssh is simpler and respects user's `~/.ssh` config, russh gives
+  programmatic channels/forwarding); latency on fs ops (cache + async
+  prefetch); Windows remote hosts out of scope for v1 (POSIX remotes first).
+
+Estimated: 6-10 increments; trait refactor is the long pole.
+
+### Phase B — "Puppy Pack" (multi-user collaboration; the official feature name)
+v1 = Tiers 1+2+3, all WITHOUT forking core code-puppy:
+- Tier 1 — presence + chat + activity feed: tiny hosted relay server (separate
+  Rust crate, websockets, rooms keyed by project id; decision: relay from day
+  one, not LAN-only) relaying user presence, a user-to-user chat panel, and
+  each member's live activity feed (re-broadcast the sidecar UiEvents we
+  already have: current tool, files being edited, turn status).
+- Tier 2 — agent cross-awareness via context injection: same mechanism as the
+  browser CDP breadcrumb — sidecar prepends a "[pack context] <user>'s puppy is
+  editing X / working on Y" note to prompts when pack state exists. Zero core
+  changes.
+- Tier 3 — pack-coordination MCP server: a small MCP server (shipped with
+  puppy-home, registered into code-puppy per-workspace) exposing agent tools:
+  `claim_file` / `release_file`, `post_to_pack`, `check_teammate_status`,
+  `list_claims`. Agents actively coordinate to avoid stepping on each other.
+  Code-puppy already speaks MCP, so no core changes.
+- Tier 4 (DEFERRED, requires core code-puppy work done together with the core
+  project): real-time co-editing (CRDT), shared sessions, mid-turn
+  agent-to-agent messaging via the MessageBus.
+- Risks: relay hosting/auth (start with shared-secret room codes; TLS via
+  reverse proxy), conflicting edits (Tier 3 claims mitigate; true merge needs
+  Tier 4).
+
+Estimated: 8-12 increments across relay + client + MCP server.
+
+---
+
 ## Suggested sequencing
 1. **Split `workspace.rs`** (P0) — land it first so future diffs are small/cohesive.
 2. **Pure-fn + protocol-contract tests** during/after the split.
@@ -232,6 +352,17 @@ indent matching) — never retyping the UI glyphs. Reuse that trick for
 5. **Streaming response + dock-layout persistence + named contexts.**
 6. **UX wins** (color emoji, command palette, themes) — pick by demand.
 7. Feature-idea backlog only when someone asks.
+
+**New order (2026-06-11, supersedes the above for what's left):**
+1. **Phase C** — GUI managers & visual builders (agents/skills/MCP).
+2. **Phase D** — right sidebar dock + dock-layout persistence.
+3. **Phase A** — SSH remote sidecar (full remote IDE; `WorkspaceFs` trait
+   refactor first, local-impl-only, then remote).
+4. **Phase B** — Puppy Pack (relay -> context injection -> coordination MCP).
+
+Streaming-response and the other open roadmap items (color emoji, command
+palette, keyboard shortcuts, terminal polish, named contexts) get slotted in
+opportunistically between phases.
 
 ---
 

@@ -18,9 +18,22 @@ pub struct EditorOutcome {
 
 /// Friendly labels for the 16 base ANSI slots.
 const ANSI_NAMES: [&str; 16] = [
-    "0 black", "1 red", "2 green", "3 yellow", "4 blue", "5 magenta", "6 cyan", "7 white",
-    "8 br-black", "9 br-red", "10 br-green", "11 br-yellow", "12 br-blue", "13 br-magenta",
-    "14 br-cyan", "15 br-white",
+    "0 black",
+    "1 red",
+    "2 green",
+    "3 yellow",
+    "4 blue",
+    "5 magenta",
+    "6 cyan",
+    "7 white",
+    "8 br-black",
+    "9 br-red",
+    "10 br-green",
+    "11 br-yellow",
+    "12 br-blue",
+    "13 br-magenta",
+    "14 br-cyan",
+    "15 br-white",
 ];
 
 /// One labeled color-picker row (swatch + editable hex). Returns true if changed.
@@ -91,7 +104,10 @@ fn ui_palette_section(
             })
             .show_ui(ui, |ui| {
                 for t in library.iter() {
-                    if ui.selectable_label(t.name == palette.name, &t.name).clicked() {
+                    if ui
+                        .selectable_label(t.name == palette.name, &t.name)
+                        .clicked()
+                    {
                         *palette = t.clone();
                         out.changed = true;
                         out.select = Some(palette.name.clone());

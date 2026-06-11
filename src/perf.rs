@@ -100,7 +100,12 @@ impl PerfStats {
                     }
                     ui.label("uptime");
                     let s = self.started.elapsed().as_secs();
-                    ui.label(format!("{}h {:02}m {:02}s", s / 3600, (s / 60) % 60, s % 60));
+                    ui.label(format!(
+                        "{}h {:02}m {:02}s",
+                        s / 3600,
+                        (s / 60) % 60,
+                        s % 60
+                    ));
                     ui.end_row();
                 });
                 ui.add_space(4.0);
@@ -163,9 +168,7 @@ fn fmt_bytes(b: u64) -> String {
 /// (working set, private/pagefile) in bytes; zeros when unavailable.
 #[cfg(windows)]
 fn process_memory() -> (u64, u64) {
-    use windows::Win32::System::ProcessStatus::{
-        K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
-    };
+    use windows::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
     use windows::Win32::System::Threading::GetCurrentProcess;
     unsafe {
         let mut counters = PROCESS_MEMORY_COUNTERS {

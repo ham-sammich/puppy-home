@@ -428,7 +428,14 @@ impl Workspace {
         }
         if do_fetch {
             match crate::git::fetch(&self.root) {
-                Ok(s) => self.git_action(Ok(()), if s.is_empty() { "Fetched (up to date)" } else { "Fetched from remotes" }),
+                Ok(s) => self.git_action(
+                    Ok(()),
+                    if s.is_empty() {
+                        "Fetched (up to date)"
+                    } else {
+                        "Fetched from remotes"
+                    },
+                ),
                 Err(e) => self.git_action(Err(e), ""),
             }
         }

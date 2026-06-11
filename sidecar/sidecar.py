@@ -22,6 +22,9 @@ Protocol (newline-delimited JSON, UTF-8):
     {"op": "respond_confirmation","prompt_id": "...", "confirmed": true, "feedback": null}
     {"op": "respond_selection",   "prompt_id": "...", "selected_index": 0, "selected_value": "..."}
     {"op": "set_agent", "name": "..."}
+    {"op": "list_mcp_servers"}                       # -> mcp_servers event
+    {"op": "set_mcp_enabled", "name": "...", "enabled": true}
+    {"op": "add_mcp_server", "name": "...", "type": "stdio"|"sse"|"http", "config": {...}}
     {"op": "shutdown"}
 
   sidecar -> Rust (stdout), one object per line:
@@ -37,6 +40,7 @@ Protocol (newline-delimited JSON, UTF-8):
     {"event": "command_done", "id": <int>, "handled": true}
     {"event": "error",        "id": <int|null>, "message": "..."}
     {"event": "log",          "text": "..."}
+    {"event": "mcp_servers",  "items": [{"id","name","type","enabled","state","summary","error"}]}
 
 stdout is reserved exclusively for the protocol. Any stray library `print()` is
 redirected to stderr so it can never corrupt a JSON line.
@@ -421,6 +425,136 @@ class Bridge:
             "token_rate": token_rate,
             "sub_agents": sub_agents,
         })
+
+    # --- MCP servers (Code Puppy's MCPManager) ------------------------------
+
+    def _mcp_manager(self):
+        """Code Puppy's singleton MCP manager (the same one /mcp drives)."""
+        from code_puppy.mcp_.manager import get_mcp_manager
+        return get_mcp_manager()
+
+    @staticmethod
+    def _mcp_summary(server_type: str, raw: dict) -> str:
+        """One-line config summary: the command line (stdio) or the URL."""
+        if server_type == "stdio":
+            command = str(raw.get("command", "") or "")
+            args = raw.get("args") or []
+            if isinstance(args, list):
+                args = " ".join(str(a) for a in args)
+            return f"{command} {args}".strip()
+        return str(raw.get("url", "") or "")
+
+    def emit_mcp_servers(self) -> None:
+        """List registered MCP servers with live status + a config summary."""
+        items = []
+        try:
+            manager = self._mcp_manager()
+            for info in manager.list_servers():
+                summary = ""
+                try:
+                    conf = manager.get_server_by_name(info.name)
+                    summary = self._mcp_summary(
+                        info.type, conf.config if conf else {})
+                except Exception:
+                    pass
+                items.append({
+                    "id": info.id,
+                    "name": info.name,
+                    "type": info.type,
+                    "enabled": bool(info.enabled),
+                    "state": getattr(info.state, "value", str(info.state)),
+                    "summary": summary,
+                    "error": info.error_message or "",
+                })
+        except Exception:
+            log("mcp enumeration failed:\n" + traceback.format_exc())
+        send({"event": "mcp_servers", "items": items})
+
+    def set_mcp_enabled(self, name: str, enabled: bool) -> None:
+        """Start/stop one MCP server by name (the /mcp start/stop path)."""
+        try:
+            manager = self._mcp_manager()
+            conf = manager.get_server_by_name(name)
+            if conf is None:
+                send({"event": "error", "id": None,
+                      "message": f"unknown MCP server: {name}"})
+                return
+
+            # start/stop_server_sync schedule the real work as a background
+            # task on the running loop, so hop onto the loop thread first.
+            def toggle() -> None:
+                try:
+                    if enabled:
+                        manager.start_server_sync(conf.id)
+                    else:
+                        manager.stop_server_sync(conf.id)
+                except Exception as exc:
+                    send({"event": "error", "id": None,
+                          "message": f"set_mcp_enabled failed: "
+                                     f"{type(exc).__name__}: {exc}"})
+                self.emit_mcp_servers()
+                # The process starts/stops asynchronously; re-announce once
+                # the dust has had a moment to settle.
+                self.loop.call_later(1.5, self.emit_mcp_servers)
+
+            self.loop.call_soon_threadsafe(toggle)
+        except Exception as exc:
+            send({"event": "error", "id": None,
+                  "message": f"set_mcp_enabled failed: {type(exc).__name__}: {exc}"})
+            log(traceback.format_exc())
+
+    def add_mcp_server(self, cmd: dict) -> None:
+        """Register a new MCP server (registry + mcp_servers.json), then re-list."""
+        name = str(cmd.get("name") or "").strip()
+        server_type = str(cmd.get("type") or "").strip().lower()
+        config = cmd.get("config")
+        if not name:
+            send({"event": "error", "id": None,
+                  "message": "add_mcp_server: a server name is required"})
+            return
+        if server_type not in ("stdio", "sse", "http"):
+            send({"event": "error", "id": None,
+                  "message": f"add_mcp_server: invalid type {server_type!r} "
+                             "(expected stdio, sse, or http)"})
+            return
+        if not isinstance(config, dict):
+            send({"event": "error", "id": None,
+                  "message": "add_mcp_server: 'config' must be an object"})
+            return
+        try:
+            from code_puppy.mcp_.managed_server import ServerConfig
+            manager = self._mcp_manager()
+            # register_server validates (name shape, required url/command, ...)
+            # and raises ValueError with a readable message on bad input.
+            manager.register_server(ServerConfig(
+                id="", name=name, type=server_type, enabled=True,
+                config=dict(config)))
+            self._persist_mcp_config(name, server_type, dict(config))
+        except Exception as exc:
+            send({"event": "error", "id": None,
+                  "message": f"add_mcp_server failed: {exc}"})
+            log(traceback.format_exc())
+            return
+        self.emit_mcp_servers()
+
+    @staticmethod
+    def _persist_mcp_config(name: str, server_type: str, config: dict) -> None:
+        """Mirror a new server into mcp_servers.json (the CLI does the same)."""
+        from code_puppy.config import MCP_SERVERS_FILE
+        data = {"mcp_servers": {}}
+        if os.path.exists(MCP_SERVERS_FILE):
+            try:
+                with open(MCP_SERVERS_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                pass
+        servers = data.setdefault("mcp_servers", {})
+        entry = dict(config)
+        entry["type"] = server_type
+        servers[name] = entry
+        os.makedirs(os.path.dirname(MCP_SERVERS_FILE), exist_ok=True)
+        with open(MCP_SERVERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
 
     # --- Code Puppy sessions (autosave + named contexts) --------------------
 
@@ -1065,6 +1199,13 @@ class Bridge:
             else:
                 send({"event": "error", "id": None,
                       "message": f"unknown agent: {cmd.get('name')}"})
+        elif op == "list_mcp_servers":
+            self.emit_mcp_servers()
+        elif op == "set_mcp_enabled":
+            self.set_mcp_enabled(cmd.get("name", ""),
+                                 bool(cmd.get("enabled", False)))
+        elif op == "add_mcp_server":
+            self.add_mcp_server(cmd)
         elif op == "shutdown":
             self._stop.set()
             self.loop.call_soon_threadsafe(self.loop.stop)

@@ -127,6 +127,11 @@ pub struct Workspace {
     pub run_stats: String,
     pub token_rate: f64,
     pub sub_agents: Vec<crate::backend::SubAgentInfo>,
+    /// MCP server catalog (global Code Puppy config, fetched via this
+    /// workspace's sidecar). `None` until the first `mcp_servers` event.
+    pub mcp_servers: Option<Vec<crate::backend::McpServerInfo>>,
+    /// Bumped on every `mcp_servers` event so views can drop optimistic state.
+    pub mcp_generation: u64,
     status_req_at: Instant,
     md_cache: CommonMarkCache,
     // changes: Code-Puppy-reported diffs (fallback for non-git folders) + the
@@ -240,6 +245,8 @@ impl Workspace {
             run_stats: String::new(),
             token_rate: 0.0,
             sub_agents: Vec::new(),
+            mcp_servers: None,
+            mcp_generation: 0,
             status_req_at: Instant::now(),
             md_cache: CommonMarkCache::default(),
             diffs: Vec::new(),
@@ -276,6 +283,11 @@ impl Workspace {
     /// Number of file changes recorded so far (for tab badges).
     pub fn diff_count(&self) -> usize {
         self.diffs.len()
+    }
+
+    /// Whether the sidecar has announced `ready` (and hasn't died since).
+    pub fn is_ready(&self) -> bool {
+        self.ready && self.status != InstanceStatus::Dead
     }
 
     /// Resolve a (possibly relative) diff path against the workspace root.
@@ -525,6 +537,10 @@ impl Workspace {
             }
             UiEvent::SessionPreview { name, entries, .. } => {
                 self.session_preview = Some((name, entries));
+            }
+            UiEvent::McpServers(items) => {
+                self.mcp_servers = Some(items);
+                self.mcp_generation += 1;
             }
             UiEvent::Exited { code } => {
                 self.ready = false;

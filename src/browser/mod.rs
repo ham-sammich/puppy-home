@@ -123,7 +123,7 @@ impl BrowserManager {
     pub fn is_tab_closed(&self, id: BrowserId) -> bool {
         self.tabs
             .get(&id)
-            .map_or(true, |t| t.launched && t.host.is_none())
+            .is_none_or(|t| t.launched && t.host.is_none())
     }
 
     /// The (normalized) URL a tab is pointed at, if any.
@@ -290,7 +290,10 @@ impl BrowserManager {
                 Some(p) => {
                     ui.colored_label(
                         ui.visuals().warn_fg_color,
-                        format!("Manifest found but executable is missing: {}", p.manifest.exe),
+                        format!(
+                            "Manifest found but executable is missing: {}",
+                            p.manifest.exe
+                        ),
                     );
                 }
             }
@@ -332,11 +335,9 @@ impl BrowserManager {
         if do_rescan {
             self.registry.rescan();
         }
-        if do_open_dir {
-            if let Some(dir) = self.registry.dir() {
-                let _ = std::fs::create_dir_all(dir);
-                open_in_file_manager(dir);
-            }
+        if do_open_dir && let Some(dir) = self.registry.dir() {
+            let _ = std::fs::create_dir_all(dir);
+            open_in_file_manager(dir);
         }
         if let Some(err) = &self.install_error {
             ui.colored_label(ui.visuals().error_fg_color, err);
@@ -372,10 +373,7 @@ impl BrowserManager {
     /// The live browser toolbar; launches/supervises the plugin process and
     /// (on Windows) embeds its window into the viewport below the toolbar.
     fn render_browser(&mut self, ui: &mut egui::Ui, id: BrowserId) {
-        let exe = self
-            .registry
-            .get(BROWSER_PLUGIN_ID)
-            .map(|p| p.exe_path());
+        let exe = self.registry.get(BROWSER_PLUGIN_ID).map(|p| p.exe_path());
         let parent = self.parent_hwnd;
         let tab = self.tabs.entry(id).or_default();
 
@@ -387,42 +385,40 @@ impl BrowserManager {
         ui.horizontal(|ui| {
             let running = tab.host.is_some();
             ui.add_enabled_ui(running, |ui| {
-                if ui.button("\u{2039}").on_hover_text("Back").clicked() {
-                    if let Some(h) = tab.host.as_mut() {
-                        h.back();
-                    }
+                if ui.button("\u{2039}").on_hover_text("Back").clicked()
+                    && let Some(h) = tab.host.as_mut()
+                {
+                    h.back();
                 }
-                if ui.button("\u{203a}").on_hover_text("Forward").clicked() {
-                    if let Some(h) = tab.host.as_mut() {
-                        h.forward();
-                    }
+                if ui.button("\u{203a}").on_hover_text("Forward").clicked()
+                    && let Some(h) = tab.host.as_mut()
+                {
+                    h.forward();
                 }
-                if ui.button("\u{21bb}").on_hover_text("Reload").clicked() {
-                    if let Some(h) = tab.host.as_mut() {
-                        h.reload();
-                    }
+                if ui.button("\u{21bb}").on_hover_text("Reload").clicked()
+                    && let Some(h) = tab.host.as_mut()
+                {
+                    h.reload();
                 }
                 ui.separator();
                 if ui
                     .button("DevTools")
                     .on_hover_text("Open browser DevTools (F12)")
                     .clicked()
+                    && let Some(h) = tab.host.as_mut()
                 {
-                    if let Some(h) = tab.host.as_mut() {
-                        h.devtools();
-                    }
+                    h.devtools();
                 }
-                if let Some(port) = tab.cdp_port {
-                    if ui
+                if let Some(port) = tab.cdp_port
+                    && ui
                         .button("CDP")
                         .on_hover_text(format!(
                             "Copy DevTools Protocol endpoint http://127.0.0.1:{port} \
                              — paste it to Code Puppy to let it inspect this page"
                         ))
                         .clicked()
-                    {
-                        ui.ctx().copy_text(format!("http://127.0.0.1:{port}"));
-                    }
+                {
+                    ui.ctx().copy_text(format!("http://127.0.0.1:{port}"));
                 }
             });
 
@@ -576,7 +572,10 @@ fn open_in_file_manager(dir: &std::path::Path) {
 
 /// Build a `file://` URL for a local path, so the plugin can open local HTML.
 pub fn file_url(path: &std::path::Path) -> String {
-    let s = path.to_string_lossy().replace('\\', "/").replace(' ', "%20");
+    let s = path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .replace(' ', "%20");
     if s.starts_with('/') {
         format!("file://{s}")
     } else {
@@ -587,7 +586,11 @@ pub fn file_url(path: &std::path::Path) -> String {
 /// The `host:port` of a URL, for compact tab titles/chips.
 fn host_port(url: &str) -> String {
     let after = url.split("://").nth(1).unwrap_or(url);
-    after.split(['/', '?', '#']).next().unwrap_or(after).to_string()
+    after
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after)
+        .to_string()
 }
 
 /// Scan text (e.g. terminal output) for local dev-server URLs to offer opening.
@@ -599,10 +602,12 @@ pub fn detect_dev_urls(text: &str) -> Vec<String> {
             let abs = from + rel;
             let rest = &text[abs..];
             let end = rest
-                .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '(' | ')' | '<' | '>'))
+                .find(|c: char| {
+                    c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '(' | ')' | '<' | '>')
+                })
                 .unwrap_or(rest.len());
             let url = rest[..end]
-                .trim_end_matches(|c| matches!(c, '.' | ',' | ';' | ':' | '!' | '?' | '/'))
+                .trim_end_matches(['.', ',', ';', ':', '!', '?', '/'])
                 .to_string();
             if is_local_url(&url) && !out.contains(&url) {
                 out.push(url);

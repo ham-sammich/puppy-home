@@ -266,9 +266,22 @@ mod tests {
     fn presets_have_valid_colors() {
         for p in [ThemePalette::dark(), ThemePalette::light()] {
             for hex in [
-                &p.text, &p.weak_text, &p.strong_text, &p.panel, &p.window, &p.faint_bg,
-                &p.extreme_bg, &p.code_bg, &p.accent, &p.selection, &p.widget_bg, &p.widget_hover,
-                &p.widget_active, &p.stroke, &p.warn, &p.error,
+                &p.text,
+                &p.weak_text,
+                &p.strong_text,
+                &p.panel,
+                &p.window,
+                &p.faint_bg,
+                &p.extreme_bg,
+                &p.code_bg,
+                &p.accent,
+                &p.selection,
+                &p.widget_bg,
+                &p.widget_hover,
+                &p.widget_active,
+                &p.stroke,
+                &p.warn,
+                &p.error,
             ] {
                 assert!(parse_hex(hex).is_some(), "bad hex {hex:?} in {}", p.name);
             }

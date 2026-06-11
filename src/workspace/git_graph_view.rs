@@ -99,7 +99,10 @@ impl Workspace {
             }
             GraphAction::Reset(hash, mode) => {
                 let r = crate::git::reset(&self.root, &hash, mode);
-                self.git_action(r, &format!("Reset {} to commit", mode.trim_start_matches('-')));
+                self.git_action(
+                    r,
+                    &format!("Reset {} to commit", mode.trim_start_matches('-')),
+                );
             }
             GraphAction::DeleteBranch(name) => {
                 let r = crate::git::delete_branch(&self.root, &name);
@@ -181,7 +184,10 @@ fn row_context_menu(resp: &egui::Response, row: &GraphRow, action: &mut Option<G
                 }
                 // Only offer delete for local branches (no remote `/` prefix).
                 if !r.contains('/')
-                    && ui.small_button("Del").on_hover_text("Delete branch").clicked()
+                    && ui
+                        .small_button("Del")
+                        .on_hover_text("Delete branch")
+                        .clicked()
                 {
                     *action = Some(GraphAction::DeleteBranch(r.clone()));
                     ui.close();
@@ -339,7 +345,10 @@ fn draw_row_text(painter: &egui::Painter, rect: egui::Rect, row: &GraphRow, grap
     }
 
     // Right-aligned metadata: short hash · age · author.
-    let meta = format!("{}  {}  {}", row.commit.short, row.commit.when, row.commit.author);
+    let meta = format!(
+        "{}  {}  {}",
+        row.commit.short, row.commit.when, row.commit.author
+    );
     let meta_g = painter.layout_no_wrap(meta, mono, dim);
     let meta_x = rect.right() - meta_g.size().x - 8.0;
     painter.galley(egui::pos2(meta_x, mid - meta_g.size().y / 2.0), meta_g, dim);

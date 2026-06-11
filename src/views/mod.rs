@@ -2,3 +2,4 @@
 //! views (dashboard, and later git) live here.
 
 pub mod dashboard;
+pub mod mcp_manager;

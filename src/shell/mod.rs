@@ -18,6 +18,8 @@ pub enum Tab {
     Chat(WorkspaceId),
     /// The optional browser plugin's view.
     Browser(BrowserId),
+    /// Code Puppy's MCP servers: list, toggle, add (one instance).
+    McpManager,
 }
 
 /// Structural changes requested during rendering, applied after the dock draws.
@@ -34,6 +36,7 @@ pub enum ShellAction {
 pub struct Shell<'a> {
     pub sup: &'a mut Supervisor,
     pub browser: &'a mut BrowserManager,
+    pub mcp: &'a mut views::mcp_manager::McpManagerView,
     pub actions: &'a mut Vec<ShellAction>,
 }
 
@@ -55,19 +58,19 @@ impl TabViewer for Shell<'_> {
                 None => "(closed)".to_string().into(),
             },
             Tab::Browser(id) => self.browser.tab_title(*id).into(),
+            Tab::McpManager => "MCP Servers".into(),
         }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match tab {
-            Tab::Dashboard => {
-                views::dashboard::render(ui, self.sup, self.browser, self.actions)
-            }
+            Tab::Dashboard => views::dashboard::render(ui, self.sup, self.browser, self.actions),
             Tab::Chat(id) => match self.sup.get_mut(*id) {
                 Some(ws) => ws.render_chat(ui, self.browser),
                 None => closed_placeholder(ui),
             },
             Tab::Browser(id) => self.browser.render_tab(ui, *id),
+            Tab::McpManager => views::mcp_manager::render(ui, self.sup, self.mcp),
         }
     }
 
@@ -76,6 +79,7 @@ impl TabViewer for Shell<'_> {
             Tab::Dashboard => egui::Id::new("tab-dashboard"),
             Tab::Chat(id) => egui::Id::new(("tab-chat", id.0)),
             Tab::Browser(id) => egui::Id::new(("tab-browser", id.0)),
+            Tab::McpManager => egui::Id::new("tab-mcp-manager"),
         }
     }
 
@@ -89,7 +93,7 @@ impl TabViewer for Shell<'_> {
         match tab {
             Tab::Chat(id) => self.actions.push(ShellAction::Close(*id)),
             Tab::Browser(id) => self.browser.close_tab(*id),
-            Tab::Dashboard => {}
+            Tab::Dashboard | Tab::McpManager => {}
         }
         OnCloseResponse::Close
     }

@@ -284,7 +284,10 @@ impl Workspace {
     fn perform_rename(&mut self, path: &Path, new_name: &str) -> Result<(), String> {
         let dest = sibling_path(path.parent(), new_name)?;
         if dest.exists() {
-            return Err(format!("\u{201c}{}\u{201d} already exists", new_name.trim()));
+            return Err(format!(
+                "\u{201c}{}\u{201d} already exists",
+                new_name.trim()
+            ));
         }
         std::fs::rename(path, &dest).map_err(|e| e.to_string())?;
         // Keep open buffers / editor tabs pointing at the renamed path(s).
@@ -583,7 +586,10 @@ mod tests {
     fn remap_rewrites_old_prefix() {
         let old = Path::new("/a/old");
         let new = Path::new("/a/new");
-        assert_eq!(remap(Path::new("/a/old"), old, new), PathBuf::from("/a/new"));
+        assert_eq!(
+            remap(Path::new("/a/old"), old, new),
+            PathBuf::from("/a/new")
+        );
         assert_eq!(
             remap(Path::new("/a/old/x.rs"), old, new),
             PathBuf::from("/a/new/x.rs")

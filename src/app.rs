@@ -34,6 +34,8 @@ pub struct PuppyApp {
     /// Optional browser plugin: discovery + open browser tabs.
     browser: BrowserManager,
     perf: crate::perf::PerfStats,
+    /// State for the MCP Manager tab (one instance).
+    mcp: crate::views::mcp_manager::McpManagerView,
 }
 
 /// Snapshot the open workspaces as a persistable session.
@@ -136,6 +138,7 @@ impl PuppyApp {
             theme_editor_open: false,
             browser: BrowserManager::discover(),
             perf: crate::perf::PerfStats::default(),
+            mcp: crate::views::mcp_manager::McpManagerView::default(),
         }
     }
 
@@ -268,6 +271,7 @@ impl eframe::App for PuppyApp {
         let mut actions: Vec<ShellAction> = Vec::new();
         let mut open_clicked = false;
         let mut open_browser = false;
+        let mut open_mcp = false;
         let mut pick_theme: Option<Theme> = None;
         let mut open_editor = false;
         let theme = self.theme.clone();
@@ -302,6 +306,13 @@ impl eframe::App for PuppyApp {
                 if ui.button("Browser").on_hover_text(browser_tip).clicked() {
                     open_browser = true;
                 }
+                if ui
+                    .button("MCP")
+                    .on_hover_text("Manage Code Puppy's MCP servers")
+                    .clicked()
+                {
+                    open_mcp = true;
+                }
                 ui.label(egui::RichText::new(format!("{ws_count} workspace(s)")).weak());
                 if waiting > 0 {
                     ui.separator();
@@ -322,7 +333,10 @@ impl eframe::App for PuppyApp {
                         pick_theme = Some(Theme::Dark);
                         ui.close();
                     }
-                    if ui.selectable_label(theme == Theme::Light, "Light").clicked() {
+                    if ui
+                        .selectable_label(theme == Theme::Light, "Light")
+                        .clicked()
+                    {
                         pick_theme = Some(Theme::Light);
                         ui.close();
                     }
@@ -353,6 +367,14 @@ impl eframe::App for PuppyApp {
             let id = self.browser.open_tab(None, None);
             if let Some(dock) = self.dock.as_mut() {
                 dock.push_to_focused_leaf(Tab::Browser(id));
+            }
+        }
+        if open_mcp && let Some(dock) = self.dock.as_mut() {
+            // One instance: focus the existing tab if it's already open.
+            if let Some(path) = dock.find_tab_from(|t| matches!(t, Tab::McpManager)) {
+                let _ = dock.set_active_tab(path);
+            } else {
+                dock.push_to_focused_leaf(Tab::McpManager);
             }
         }
         if let Some(t) = pick_theme {
@@ -400,6 +422,7 @@ impl eframe::App for PuppyApp {
             let mut shell = Shell {
                 sup: &mut self.sup,
                 browser: &mut self.browser,
+                mcp: &mut self.mcp,
                 actions: &mut actions,
             };
             DockArea::new(&mut dock)

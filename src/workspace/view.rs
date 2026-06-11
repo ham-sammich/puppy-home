@@ -207,25 +207,22 @@ impl Workspace {
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(format!("🗂 {}", self.name)).strong());
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                if ui
-                                    .small_button("+ Folder")
-                                    .on_hover_text("New folder in the project root")
-                                    .clicked()
-                                {
-                                    acts.new_in = Some((self.root.clone(), true));
-                                }
-                                if ui
-                                    .small_button("+ File")
-                                    .on_hover_text("New file in the project root")
-                                    .clicked()
-                                {
-                                    acts.new_in = Some((self.root.clone(), false));
-                                }
-                            },
-                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .small_button("+ Folder")
+                                .on_hover_text("New folder in the project root")
+                                .clicked()
+                            {
+                                acts.new_in = Some((self.root.clone(), true));
+                            }
+                            if ui
+                                .small_button("+ File")
+                                .on_hover_text("New file in the project root")
+                                .clicked()
+                            {
+                                acts.new_in = Some((self.root.clone(), false));
+                            }
+                        });
                     });
                     ui.separator();
                     egui::ScrollArea::vertical()
@@ -503,7 +500,9 @@ impl Workspace {
                                 ui.horizontal(|ui| {
                                     if ui
                                         .button("Open in browser")
-                                        .on_hover_text("Preview this HTML file in the browser plugin")
+                                        .on_hover_text(
+                                            "Preview this HTML file in the browser plugin",
+                                        )
                                         .clicked()
                                     {
                                         preview = true;

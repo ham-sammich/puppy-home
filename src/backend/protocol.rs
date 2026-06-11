@@ -121,6 +121,20 @@ pub(super) fn shutdown() -> Value {
     json!({ "op": "shutdown" })
 }
 
+pub(super) fn list_mcp_servers() -> Value {
+    json!({ "op": "list_mcp_servers" })
+}
+
+pub(super) fn set_mcp_enabled(name: &str, enabled: bool) -> Value {
+    json!({ "op": "set_mcp_enabled", "name": name, "enabled": enabled })
+}
+
+/// `transport` is "stdio" | "sse" | "http"; `config` carries the transport's
+/// fields (command/args/env or url/headers) exactly as Code Puppy stores them.
+pub(super) fn add_mcp_server(name: &str, transport: &str, config: &Value) -> Value {
+    json!({ "op": "add_mcp_server", "name": name, "type": transport, "config": config })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,6 +147,7 @@ mod tests {
         assert_eq!(list_models(), json!({"op": "list_models"}));
         assert_eq!(status(), json!({"op": "status"}));
         assert_eq!(list_sessions(), json!({"op": "list_sessions"}));
+        assert_eq!(list_mcp_servers(), json!({"op": "list_mcp_servers"}));
         assert_eq!(pause(), json!({"op": "pause"}));
         assert_eq!(resume(), json!({"op": "resume"}));
         assert_eq!(shutdown(), json!({"op": "shutdown"}));
@@ -211,6 +226,39 @@ mod tests {
         assert_eq!(
             ask_cancel("q1"),
             json!({"op": "ask_response", "id": "q1", "cancelled": true})
+        );
+    }
+
+    #[test]
+    fn mcp_ops() {
+        assert_eq!(
+            set_mcp_enabled("filesystem", true),
+            json!({"op": "set_mcp_enabled", "name": "filesystem", "enabled": true})
+        );
+        assert_eq!(
+            set_mcp_enabled("filesystem", false),
+            json!({"op": "set_mcp_enabled", "name": "filesystem", "enabled": false})
+        );
+        let config = json!({"command": "npx", "args": ["-y", "server"], "env": {"K": "V"}});
+        assert_eq!(
+            add_mcp_server("fs", "stdio", &config),
+            json!({
+                "op": "add_mcp_server",
+                "name": "fs",
+                "type": "stdio",
+                "config": {"command": "npx", "args": ["-y", "server"], "env": {"K": "V"}}
+            })
+        );
+        let config =
+            json!({"url": "https://example.com/sse", "headers": {"Authorization": "Bearer x"}});
+        assert_eq!(
+            add_mcp_server("remote", "sse", &config),
+            json!({
+                "op": "add_mcp_server",
+                "name": "remote",
+                "type": "sse",
+                "config": {"url": "https://example.com/sse", "headers": {"Authorization": "Bearer x"}}
+            })
         );
     }
 

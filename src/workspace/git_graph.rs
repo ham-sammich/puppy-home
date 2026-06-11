@@ -160,7 +160,9 @@ pub(crate) fn compute_graph(commits: &[Commit]) -> GraphLayout {
             // Further parents (merges): route to an existing waiting lane, or
             // open a fresh one with a new color.
             for parent in &commit.parents[1..] {
-                let target = match lanes.iter().position(|l| l.as_deref() == Some(parent.as_str()))
+                let target = match lanes
+                    .iter()
+                    .position(|l| l.as_deref() == Some(parent.as_str()))
                 {
                     Some(e) => e,
                     None => {
@@ -233,7 +235,11 @@ mod tests {
         // The merge row diverges into two parent lines.
         let merge = &g.rows[0];
         assert_eq!(
-            merge.edges.iter().filter(|e| e.half == EdgeHalf::Bottom).count(),
+            merge
+                .edges
+                .iter()
+                .filter(|e| e.half == EdgeHalf::Bottom)
+                .count(),
             2
         );
         // Everything converges back to a single lane at the root.

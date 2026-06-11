@@ -105,6 +105,29 @@ pub struct SessionEntry {
     pub text: String,
 }
 
+/// A registered MCP server (from Code Puppy's MCP manager, global config).
+#[derive(Debug, Clone, Deserialize)]
+pub struct McpServerInfo {
+    #[serde(default)]
+    #[allow(dead_code)] // registry id; ops address servers by name
+    pub id: String,
+    pub name: String,
+    /// Transport: "stdio" | "sse" | "http".
+    #[serde(rename = "type", default)]
+    pub transport: String,
+    #[serde(default)]
+    pub enabled: bool,
+    /// Lifecycle state: "running" | "starting" | "stopped" | "stopping" |
+    /// "error" | "quarantined".
+    #[serde(default)]
+    pub state: String,
+    /// One-line config summary: the command line (stdio) or the URL.
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub error: String,
+}
+
 /// A concurrent sub-agent Code Puppy spawned via `invoke_agent` (dashboard row).
 #[derive(Debug, Clone, Deserialize)]
 pub struct SubAgentInfo {
@@ -238,6 +261,8 @@ pub enum UiEvent {
         messages: u64,
         entries: Vec<SessionEntry>,
     },
+    /// The catalog of registered MCP servers (answer to `list_mcp_servers`).
+    McpServers(Vec<McpServerInfo>),
     /// The sidecar process exited.
     Exited { code: Option<i32> },
 }
@@ -356,6 +381,10 @@ enum Wire {
         #[serde(default)]
         entries: Vec<SessionEntry>,
     },
+    McpServers {
+        #[serde(default)]
+        items: Vec<McpServerInfo>,
+    },
 }
 
 impl From<Wire> for UiEvent {
@@ -437,6 +466,7 @@ impl From<Wire> for UiEvent {
                 messages,
                 entries,
             },
+            Wire::McpServers { items } => UiEvent::McpServers(items),
         }
     }
 }
@@ -619,6 +649,21 @@ impl CodePuppy {
 
     pub fn set_agent(&self, name: &str) {
         self.write(protocol::set_agent(name));
+    }
+
+    /// Ask the sidecar for the MCP server catalog (`McpServers` event).
+    pub fn list_mcp_servers(&self) {
+        self.write(protocol::list_mcp_servers());
+    }
+
+    /// Start (`true`) or stop (`false`) an MCP server; the sidecar re-lists.
+    pub fn set_mcp_enabled(&self, name: &str, enabled: bool) {
+        self.write(protocol::set_mcp_enabled(name, enabled));
+    }
+
+    /// Register a new MCP server; the sidecar re-lists (or emits `Error`).
+    pub fn add_mcp_server(&self, name: &str, transport: &str, config: &Value) {
+        self.write(protocol::add_mcp_server(name, transport, config));
     }
 }
 
@@ -913,6 +958,38 @@ mod tests {
         assert_eq!(v["question_header"], "Pick");
         assert_eq!(v["selected_options"][0], "A");
         assert!(v["other_text"].is_null());
+    }
+
+    #[test]
+    fn mcp_servers_event() {
+        let ev = decode(
+            r#"{"event":"mcp_servers","items":[{"id":"abc","name":"filesystem","type":"stdio","enabled":true,"state":"running","summary":"npx -y server","error":""}]}"#,
+        );
+        match ev {
+            UiEvent::McpServers(items) => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].name, "filesystem");
+                assert_eq!(items[0].transport, "stdio");
+                assert!(items[0].enabled);
+                assert_eq!(items[0].state, "running");
+                assert_eq!(items[0].summary, "npx -y server");
+                assert_eq!(items[0].error, "");
+            }
+            other => panic!("expected McpServers, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mcp_servers_event_defaults_optional_fields() {
+        match decode(r#"{"event":"mcp_servers","items":[{"name":"bare"}]}"#) {
+            UiEvent::McpServers(items) => {
+                assert_eq!(items[0].name, "bare");
+                assert_eq!(items[0].transport, "");
+                assert!(!items[0].enabled);
+                assert_eq!(items[0].state, "");
+            }
+            other => panic!("expected McpServers, got {other:?}"),
+        }
     }
 
     #[test]
