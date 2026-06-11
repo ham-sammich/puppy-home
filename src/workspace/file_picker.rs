@@ -52,10 +52,9 @@ impl Workspace {
         match action {
             Some(BrowseAction::Enter(name)) => self.file_browser = Some(cwd.join(name)),
             Some(BrowseAction::Up) => {
-                // Stay within the workspace subtree so @refs remain relative.
-                if cwd != self.root
-                    && let Some(parent) = cwd.parent()
-                {
+                // Browse anywhere -- files under the root get a relative @ref,
+                // files outside it get an absolute one (both work).
+                if let Some(parent) = cwd.parent() {
                     self.file_browser = Some(parent.to_path_buf());
                 }
             }
@@ -70,8 +69,9 @@ impl Workspace {
         }
     }
 
-    /// Append an `@<path>` reference (relative to the workspace root, forward
-    /// slashes) to the composer input and focus it.
+    /// Append an `@<path>` reference to the composer input and focus it. Paths
+    /// under the workspace root become relative (forward slashes); anything
+    /// outside keeps its absolute path.
     fn insert_file_reference(&mut self, path: &Path) {
         let rel = path.strip_prefix(&self.root).unwrap_or(path);
         let token = format!("@{}", rel.to_string_lossy().replace('\\', "/"));
