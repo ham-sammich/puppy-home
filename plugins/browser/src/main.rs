@@ -81,6 +81,9 @@ fn main() -> wry::Result<()> {
         .build(&event_loop)
         .expect("create window");
 
+    // `mut` is only needed on Windows (CDP args reassign below); silence the
+    // unused-mut lint elsewhere so the plugin builds warning-free everywhere.
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut builder = WebViewBuilder::new(&window)
         .with_url(&initial_url)
         .with_devtools(true);
