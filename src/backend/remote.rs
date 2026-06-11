@@ -358,3 +358,76 @@ impl WorkspaceFs for RemoteFs {
         self.state.stat(path).is_dir
     }
 }
+
+// ---------------------------------------------------------------------------
+// Remote git: run git on the far host via the sidecar, parse with git.rs.
+// ---------------------------------------------------------------------------
+
+/// A [`crate::git::GitRunner`] that runs `git -C <root> ...` on the remote host
+/// through the `git_run` RPC.
+pub struct RemoteRunner {
+    state: Arc<RemoteState>,
+    /// The repo root path *on the remote*.
+    root: String,
+}
+
+impl RemoteRunner {
+    fn call_git(&self, args: &[&str]) -> Result<Value, String> {
+        self.state
+            .call("git_run", json!({ "root": self.root, "args": args }))
+    }
+}
+
+impl crate::git::GitRunner for RemoteRunner {
+    fn run(&self, args: &[&str]) -> Result<String, String> {
+        let reply = self.call_git(args)?;
+        let ok = reply.get("ok").and_then(Value::as_bool).unwrap_or(false);
+        if ok {
+            Ok(reply
+                .get("stdout")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string())
+        } else {
+            let stderr = reply.get("stderr").and_then(Value::as_str).unwrap_or("");
+            let stderr = stderr.trim();
+            Err(if stderr.is_empty() {
+                format!("git {} failed", args.first().copied().unwrap_or(""))
+            } else {
+                stderr.to_string()
+            })
+        }
+    }
+
+    fn output(&self, args: &[&str]) -> String {
+        self.call_git(args)
+            .ok()
+            .and_then(|r| r.get("stdout").and_then(Value::as_str).map(str::to_string))
+            .unwrap_or_default()
+    }
+
+    fn read_workfile(&self, rel: &str) -> Option<String> {
+        let base = self.root.trim_end_matches('/');
+        let full = if base.is_empty() {
+            rel.to_string()
+        } else {
+            format!("{base}/{rel}")
+        };
+        self.state.read_file(Path::new(&full)).ok()
+    }
+}
+
+/// A [`crate::git::WorkspaceGit`] backed by git running on the remote host.
+pub struct RemoteGit {
+    runner: RemoteRunner,
+}
+
+impl RemoteGit {
+    pub fn new(state: Arc<RemoteState>, root: String) -> Self {
+        RemoteGit {
+            runner: RemoteRunner { state, root },
+        }
+    }
+}
+
+crate::git::impl_workspace_git!(RemoteGit);

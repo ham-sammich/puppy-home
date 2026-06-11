@@ -216,6 +216,7 @@ impl Workspace {
         root: PathBuf,
         remote_label: Option<String>,
         fs: Arc<dyn fs::WorkspaceFs>,
+        git: Arc<dyn crate::git::WorkspaceGit>,
         backend: CodePuppy,
         rx: Receiver<UiEvent>,
     ) -> Self {
@@ -223,8 +224,6 @@ impl Workspace {
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| root.to_string_lossy().into_owned());
-        let git: Arc<dyn crate::git::WorkspaceGit> =
-            Arc::new(crate::git::LocalGit::new(root.clone()));
         let is_git_repo = git.is_repo();
         Workspace {
             id,

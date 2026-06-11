@@ -1,9 +1,12 @@
-//! Thin, read-only `git` wrapper (Code Puppy has no git APIs, so we shell out).
+//! Git access for a workspace.
 //!
-//! Used to drive the Changes panel from the real working-tree status instead of
-//! only the edits Code Puppy reports — so locally-made changes show up too.
+//! Code Puppy has no git API, so we drive git ourselves. The command *parsing*
+//! lives in the free functions below, which take a [`GitRunner`] -- an
+//! abstraction over "run these git args, give me stdout". `LocalGit` shells out
+//! to `git -C <root>`; `RemoteGit` (in the backend) runs git on the SSH host via
+//! the sidecar. Both reuse the same porcelain parsing, so behaviour matches.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 /// A working-tree change for one path.
@@ -15,35 +18,86 @@ pub struct GitChange {
     pub marker: char,
 }
 
-fn git(root: &Path) -> Command {
-    let mut c = Command::new("git");
-    crate::proc::hide_console(&mut c);
-    c.arg("-C").arg(root);
-    c
+// ---------------------------------------------------------------------------
+// Runner abstraction: how git is actually executed (local shell vs remote RPC).
+// ---------------------------------------------------------------------------
+
+/// Executes `git` for one repo. The free functions parse what it returns.
+pub(crate) trait GitRunner {
+    /// Run `git <args>`; stdout on success, a trimmed error on failure.
+    fn run(&self, args: &[&str]) -> Result<String, String>;
+    /// Run `git <args>`; stdout regardless of exit status (empty on failure).
+    fn output(&self, args: &[&str]) -> String;
+    /// Read a working-tree file by repo-relative path (for untracked diffs).
+    fn read_workfile(&self, rel: &str) -> Option<String>;
 }
 
-/// Is `root` inside a git work tree?
-pub fn is_repo(root: &Path) -> bool {
-    git(root)
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
+/// Runs git on the local machine via `git -C <root>`.
+pub(crate) struct LocalRunner {
+    root: PathBuf,
+}
+
+impl LocalRunner {
+    pub(crate) fn new(root: PathBuf) -> Self {
+        LocalRunner { root }
+    }
+
+    fn git(&self) -> Command {
+        let mut c = Command::new("git");
+        crate::proc::hide_console(&mut c);
+        c.arg("-C").arg(&self.root);
+        c
+    }
+}
+
+impl GitRunner for LocalRunner {
+    fn run(&self, args: &[&str]) -> Result<String, String> {
+        match self.git().args(args).stdin(Stdio::null()).output() {
+            Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).into_owned()),
+            Ok(o) => {
+                let err = String::from_utf8_lossy(&o.stderr);
+                let err = err.trim();
+                Err(if err.is_empty() {
+                    format!("git {} failed", args.first().copied().unwrap_or(""))
+                } else {
+                    err.to_string()
+                })
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    fn output(&self, args: &[&str]) -> String {
+        self.git()
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default()
+    }
+
+    fn read_workfile(&self, rel: &str) -> Option<String> {
+        std::fs::read_to_string(self.root.join(rel)).ok()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Parsing (shared by local + remote via the runner).
+// ---------------------------------------------------------------------------
+
+/// Is the runner's repo inside a git work tree?
+pub fn is_repo(r: &dyn GitRunner) -> bool {
+    r.run(&["rev-parse", "--is-inside-work-tree"])
+        .map(|s| s.trim() == "true")
         .unwrap_or(false)
 }
 
 /// Working-tree changes (staged + unstaged + untracked), most-relevant first.
-pub fn status(root: &Path) -> Vec<GitChange> {
-    let out = match git(root)
-        .args(["status", "--porcelain", "--untracked-files=all"])
-        .output()
-    {
-        Ok(o) if o.status.success() => o,
-        _ => return Vec::new(),
+pub fn status(r: &dyn GitRunner) -> Vec<GitChange> {
+    let text = match r.run(&["status", "--porcelain", "--untracked-files=all"]) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
     };
-    let text = String::from_utf8_lossy(&out.stdout);
     let mut changes = Vec::new();
     for line in text.lines() {
         if line.len() < 4 {
@@ -76,38 +130,13 @@ pub fn status(root: &Path) -> Vec<GitChange> {
 
 /// Unified diff for one path vs HEAD (covers staged + unstaged). Empty for an
 /// untracked file (use [`untracked_content`] for those).
-pub fn diff(root: &Path, path: &str) -> String {
-    git(root)
-        .args(["diff", "HEAD", "--", path])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default()
+pub fn diff(r: &dyn GitRunner, path: &str) -> String {
+    r.output(&["diff", "HEAD", "--", path])
 }
 
 /// Read an untracked file's content (rendered as all-added in the diff view).
-pub fn untracked_content(root: &Path, path: &str) -> Option<String> {
-    std::fs::read_to_string(root.join(path)).ok()
-}
-
-// ---------------------------------------------------------------------------
-// Git view: branch, history, staging, commit, blame.
-// ---------------------------------------------------------------------------
-
-/// Run a git command, returning stdout on success or a trimmed error on failure.
-fn run(root: &Path, args: &[&str]) -> Result<String, String> {
-    match git(root).args(args).output() {
-        Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).into_owned()),
-        Ok(o) => {
-            let err = String::from_utf8_lossy(&o.stderr);
-            let err = err.trim();
-            Err(if err.is_empty() {
-                format!("git {} failed", args.first().copied().unwrap_or(""))
-            } else {
-                err.to_string()
-            })
-        }
-        Err(e) => Err(e.to_string()),
-    }
+pub fn untracked_content(r: &dyn GitRunner, path: &str) -> Option<String> {
+    r.read_workfile(path)
 }
 
 /// Current branch + upstream tracking position.
@@ -119,23 +148,22 @@ pub struct RepoInfo {
 }
 
 /// Branch name and ahead/behind vs the upstream (if any).
-pub fn head_info(root: &Path) -> RepoInfo {
-    let branch = run(root, &["rev-parse", "--abbrev-ref", "HEAD"])
+pub fn head_info(r: &dyn GitRunner) -> RepoInfo {
+    let branch = r
+        .run(&["rev-parse", "--abbrev-ref", "HEAD"])
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|_| "HEAD".to_string());
     // "<behind>\t<ahead>": left = upstream-only commits, right = HEAD-only.
-    let (upstream, behind, ahead) = match run(
-        root,
-        &["rev-list", "--left-right", "--count", "@{u}...HEAD"],
-    ) {
-        Ok(s) => {
-            let mut it = s.split_whitespace();
-            let behind = it.next().and_then(|n| n.parse().ok()).unwrap_or(0);
-            let ahead = it.next().and_then(|n| n.parse().ok()).unwrap_or(0);
-            (true, behind, ahead)
-        }
-        Err(_) => (false, 0, 0),
-    };
+    let (upstream, behind, ahead) =
+        match r.run(&["rev-list", "--left-right", "--count", "@{u}...HEAD"]) {
+            Ok(s) => {
+                let mut it = s.split_whitespace();
+                let behind = it.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+                let ahead = it.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+                (true, behind, ahead)
+            }
+            Err(_) => (false, 0, 0),
+        };
     RepoInfo {
         branch,
         upstream,
@@ -159,11 +187,11 @@ pub struct Commit {
 }
 
 /// Recent commits on HEAD (newest first), at most `limit`.
-pub fn log(root: &Path, limit: usize) -> Vec<Commit> {
+pub fn log(r: &dyn GitRunner, limit: usize) -> Vec<Commit> {
     // %x1f = unit separator between fields; %s never contains a newline.
     let fmt = "--pretty=format:%H%x1f%h%x1f%an%x1f%ar%x1f%s";
     let n = format!("-n{limit}");
-    let out = match run(root, &["log", &n, fmt]) {
+    let out = match r.run(&["log", &n, fmt]) {
         Ok(o) => o,
         Err(_) => return Vec::new(),
     };
@@ -185,11 +213,11 @@ pub fn log(root: &Path, limit: usize) -> Vec<Commit> {
 
 /// Commits across **all** branches (newest first, date-ordered), with parent
 /// hashes + ref decorations — everything the graph view needs to lay out lanes.
-pub fn graph_log(root: &Path, limit: usize) -> Vec<Commit> {
+pub fn graph_log(r: &dyn GitRunner, limit: usize) -> Vec<Commit> {
     // Fields, %x1f-separated: hash, short, parents, author, age, refs, subject.
     let fmt = "--pretty=format:%H%x1f%h%x1f%P%x1f%an%x1f%ar%x1f%D%x1f%s";
     let n = format!("-n{limit}");
-    let out = match run(root, &["log", "--all", "--date-order", &n, fmt]) {
+    let out = match r.run(&["log", "--all", "--date-order", &n, fmt]) {
         Ok(o) => o,
         Err(_) => return Vec::new(),
     };
@@ -232,8 +260,9 @@ fn parse_refs(d: &str) -> Vec<String> {
 }
 
 /// The full patch for a single commit (`git show`), for the diff view.
-pub fn show(root: &Path, hash: &str) -> String {
-    run(root, &["show", "--stat", "--patch", hash]).unwrap_or_default()
+pub fn show(r: &dyn GitRunner, hash: &str) -> String {
+    r.run(&["show", "--stat", "--patch", hash])
+        .unwrap_or_default()
 }
 
 /// One file's status, split into its index (staged) and worktree (unstaged) sides.
@@ -274,8 +303,8 @@ fn marker_for(index: char, worktree: char) -> char {
 }
 
 /// Full porcelain status with index/worktree sides preserved.
-pub fn status_full(root: &Path) -> Vec<GitStatusEntry> {
-    let out = match run(root, &["status", "--porcelain", "--untracked-files=all"]) {
+pub fn status_full(r: &dyn GitRunner) -> Vec<GitStatusEntry> {
+    let out = match r.run(&["status", "--porcelain", "--untracked-files=all"]) {
         Ok(o) => o,
         Err(_) => return Vec::new(),
     };
@@ -303,28 +332,29 @@ pub fn status_full(root: &Path) -> Vec<GitStatusEntry> {
 }
 
 /// Stage one path (`git add`).
-pub fn stage(root: &Path, path: &str) -> Result<(), String> {
-    run(root, &["add", "--", path]).map(|_| ())
+pub fn stage(r: &dyn GitRunner, path: &str) -> Result<(), String> {
+    r.run(&["add", "--", path]).map(|_| ())
 }
 
 /// Unstage one path (`git restore --staged`).
-pub fn unstage(root: &Path, path: &str) -> Result<(), String> {
-    run(root, &["restore", "--staged", "--", path]).map(|_| ())
+pub fn unstage(r: &dyn GitRunner, path: &str) -> Result<(), String> {
+    r.run(&["restore", "--staged", "--", path]).map(|_| ())
 }
 
 /// Stage everything (`git add -A`).
-pub fn stage_all(root: &Path) -> Result<(), String> {
-    run(root, &["add", "-A"]).map(|_| ())
+pub fn stage_all(r: &dyn GitRunner) -> Result<(), String> {
+    r.run(&["add", "-A"]).map(|_| ())
 }
 
 /// Unstage everything (`git reset`).
-pub fn unstage_all(root: &Path) -> Result<(), String> {
-    run(root, &["reset", "-q"]).map(|_| ())
+pub fn unstage_all(r: &dyn GitRunner) -> Result<(), String> {
+    r.run(&["reset", "-q"]).map(|_| ())
 }
 
 /// Commit the staged changes. Returns the short summary git prints, or an error.
-pub fn commit(root: &Path, message: &str) -> Result<String, String> {
-    run(root, &["commit", "-m", message]).map(|s| s.trim().to_string())
+pub fn commit(r: &dyn GitRunner, message: &str) -> Result<String, String> {
+    r.run(&["commit", "-m", message])
+        .map(|s| s.trim().to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -332,54 +362,55 @@ pub fn commit(root: &Path, message: &str) -> Result<String, String> {
 // ---------------------------------------------------------------------------
 
 /// Switch to an existing branch (or detach onto a tag/remote ref).
-pub fn checkout(root: &Path, name: &str) -> Result<(), String> {
-    run(root, &["checkout", name]).map(|_| ())
+pub fn checkout(r: &dyn GitRunner, name: &str) -> Result<(), String> {
+    r.run(&["checkout", name]).map(|_| ())
 }
 
 /// Create a new branch at `at` and switch to it.
-pub fn create_branch(root: &Path, name: &str, at: &str) -> Result<(), String> {
-    run(root, &["checkout", "-b", name, at]).map(|_| ())
+pub fn create_branch(r: &dyn GitRunner, name: &str, at: &str) -> Result<(), String> {
+    r.run(&["checkout", "-b", name, at]).map(|_| ())
 }
 
 /// Force-delete a local branch.
-pub fn delete_branch(root: &Path, name: &str) -> Result<(), String> {
-    run(root, &["branch", "-D", name]).map(|_| ())
+pub fn delete_branch(r: &dyn GitRunner, name: &str) -> Result<(), String> {
+    r.run(&["branch", "-D", name]).map(|_| ())
 }
 
 /// Merge `target` (a branch/commit) into the current branch.
-pub fn merge(root: &Path, target: &str) -> Result<String, String> {
-    run(root, &["merge", target]).map(|s| s.trim().to_string())
+pub fn merge(r: &dyn GitRunner, target: &str) -> Result<String, String> {
+    r.run(&["merge", target]).map(|s| s.trim().to_string())
 }
 
 /// Apply a commit onto the current branch.
-pub fn cherry_pick(root: &Path, hash: &str) -> Result<(), String> {
-    run(root, &["cherry-pick", hash]).map(|_| ())
+pub fn cherry_pick(r: &dyn GitRunner, hash: &str) -> Result<(), String> {
+    r.run(&["cherry-pick", hash]).map(|_| ())
 }
 
 /// Create a new commit that undoes `hash` (no editor).
-pub fn revert(root: &Path, hash: &str) -> Result<(), String> {
-    run(root, &["revert", "--no-edit", hash]).map(|_| ())
+pub fn revert(r: &dyn GitRunner, hash: &str) -> Result<(), String> {
+    r.run(&["revert", "--no-edit", hash]).map(|_| ())
 }
 
 /// Move the current branch tip to `hash`. `mode` is a git reset flag such as
 /// `--soft`, `--mixed`, or `--hard` (the last discards working-tree changes).
-pub fn reset(root: &Path, hash: &str, mode: &str) -> Result<(), String> {
-    run(root, &["reset", mode, hash]).map(|_| ())
+pub fn reset(r: &dyn GitRunner, hash: &str, mode: &str) -> Result<(), String> {
+    r.run(&["reset", mode, hash]).map(|_| ())
 }
 
 /// Fetch all remotes and prune stale tracking branches.
-pub fn fetch(root: &Path) -> Result<String, String> {
-    run(root, &["fetch", "--all", "--prune"]).map(|s| s.trim().to_string())
+pub fn fetch(r: &dyn GitRunner) -> Result<String, String> {
+    r.run(&["fetch", "--all", "--prune"])
+        .map(|s| s.trim().to_string())
 }
 
 /// Fast-forward the current branch from its upstream.
-pub fn pull(root: &Path) -> Result<String, String> {
-    run(root, &["pull", "--ff-only"]).map(|s| s.trim().to_string())
+pub fn pull(r: &dyn GitRunner) -> Result<String, String> {
+    r.run(&["pull", "--ff-only"]).map(|s| s.trim().to_string())
 }
 
 /// Push the current branch to its upstream.
-pub fn push(root: &Path) -> Result<String, String> {
-    run(root, &["push"]).map(|s| s.trim().to_string())
+pub fn push(r: &dyn GitRunner) -> Result<String, String> {
+    r.run(&["push"]).map(|s| s.trim().to_string())
 }
 
 /// One blamed line: the commit that last touched it + the content.
@@ -391,8 +422,8 @@ pub struct BlameLine {
 }
 
 /// Per-line blame for a file (`git blame --date=short`).
-pub fn blame(root: &Path, path: &str) -> Vec<BlameLine> {
-    let out = match run(root, &["blame", "--date=short", "--", path]) {
+pub fn blame(r: &dyn GitRunner, path: &str) -> Vec<BlameLine> {
+    let out = match r.run(&["blame", "--date=short", "--", path]) {
         Ok(o) => o,
         Err(_) => return Vec::new(),
     };
@@ -424,14 +455,12 @@ pub fn blame(root: &Path, path: &str) -> Vec<BlameLine> {
 }
 
 // ---------------------------------------------------------------------------
-// Trait wrapper: lets a workspace hold a git backend it can later swap for a
-// remote one (Phase A). `LocalGit` captures the repo root and delegates to the
-// free functions above, so the IDE calls `self.git.<op>()` instead of
-// `crate::git::<op>(&self.root, ...)`.
+// Trait wrapper: a workspace holds a git backend (local or remote) it drives as
+// `self.git.<op>()`. Both impls delegate to the free functions above through a
+// `GitRunner`, so the parsing is shared.
 // ---------------------------------------------------------------------------
 
-/// A workspace's git backend. Mirrors the free functions in this module with
-/// the repo root captured, so a remote impl can route them over the protocol.
+/// A workspace's git backend, with the repo + transport captured.
 pub trait WorkspaceGit: Send + Sync {
     fn is_repo(&self) -> bool;
     fn status(&self) -> Vec<GitChange>;
@@ -460,42 +489,55 @@ pub trait WorkspaceGit: Send + Sync {
     fn blame(&self, path: &str) -> Vec<BlameLine>;
 }
 
-/// The local-git backend: shells out to `git -C <root>` via the free functions.
+/// Generate a `WorkspaceGit` impl that delegates to the free functions through
+/// `self.runner` (a [`GitRunner`]). Local + remote backends differ only in the
+/// runner, so the whole impl is identical.
+macro_rules! impl_workspace_git {
+    ($ty:ty) => {
+        #[rustfmt::skip]
+        impl $crate::git::WorkspaceGit for $ty {
+            fn is_repo(&self) -> bool { $crate::git::is_repo(&self.runner) }
+            fn status(&self) -> Vec<$crate::git::GitChange> { $crate::git::status(&self.runner) }
+            fn diff(&self, path: &str) -> String { $crate::git::diff(&self.runner, path) }
+            fn untracked_content(&self, path: &str) -> Option<String> { $crate::git::untracked_content(&self.runner, path) }
+            fn head_info(&self) -> $crate::git::RepoInfo { $crate::git::head_info(&self.runner) }
+            fn log(&self, limit: usize) -> Vec<$crate::git::Commit> { $crate::git::log(&self.runner, limit) }
+            fn graph_log(&self, limit: usize) -> Vec<$crate::git::Commit> { $crate::git::graph_log(&self.runner, limit) }
+            fn show(&self, hash: &str) -> String { $crate::git::show(&self.runner, hash) }
+            fn status_full(&self) -> Vec<$crate::git::GitStatusEntry> { $crate::git::status_full(&self.runner) }
+            fn stage(&self, path: &str) -> Result<(), String> { $crate::git::stage(&self.runner, path) }
+            fn unstage(&self, path: &str) -> Result<(), String> { $crate::git::unstage(&self.runner, path) }
+            fn stage_all(&self) -> Result<(), String> { $crate::git::stage_all(&self.runner) }
+            fn unstage_all(&self) -> Result<(), String> { $crate::git::unstage_all(&self.runner) }
+            fn commit(&self, message: &str) -> Result<String, String> { $crate::git::commit(&self.runner, message) }
+            fn checkout(&self, name: &str) -> Result<(), String> { $crate::git::checkout(&self.runner, name) }
+            fn create_branch(&self, name: &str, at: &str) -> Result<(), String> { $crate::git::create_branch(&self.runner, name, at) }
+            fn delete_branch(&self, name: &str) -> Result<(), String> { $crate::git::delete_branch(&self.runner, name) }
+            fn merge(&self, target: &str) -> Result<String, String> { $crate::git::merge(&self.runner, target) }
+            fn cherry_pick(&self, hash: &str) -> Result<(), String> { $crate::git::cherry_pick(&self.runner, hash) }
+            fn revert(&self, hash: &str) -> Result<(), String> { $crate::git::revert(&self.runner, hash) }
+            fn reset(&self, hash: &str, mode: &str) -> Result<(), String> { $crate::git::reset(&self.runner, hash, mode) }
+            fn fetch(&self) -> Result<String, String> { $crate::git::fetch(&self.runner) }
+            fn pull(&self) -> Result<String, String> { $crate::git::pull(&self.runner) }
+            fn push(&self) -> Result<String, String> { $crate::git::push(&self.runner) }
+            fn blame(&self, path: &str) -> Vec<$crate::git::BlameLine> { $crate::git::blame(&self.runner, path) }
+        }
+    };
+}
+
+pub(crate) use impl_workspace_git;
+
+/// The local-git backend: shells out to `git -C <root>`.
 pub struct LocalGit {
-    root: PathBuf,
+    runner: LocalRunner,
 }
 
 impl LocalGit {
     pub fn new(root: PathBuf) -> Self {
-        LocalGit { root }
+        LocalGit {
+            runner: LocalRunner::new(root),
+        }
     }
 }
 
-#[rustfmt::skip]
-impl WorkspaceGit for LocalGit {
-    fn is_repo(&self) -> bool { is_repo(&self.root) }
-    fn status(&self) -> Vec<GitChange> { status(&self.root) }
-    fn diff(&self, path: &str) -> String { diff(&self.root, path) }
-    fn untracked_content(&self, path: &str) -> Option<String> { untracked_content(&self.root, path) }
-    fn head_info(&self) -> RepoInfo { head_info(&self.root) }
-    fn log(&self, limit: usize) -> Vec<Commit> { log(&self.root, limit) }
-    fn graph_log(&self, limit: usize) -> Vec<Commit> { graph_log(&self.root, limit) }
-    fn show(&self, hash: &str) -> String { show(&self.root, hash) }
-    fn status_full(&self) -> Vec<GitStatusEntry> { status_full(&self.root) }
-    fn stage(&self, path: &str) -> Result<(), String> { stage(&self.root, path) }
-    fn unstage(&self, path: &str) -> Result<(), String> { unstage(&self.root, path) }
-    fn stage_all(&self) -> Result<(), String> { stage_all(&self.root) }
-    fn unstage_all(&self) -> Result<(), String> { unstage_all(&self.root) }
-    fn commit(&self, message: &str) -> Result<String, String> { commit(&self.root, message) }
-    fn checkout(&self, name: &str) -> Result<(), String> { checkout(&self.root, name) }
-    fn create_branch(&self, name: &str, at: &str) -> Result<(), String> { create_branch(&self.root, name, at) }
-    fn delete_branch(&self, name: &str) -> Result<(), String> { delete_branch(&self.root, name) }
-    fn merge(&self, target: &str) -> Result<String, String> { merge(&self.root, target) }
-    fn cherry_pick(&self, hash: &str) -> Result<(), String> { cherry_pick(&self.root, hash) }
-    fn revert(&self, hash: &str) -> Result<(), String> { revert(&self.root, hash) }
-    fn reset(&self, hash: &str, mode: &str) -> Result<(), String> { reset(&self.root, hash, mode) }
-    fn fetch(&self) -> Result<String, String> { fetch(&self.root) }
-    fn pull(&self) -> Result<String, String> { pull(&self.root) }
-    fn push(&self) -> Result<String, String> { push(&self.root) }
-    fn blame(&self, path: &str) -> Vec<BlameLine> { blame(&self.root, path) }
-}
+impl_workspace_git!(LocalGit);

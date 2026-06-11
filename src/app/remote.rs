@@ -13,15 +13,23 @@ use eframe::egui;
 
 use crate::backend::ssh::SshTarget;
 use crate::backend::{CodePuppy, UiEvent};
+use crate::git::WorkspaceGit;
 use crate::shell::Tab;
 use crate::workspace::fs::WorkspaceFs;
 
 use super::PuppyApp;
 
 /// The result a remote-connect worker thread sends back: a spawned sidecar, its
-/// event stream, and the remote filesystem handle -- or an error string.
-pub(super) type RemoteSpawn = Result<(CodePuppy, Receiver<UiEvent>, Arc<dyn WorkspaceFs>), String>;
-
+/// event stream, and the remote filesystem + git handles -- or an error string.
+pub(super) type RemoteSpawn = Result<
+    (
+        CodePuppy,
+        Receiver<UiEvent>,
+        Arc<dyn WorkspaceFs>,
+        Arc<dyn WorkspaceGit>,
+    ),
+    String,
+>;
 /// A remote connection being established off-thread, plus what we need to adopt
 /// the workspace once it lands.
 pub(super) struct RemotePending {
@@ -75,10 +83,10 @@ impl PuppyApp {
         };
         let pending = self.remote_pending.take().expect("pending present");
         match result {
-            Ok((backend, ev_rx, fs)) => {
+            Ok((backend, ev_rx, fs, git)) => {
                 let id = self
                     .sup
-                    .adopt(pending.root, Some(pending.label), fs, backend, ev_rx);
+                    .adopt(pending.root, Some(pending.label), fs, git, backend, ev_rx);
                 if let Some(dock) = self.dock.as_mut() {
                     dock.push_to_focused_leaf(Tab::Chat(id));
                 }

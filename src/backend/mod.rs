@@ -681,11 +681,13 @@ impl From<Wire> for UiEvent {
 }
 
 /// A freshly spawned remote sidecar: the handle, its event stream, and the
-/// remote filesystem the workspace drives the tree/editor through.
+/// remote filesystem + git backends the workspace drives the tree/editor/git
+/// through.
 type RemoteHandle = (
     CodePuppy,
     Receiver<UiEvent>,
     Arc<dyn crate::workspace::fs::WorkspaceFs>,
+    Arc<dyn crate::git::WorkspaceGit>,
 );
 
 /// A running Code Puppy sidecar we can drive.
@@ -797,15 +799,20 @@ impl CodePuppy {
         let stdout = child.stdout.take().ok_or("no stdout pipe")?;
         let stderr = child.stderr.take().ok_or("no stderr pipe")?;
 
-        // Share the stdin so the remote fs can send RPC ops down the same pipe.
+        // Share the stdin so the remote fs/git can send RPC ops down the pipe.
         let stdin = Arc::new(Mutex::new(stdin));
         let remote = remote::RemoteState::new(stdin.clone(), ctx.clone());
         let remote_fs: Arc<dyn crate::workspace::fs::WorkspaceFs> =
             Arc::new(remote::RemoteFs::new(remote.clone()));
+        let remote_git: Arc<dyn crate::git::WorkspaceGit> = Arc::new(remote::RemoteGit::new(
+            remote.clone(),
+            remote_cwd.unwrap_or(".").to_string(),
+        ));
 
         let (tx, rx) = mpsc::channel::<UiEvent>();
-        // The stdout reader routes `fs_result` lines to `remote` (off the UI
-        // thread, so a blocking remote read can't deadlock), the rest to `tx`.
+        // The stdout reader routes `fs_result`/`git_result` lines to `remote`
+        // (off the UI thread, so a blocking remote op can't deadlock); the rest
+        // become UiEvents on `tx`.
         spawn_stdout_reader(stdout, tx.clone(), ctx.clone(), Some(remote));
         spawn_stderr_reader(stderr, tx.clone(), ctx.clone());
 
@@ -817,6 +824,7 @@ impl CodePuppy {
             },
             rx,
             remote_fs,
+            remote_git,
         ))
     }
 
@@ -1034,7 +1042,10 @@ fn spawn_stdout_reader(
                 let event = if let Some(rpc) = &rpc {
                     match serde_json::from_str::<Value>(&line) {
                         Ok(val) => {
-                            if val.get("event").and_then(|e| e.as_str()) == Some("fs_result") {
+                            if matches!(
+                                val.get("event").and_then(|e| e.as_str()),
+                                Some("fs_result" | "git_result")
+                            ) {
                                 rpc.handle_result(&val);
                                 ctx.request_repaint();
                                 continue;

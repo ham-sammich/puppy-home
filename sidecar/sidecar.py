@@ -32,6 +32,7 @@ Protocol (newline-delimited JSON, UTF-8):
         "scope": "user"|"project"}                   # create/overwrite SKILL.md
     {"op": "fs_list_dir", "id": <int>, "path": "..."}  # -> fs_result (remote file tree)
 {"op": "fs_read_file", "id": <int>, "path": "..."} # -> fs_result (remote editor)
+{"op": "git_run", "id": <int>, "root": "...", "args": [...]}  # -> git_result (remote git)
 {"op": "shutdown"}
 
   sidecar -> Rust (stdout), one object per line:
@@ -60,6 +61,7 @@ import base64
 import json
 import os
 import shutil
+import subprocess
 import sys
 import threading
 import traceback
@@ -1653,6 +1655,22 @@ class Bridge:
             os.rename(src, dst)
         self._fs_mutate(cmd.get("id"), "rename", do)
 
+    def git_run(self, cmd: dict) -> None:
+        """Run `git -C <root> <args>` on this (remote) host for RemoteGit."""
+        rid = cmd.get("id")
+        root = cmd.get("root", "")
+        args = [str(a) for a in (cmd.get("args") or [])]
+        try:
+            proc = subprocess.run(
+                ["git", "-C", root, *args],
+                capture_output=True, text=True, errors="replace")
+            send({"event": "git_result", "id": rid, "ok": proc.returncode == 0,
+                  "code": proc.returncode, "stdout": proc.stdout,
+                  "stderr": proc.stderr})
+        except Exception as exc:
+            send({"event": "git_result", "id": rid, "ok": False, "code": -1,
+                  "stdout": "", "stderr": str(exc)})
+
     def handle_command(self, cmd: dict) -> None:
         op = cmd.get("op")
         if op == "prompt":
@@ -1771,6 +1789,8 @@ class Bridge:
             self.fs_remove(cmd)
         elif op == "fs_rename":
             self.fs_rename(cmd)
+        elif op == "git_run":
+            self.git_run(cmd)
         elif op == "shutdown":
             self._stop.set()
             self.loop.call_soon_threadsafe(self.loop.stop)
