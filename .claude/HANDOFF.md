@@ -1,6 +1,6 @@
 # Handoff Notes — Device Switch
 
-Date: 2026-06-11 (updated after Phase A inc 4: connect-to-remote dialog)
+Date: 2026-06-11 (updated after Phase A inc 5a: read-only remote tree + editor)
 Branch: feature/browser-plugin
 State: 140 tests green, zero warnings, zero clippy lints, cargo fmt clean
 Coordinator: planning-agent-8a6233 / executor: code-puppy
@@ -167,17 +167,31 @@ is DONE:
   placeholder (chat works; files/git are inc 5). Split app.rs -> app/mod.rs
   (587) + app/remote.rs (97) to stay under budget.
 
-Still TODO for Phase A (the real remote work):
-- Inc 5 NEXT: wire RemoteFs/RemoteGit (the traits from inc 1+2) to NEW sidecar
-  protocol ops (fs_list_dir/read/write/stat, git_status/diff/log/...) so a
-  remote workspace's tree/editor/git actually work. Needs: sidecar.py protocol
-  additions + Rust RemoteFs/RemoteGit impls that round-trip over the existing
-  stdio channel (or a side channel) + async/caching for fs latency. Then have
-  Supervisor::adopt() install RemoteFs/RemoteGit on remote workspaces and drop
-  the remote_label tree placeholder.
-- Live-validate spawn_remote against a real host (or enable Remote Login for
-  `ssh localhost`). backend/mod.rs is ~1440 lines (pre-existing, over budget)
-  -- candidate for its own split later.
+- Inc 5a (3eb205c): READ-ONLY remote tree + editor over the sidecar stdio
+  channel (no extra ssh round-trips). sidecar.py: fs_list_dir/fs_read_file ->
+  fs_result (validated live by piping ops to a local sidecar). backend/remote.rs:
+  RemoteState (cache + in-flight table + shared stdin) + RemoteFs (impl
+  WorkspaceFs): read_dir cached+async-filled (never blocks the per-frame tree),
+  read_to_string blocks on a one-shot w/ 20s timeout. KEY: the stdout reader
+  routes fs_result OFF the UI thread (a blocking read on the UI thread can't get
+  its reply via UiEvent/apply_event without deadlock). CodePuppy.stdin is now
+  Arc<Mutex<>>; spawn_remote returns the RemoteFs; Workspace::new takes an
+  injectable fs; Supervisor::adopt threads it. Mutations return 'not supported
+  yet'; tree hides +File/+Folder and shows 'user@host - read-only'.
+
+Still TODO for Phase A:
+- Inc 5b: remote EDITING (fs_write_file/mkdir/create/remove/rename ops +
+  un-stub RemoteFs mutations, blocking-with-timeout like read_file; re-enable
+  the tree create/delete/rename for remote). Watch cache invalidation on write.
+- Inc 5c: RemoteGit -- either git ops via the sidecar (git_status/diff/log/...
+  run git on the remote, return parsed/raw output) wired to a RemoteGit impl of
+  the WorkspaceGit trait, installed on remote workspaces. Drop the read-only
+  hint once editing+git work.
+- Live-validate the full Rust<->SSH round trip against a real host (ssh localhost
+  is refused here -- Remote Login off). The PYTHON fs ops ARE validated locally.
+- Pre-existing over-budget files (NOT from this session; split later):
+  src/workspace/view.rs (730, was 719 at session start) and
+  src/backend/mod.rs (~1410). Everything created this session is < 600.
 - Out-of-scope-so-far local fs that a remote workspace will also need: the
   `.puppy/browser.json` + `.gitignore` breadcrumb writes in view.rs (still
   std::fs) and git.rs `untracked_content` reads the file via std::fs inside the
