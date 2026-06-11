@@ -14,7 +14,7 @@ impl Workspace {
         if self.open_files.contains_key(&path) {
             return;
         }
-        let buffer = match std::fs::read_to_string(&path) {
+        let buffer = match self.fs.read_to_string(&path) {
             Ok(content) => FileBuffer {
                 content,
                 dirty: false,
@@ -80,7 +80,7 @@ impl Workspace {
         let Some(path) = self.pending_delete.clone() else {
             return;
         };
-        let is_dir = path.is_dir();
+        let is_dir = self.fs.is_dir(&path);
         let name = path
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
@@ -138,9 +138,9 @@ impl Workspace {
     /// Remove a file/folder from disk and close any editor tabs/buffers for it.
     fn delete_path(&mut self, path: &Path, is_dir: bool) -> Result<(), String> {
         if is_dir {
-            std::fs::remove_dir_all(path).map_err(|e| e.to_string())?;
+            self.fs.remove_dir_all(path).map_err(|e| e.to_string())?;
         } else {
-            std::fs::remove_file(path).map_err(|e| e.to_string())?;
+            self.fs.remove_file(path).map_err(|e| e.to_string())?;
         }
         // Forget any open buffers / editor tabs for the path (or its children).
         self.open_files
@@ -283,13 +283,13 @@ impl Workspace {
 
     fn perform_rename(&mut self, path: &Path, new_name: &str) -> Result<(), String> {
         let dest = sibling_path(path.parent(), new_name)?;
-        if dest.exists() {
+        if self.fs.exists(&dest) {
             return Err(format!(
                 "\u{201c}{}\u{201d} already exists",
                 new_name.trim()
             ));
         }
-        std::fs::rename(path, &dest).map_err(|e| e.to_string())?;
+        self.fs.rename(path, &dest).map_err(|e| e.to_string())?;
         // Keep open buffers / editor tabs pointing at the renamed path(s).
         let taken = std::mem::take(&mut self.open_files);
         for (p, buf) in taken {
@@ -306,13 +306,13 @@ impl Workspace {
 
     fn perform_new(&mut self, parent: &Path, is_dir: bool, name: &str) -> Result<(), String> {
         let dest = sibling_path(Some(parent), name)?;
-        if dest.exists() {
+        if self.fs.exists(&dest) {
             return Err(format!("\u{201c}{}\u{201d} already exists", name.trim()));
         }
         if is_dir {
-            std::fs::create_dir(&dest).map_err(|e| e.to_string())?;
+            self.fs.create_dir(&dest).map_err(|e| e.to_string())?;
         } else {
-            std::fs::File::create(&dest).map_err(|e| e.to_string())?;
+            self.fs.create_file(&dest).map_err(|e| e.to_string())?;
             self.open_editor_file(dest.clone());
         }
         self.git_refresh_at = std::time::Instant::now();
@@ -503,7 +503,7 @@ impl Workspace {
             do_save = true;
         }
         if do_save {
-            match std::fs::write(path, buf.content.as_bytes()) {
+            match self.fs.write(path, buf.content.as_bytes()) {
                 Ok(()) => {
                     buf.dirty = false;
                     buf.save_error = None;

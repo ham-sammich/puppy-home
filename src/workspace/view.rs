@@ -229,7 +229,7 @@ impl Workspace {
                         .auto_shrink([false, false])
                         .id_salt(("tree-scroll", id))
                         .show(ui, |ui| {
-                            render_dir(ui, &self.root, &markers, &mut acts);
+                            render_dir(ui, &*self.fs, &self.root, &markers, &mut acts);
                         });
                 });
 

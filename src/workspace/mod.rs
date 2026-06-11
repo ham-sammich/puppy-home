@@ -10,6 +10,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
 
@@ -25,6 +26,7 @@ mod clipboard;
 mod composer;
 mod diff;
 mod editor;
+mod fs;
 mod git_graph;
 mod git_graph_view;
 mod git_view;
@@ -163,6 +165,10 @@ pub struct Workspace {
     git_refresh_at: Instant,
     git_pending: bool,
     // IDE: file tree + open editor buffers + editor-area tabs
+    /// Filesystem access for this workspace's files. Local today; a future
+    /// remote impl routes these over the sidecar protocol. The tree + editor
+    /// go through this instead of calling `std::fs` directly.
+    fs: Arc<dyn fs::WorkspaceFs>,
     show_tree: bool,
     open_files: BTreeMap<PathBuf, FileBuffer>,
     editor_open: Vec<EditorItem>,
@@ -278,6 +284,7 @@ impl Workspace {
             diffs: Vec::new(),
             current_diff: None,
             git_repo: is_git_repo,
+            fs: Arc::new(fs::LocalFs),
             git_changes: Vec::new(),
             git_rx: None,
             git_refresh_at: Instant::now(),
@@ -644,7 +651,7 @@ impl Workspace {
                 let abs = self.abs_path(&record.path);
                 if let Some(buf) = self.open_files.get_mut(&abs)
                     && !buf.dirty
-                    && let Ok(content) = std::fs::read_to_string(&abs)
+                    && let Ok(content) = self.fs.read_to_string(&abs)
                 {
                     buf.content = content;
                     buf.load_error = None;

@@ -9,6 +9,7 @@ use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use crate::backend::BackendMessage;
 
 use super::diff::marker_color;
+use super::fs::WorkspaceFs;
 use super::state::{Entry, TREE_IGNORE};
 
 pub(crate) const AGENT_COLOR: egui::Color32 = egui::Color32::from_rgb(150, 220, 150);
@@ -137,24 +138,17 @@ pub(crate) struct TreeActions {
 /// folders are read (the collapsing body runs only when open).
 pub(crate) fn render_dir(
     ui: &mut egui::Ui,
+    fs: &dyn WorkspaceFs,
     dir: &Path,
     markers: &HashMap<PathBuf, char>,
     acts: &mut TreeActions,
 ) {
-    let Ok(read) = std::fs::read_dir(dir) else {
+    let Ok(read) = fs.read_dir(dir) else {
         return;
     };
     let mut entries: Vec<(bool, PathBuf, String)> = read
-        .filter_map(|e| e.ok())
-        .map(|e| {
-            let path = e.path();
-            let is_dir = path.is_dir();
-            let name = path
-                .file_name()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            (is_dir, path, name)
-        })
+        .into_iter()
+        .map(|e| (e.is_dir, e.path, e.name))
         .filter(|(is_dir, _, name)| {
             !(name.is_empty() || *is_dir && TREE_IGNORE.contains(&name.as_str()))
         })
@@ -169,7 +163,7 @@ pub(crate) fn render_dir(
         if is_dir {
             let header = egui::CollapsingHeader::new(format!("📁 {name}"))
                 .id_salt(&path)
-                .show(ui, |ui| render_dir(ui, &path, markers, acts));
+                .show(ui, |ui| render_dir(ui, fs, &path, markers, acts));
             header.header_response.context_menu(|ui| {
                 if ui.button("New file").clicked() {
                     acts.new_in = Some((path.clone(), false));
