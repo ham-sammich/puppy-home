@@ -38,6 +38,25 @@ Jacobs-MacBook-Air (repo at /Users/jacob/dev/puppy-home):
   $TMPDIR/puppy-home (sidecar.py extracted there).
 - Force-kill a locked/running binary (Mac analogue of taskkill):
   `pkill -9 -f target/debug/puppy-home`.
+- Browser plugin on Mac (it ships UNBUILT — separate `puppy-browser` crate):
+  1. `cargo build --workspace` (or `cargo build -p puppy-browser`) -> binary at
+     `target/debug/puppy-browser` (wry/WKWebView).
+  2. Install where the host discovers it. plugins_dir() resolves
+     `$PUPPY_PLUGINS_DIR` -> `<exe-dir>/plugins` (if it exists) ->
+     `~/Library/Application Support/puppy-home/plugins`. We installed to the
+     config dir: copy the binary to
+     `~/Library/Application Support/puppy-home/plugins/browser/puppy-browser`
+     and write a `plugin.json` next to it:
+     `{"id":"browser","name":"Web Browser","version":"1.0.0","exe":"puppy-browser","min_host_version":"0.0.0"}`.
+     EASIER: just run the app, open a Browser tab, click "Install from local
+     build" (it copies target/debug/puppy-browser + writes the manifest for you
+     via install_from_local_build()).
+  3. CAVEAT: window embedding (reparenting the webview into the Browser tab) is
+     WINDOWS-ONLY. On macOS puppy-browser opens as a SEPARATE floating window;
+     toolbar controls (navigate/back/forward/reload/devtools) still drive it
+     over stdin. Embedding the WKWebView into the egui viewport is unimplemented
+     (report_handle returns 0 on non-Windows). Verified the binary launches a
+     real Aqua window on this Mac.
 - Verification standing order on Mac: drive sidecar.py headlessly over stdio
   (spawn `python3 sidecar/sidecar.py`, write JSON ops, read JSON events) +
   `cargo test`. GUI screenshots remain unreliable.
