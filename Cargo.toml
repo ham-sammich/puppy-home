@@ -12,8 +12,9 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-cli
 
 # The optional browser plugin is a SEPARATE crate so its heavy webview deps
 # (wry/tao) never bloat the base app — the app only ever launches its built exe.
+# puppy-relay is the tiny Puppy Pack room server (run it anywhere reachable).
 [workspace]
-members = ["plugins/browser"]
+members = ["plugins/browser", "relay"]
 
 [dependencies]
 # Native windowed GUI (egui in immediate mode, cross-platform, pure Rust).
