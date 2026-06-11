@@ -19,7 +19,7 @@ members = ["plugins/browser"]
 # Native windowed GUI (egui in immediate mode, cross-platform, pure Rust).
 eframe = "0.34.3"
 egui_commonmark = "0.23"
-egui_dock = "0.19.1"
+egui_dock = { version = "0.19.1", features = ["serde"] }
 egui_extras = { version = "0.34", features = ["syntect"] }
 rfd = "0.17.2"
 serde = { version = "1.0.228", features = ["derive"] }

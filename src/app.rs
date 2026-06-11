@@ -1,5 +1,6 @@
 //! Top-level app: supervises Code Puppy workspaces and hosts the dockable shell.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
@@ -7,10 +8,12 @@ use eframe::egui;
 use egui_dock::{DockArea, DockState, NodeIndex, NodePath, Style};
 
 use crate::browser::BrowserManager;
+use crate::dock_layout;
 use crate::session::Theme;
 use crate::shell::{Shell, ShellAction, Tab};
 use crate::supervisor::Supervisor;
 use crate::theme::{TerminalTheme, ThemePalette};
+use crate::workspace::WorkspaceId;
 
 pub struct PuppyApp {
     sup: Supervisor,
@@ -42,29 +45,9 @@ pub struct PuppyApp {
     agents: crate::views::agent_manager::AgentManagerView,
 }
 
-/// Snapshot the open workspaces as a persistable session.
-fn current_session(sup: &Supervisor, theme: Theme) -> crate::session::Session {
-    crate::session::Session {
-        workspaces: sup
-            .iter()
-            .map(|w| crate::session::WorkspaceEntry {
-                path: w.root.to_string_lossy().into_owned(),
-                agent: (!w.agent.is_empty()).then(|| w.agent.clone()),
-                model: (!w.model.is_empty()).then(|| w.model.clone()),
-                autosave: (!w.autosave.is_empty()).then(|| w.autosave.clone()),
-            })
-            .collect(),
-        theme,
-    }
-}
-
 /// Apply a theme to the egui context (on launch and on change).
 fn apply_theme(ctx: &egui::Context, theme: &Theme, library: &[ThemePalette]) {
     ctx.set_visuals(crate::theme::visuals_for(theme, library));
-}
-
-fn session_sig(session: &crate::session::Session) -> String {
-    serde_json::to_string(session).unwrap_or_default()
 }
 
 /// Single-instance "panel" tabs that live in the right-side dock zone (the
@@ -100,9 +83,10 @@ impl PuppyApp {
         };
         apply_theme(&cc.egui_ctx, &theme, &themes);
         let mut sup = Supervisor::new(cc.egui_ctx.clone());
-        let mut dock = DockState::new(vec![Tab::Dashboard]);
         let mut status = "Open a folder to start a Code Puppy workspace.".to_string();
         let mut opened: Vec<PathBuf> = Vec::new();
+        let mut opened_ids: Vec<WorkspaceId> = Vec::new();
+        let mut path_to_id: HashMap<String, WorkspaceId> = HashMap::new();
 
         // Restore the previous session: reopen each saved folder + its agent/model.
         for entry in saved.workspaces {
@@ -114,11 +98,28 @@ impl PuppyApp {
                 if let Some(ws) = sup.get_mut(id) {
                     ws.set_restore(entry.agent, entry.model, entry.autosave);
                 }
-                dock.push_to_focused_leaf(Tab::Chat(id));
+                path_to_id.insert(entry.path.clone(), id);
+                opened_ids.push(id);
                 opened.push(path);
                 status.clear();
             }
         }
+
+        // Rebuild the dock from the saved split layout (remapping workspace
+        // paths to fresh ids); else fall back to Dashboard + one chat per folder.
+        let mut dock = match &saved.layout {
+            Some(layout) => layout.filter_map_tabs(|t| dock_layout::saved_to_tab(t, &path_to_id)),
+            None => {
+                let mut d = DockState::new(vec![Tab::Dashboard]);
+                for id in &opened_ids {
+                    d.push_to_focused_leaf(Tab::Chat(*id));
+                }
+                d
+            }
+        };
+        // Safety net for a stale/partial saved layout: guarantee the Dashboard
+        // and a chat tab for every workspace that actually reopened.
+        dock_layout::ensure_core_tabs(&mut dock, &opened_ids);
 
         // Dev convenience: auto-open a workspace folder on launch (if not already).
         if let Ok(path) = std::env::var("PUPPY_HOME_OPEN") {
@@ -137,7 +138,10 @@ impl PuppyApp {
 
         // Seed the signature so we don't immediately rewrite the same session
         // (agent/model fill in once each sidecar is ready, which then persists).
-        let last_session_sig = session_sig(&current_session(&sup, theme.clone()));
+        let last_session_sig = dock_layout::persist_sig(
+            &dock_layout::current_session(&sup, theme.clone(), Some(&dock)),
+            Some(&dock),
+        );
 
         PuppyApp {
             sup,
@@ -160,8 +164,9 @@ impl PuppyApp {
 
     /// Persist the open-workspace set whenever it changes (open/close/agent/model).
     fn persist_session(&mut self) {
-        let session = current_session(&self.sup, self.theme.clone());
-        let sig = session_sig(&session);
+        let session =
+            dock_layout::current_session(&self.sup, self.theme.clone(), self.dock.as_ref());
+        let sig = dock_layout::persist_sig(&session, self.dock.as_ref());
         if sig != self.last_session_sig {
             self.last_session_sig = sig;
             crate::session::save(&session);

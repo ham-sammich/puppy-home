@@ -10,6 +10,7 @@
 mod app;
 mod backend;
 mod browser;
+mod dock_layout;
 mod fonts;
 mod git;
 mod perf;

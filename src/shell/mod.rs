@@ -12,7 +12,7 @@ use crate::views;
 use crate::workspace::{InstanceStatus, WorkspaceId};
 
 /// A tab is a lightweight descriptor — heavy state lives in the supervisor.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Tab {
     Dashboard,
     Chat(WorkspaceId),
