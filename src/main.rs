@@ -13,6 +13,7 @@ mod browser;
 mod dock_layout;
 mod fonts;
 mod git;
+mod pack;
 mod perf;
 mod plugin;
 mod proc;

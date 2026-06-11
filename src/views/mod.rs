@@ -7,6 +7,7 @@ pub mod common;
 pub mod dashboard;
 pub mod mcp_manager;
 pub mod mcp_wizard;
+pub mod pack_panel;
 pub mod path_browser;
 pub mod remote_connect;
 pub mod skills_manager;

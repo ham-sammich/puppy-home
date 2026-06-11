@@ -43,6 +43,12 @@ pub struct PuppyApp {
     skills: crate::views::skills_manager::SkillsManagerView,
     /// State for the Agent Manager tab (one instance).
     agents: crate::views::agent_manager::AgentManagerView,
+    /// State for the Puppy Pack tab (one instance; holds the live relay link).
+    pack: crate::views::pack_panel::PackView,
+    /// Last activity summary broadcast to the pack (skip resends of the same).
+    pack_activity_last: String,
+    /// When the pack activity was last considered (throttle).
+    pack_activity_at: std::time::Instant,
     /// The "Connect to remote" dialog, when open.
     remote: Option<crate::views::remote_connect::RemoteConnect>,
     /// An in-flight remote SSH connection (established on a worker thread).
@@ -62,7 +68,7 @@ fn apply_theme(ctx: &egui::Context, theme: &Theme, library: &[ThemePalette]) {
 fn is_panel_tab(tab: &Tab) -> bool {
     matches!(
         tab,
-        Tab::McpManager | Tab::SkillsManager | Tab::AgentManager
+        Tab::McpManager | Tab::SkillsManager | Tab::AgentManager | Tab::Pack
     )
 }
 
@@ -163,6 +169,9 @@ impl PuppyApp {
             browser: BrowserManager::discover(),
             perf: crate::perf::PerfStats::default(),
             mcp: crate::views::mcp_manager::McpManagerView::default(),
+            pack: crate::views::pack_panel::PackView::default(),
+            pack_activity_last: String::new(),
+            pack_activity_at: std::time::Instant::now(),
             skills: crate::views::skills_manager::SkillsManagerView::default(),
             agents: crate::views::agent_manager::AgentManagerView::default(),
             remote: None,
@@ -248,6 +257,38 @@ impl PuppyApp {
     }
 
     /// Apply structural changes queued during rendering (after the dock drew).
+    /// Tell the pack what this member's puppies are doing -- a compact summary
+    /// of every workspace's state, sent only when it changes (checked at most
+    /// every couple of seconds). Teammates see it in their member list.
+    fn broadcast_pack_activity(&mut self) {
+        if !self.pack.connected()
+            || self.pack_activity_at.elapsed() < std::time::Duration::from_secs(2)
+        {
+            return;
+        }
+        self.pack_activity_at = std::time::Instant::now();
+        let parts: Vec<String> = self
+            .sup
+            .iter()
+            .map(|w| {
+                let state = w.status.label();
+                match &w.current_tool {
+                    Some(tool) => format!("{}: {state} ({tool})", w.name),
+                    None => format!("{}: {state}", w.name),
+                }
+            })
+            .collect();
+        let detail = if parts.is_empty() {
+            "no workspaces open".to_string()
+        } else {
+            parts.join(" · ")
+        };
+        if detail != self.pack_activity_last {
+            self.pack.send_activity("status", &detail);
+            self.pack_activity_last = detail;
+        }
+    }
+
     fn apply_actions(&mut self, actions: Vec<ShellAction>) {
         for action in actions {
             match action {
@@ -341,6 +382,7 @@ impl eframe::App for PuppyApp {
         self.sup.drain();
         self.poll_folder_pick();
         self.poll_remote();
+        self.broadcast_pack_activity();
 
         // Hand the resolved terminal palette to the embedded terminal renderer
         // via the per-context data store (avoids threading it through the dock).
@@ -358,6 +400,7 @@ impl eframe::App for PuppyApp {
         let mut open_mcp = false;
         let mut open_skills = false;
         let mut open_agents = false;
+        let mut open_pack = false;
         let mut pick_theme: Option<Theme> = None;
         let mut open_editor = false;
         let theme = self.theme.clone();
@@ -419,6 +462,13 @@ impl eframe::App for PuppyApp {
                     .clicked()
                 {
                     open_agents = true;
+                }
+                if ui
+                    .button("Pack")
+                    .on_hover_text("Puppy Pack — join a room to chat with teammates")
+                    .clicked()
+                {
+                    open_pack = true;
                 }
                 ui.label(egui::RichText::new(format!("{ws_count} workspace(s)")).weak());
                 if waiting > 0 {
@@ -507,6 +557,9 @@ impl eframe::App for PuppyApp {
         if open_agents {
             self.open_panel_tab(Tab::AgentManager);
         }
+        if open_pack {
+            self.open_panel_tab(Tab::Pack);
+        }
         if let Some(t) = pick_theme {
             self.theme = t;
             // Sync the editor buffer to the freshly-picked custom theme.
@@ -555,6 +608,7 @@ impl eframe::App for PuppyApp {
                 mcp: &mut self.mcp,
                 skills: &mut self.skills,
                 agents: &mut self.agents,
+                pack: &mut self.pack,
                 actions: &mut actions,
             };
             DockArea::new(&mut dock)

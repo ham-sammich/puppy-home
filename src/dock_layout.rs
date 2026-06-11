@@ -53,6 +53,7 @@ fn tab_to_saved(tab: &Tab, sup: &Supervisor) -> Option<SavedTab> {
         Tab::McpManager => Some(SavedTab::McpManager),
         Tab::SkillsManager => Some(SavedTab::SkillsManager),
         Tab::AgentManager => Some(SavedTab::AgentManager),
+        Tab::Pack => Some(SavedTab::Pack),
     }
 }
 
@@ -66,6 +67,7 @@ pub fn saved_to_tab(saved: &SavedTab, ids: &HashMap<String, WorkspaceId>) -> Opt
         SavedTab::McpManager => Some(Tab::McpManager),
         SavedTab::SkillsManager => Some(Tab::SkillsManager),
         SavedTab::AgentManager => Some(Tab::AgentManager),
+        SavedTab::Pack => Some(Tab::Pack),
     }
 }
 
@@ -98,6 +100,7 @@ fn tab_key(tab: &Tab) -> Option<String> {
         Tab::McpManager => Some("M".into()),
         Tab::SkillsManager => Some("S".into()),
         Tab::AgentManager => Some("A".into()),
+        Tab::Pack => Some("P".into()),
     }
 }
 

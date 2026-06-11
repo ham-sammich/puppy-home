@@ -3806,6 +3806,7 @@ dependencies = [
  "objc",
  "png 0.17.16",
  "portable-pty",
+ "puppy-relay",
  "raw-window-handle",
  "rfd",
  "serde",

@@ -34,6 +34,7 @@ pub enum SavedTab {
     McpManager,
     SkillsManager,
     AgentManager,
+    Pack,
 }
 
 /// UI color theme, persisted across runs. `Custom(name)` references a saved

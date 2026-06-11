@@ -24,6 +24,8 @@ pub enum Tab {
     SkillsManager,
     /// Code Puppy's agents: list, edit, clone, visual builder (one instance).
     AgentManager,
+    /// Puppy Pack: presence + chat with teammates via a relay (one instance).
+    Pack,
 }
 
 /// Structural changes requested during rendering, applied after the dock draws.
@@ -43,6 +45,7 @@ pub struct Shell<'a> {
     pub mcp: &'a mut views::mcp_manager::McpManagerView,
     pub skills: &'a mut views::skills_manager::SkillsManagerView,
     pub agents: &'a mut views::agent_manager::AgentManagerView,
+    pub pack: &'a mut views::pack_panel::PackView,
     pub actions: &'a mut Vec<ShellAction>,
 }
 
@@ -67,6 +70,7 @@ impl TabViewer for Shell<'_> {
             Tab::McpManager => "MCP Servers".into(),
             Tab::SkillsManager => "Skills".into(),
             Tab::AgentManager => "Agents".into(),
+            Tab::Pack => "Pack".into(),
         }
     }
 
@@ -81,6 +85,7 @@ impl TabViewer for Shell<'_> {
             Tab::McpManager => views::mcp_manager::render(ui, self.sup, self.mcp),
             Tab::SkillsManager => views::skills_manager::render(ui, self.sup, self.skills),
             Tab::AgentManager => views::agent_manager::render(ui, self.sup, self.agents),
+            Tab::Pack => views::pack_panel::render(ui, self.pack),
         }
     }
 
@@ -92,6 +97,7 @@ impl TabViewer for Shell<'_> {
             Tab::McpManager => egui::Id::new("tab-mcp-manager"),
             Tab::SkillsManager => egui::Id::new("tab-skills-manager"),
             Tab::AgentManager => egui::Id::new("tab-agent-manager"),
+            Tab::Pack => egui::Id::new("tab-pack"),
         }
     }
 
@@ -105,7 +111,11 @@ impl TabViewer for Shell<'_> {
         match tab {
             Tab::Chat(id) => self.actions.push(ShellAction::Close(*id)),
             Tab::Browser(id) => self.browser.close_tab(*id),
-            Tab::Dashboard | Tab::McpManager | Tab::SkillsManager | Tab::AgentManager => {}
+            Tab::Dashboard
+            | Tab::McpManager
+            | Tab::SkillsManager
+            | Tab::AgentManager
+            | Tab::Pack => {}
         }
         OnCloseResponse::Close
     }

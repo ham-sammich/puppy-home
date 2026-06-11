@@ -209,6 +209,27 @@ Post-Phase-A polish landed:
 - File-budget hygiene: extracted workspace/file_picker.rs, pending_prompt.rs,
   git_creds.rs, git/runner.rs; composer.rs back to 594.
 
+PHASE B (Puppy Pack) in progress:
+- Inc B1: relay/ workspace crate ('puppy-relay [port]', default 9220) -- rooms
+  keyed by code (code = shared secret), presence/chat/activity re-broadcast,
+  relay stamps from+ts. TRANSPORT: line-JSON over TCP (deviation from the
+  plan's websockets -- zero deps, same wire pattern as the sidecar; protocol is
+  transport-agnostic, ws can be layered later). 7 unit + 3 real-socket e2e
+  tests + live binary run with two Python clients.
+- Inc B2: in-app client + panel. src/pack.rs (PackClient: reader thread ->
+  PackEvent channel + repaint; chat/activity/leave; reuses puppy-relay's
+  protocol types via path dep -- ONE wire definition). views/pack_panel.rs
+  (join form -> room view: members + latest activity, bounded feed, chat).
+  Tab::Pack is a panel tab (right dock zone), persisted via SavedTab::Pack.
+  App broadcasts a throttled 'status' activity summary of all workspaces
+  (only when changed). Integration test: PackClient vs in-process relay.
+- NEXT (B3/Tier 2): pack context injection -- write .puppy/pack.json breadcrumb
+  (like browser.json) so the sidecar prepends '[pack context] <user>'s puppy is
+  doing X' to prompts. Then (B4/Tier 3): pack-coordination MCP server
+  (claim_file/release_file/post_to_pack/check_teammate_status/list_claims).
+- To try it: cargo run -p puppy-relay (or ./target/debug/puppy-relay), then
+  top bar -> Pack -> join the same room code from two machines/instances.
+
 Remaining / next:
 - LIVE-VALIDATE the full Rust<->SSH round trip against a real reachable host
   (ssh localhost is off here -- Remote Login disabled). EVERY sidecar op (fs +

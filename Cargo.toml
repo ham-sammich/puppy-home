@@ -34,6 +34,8 @@ vt100 = "0.16"
 arboard = "3.4"
 png = "0.17"
 base64 = "0.22"
+# Puppy Pack: share the relay's wire types (one protocol definition, both ends).
+puppy-relay = { path = "relay" }
 # Windows-only: reparent the browser plugin's native window into our window so
 # the webview renders inside the Browser tab (native-child-window embedding).
 [target.'cfg(windows)'.dependencies]
