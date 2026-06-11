@@ -315,6 +315,9 @@ impl Workspace {
         if self.git_creds.is_some() {
             self.render_git_creds_modal(ui.ctx());
         }
+        if self.file_browser.is_some() {
+            self.render_file_browser(ui.ctx());
+        }
         if self.pending_ask.is_some() {
             self.render_ask_modal(ui.ctx());
         }

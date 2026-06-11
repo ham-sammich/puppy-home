@@ -195,6 +195,20 @@ is DONE:
     tree, editor (read+write), and full git all work on an SSH host, all over
     the sidecar's single stdio channel. <<<
 
+Post-Phase-A polish landed:
+- Git HTTPS credentials modal (push/pull/fetch auth) -- detect auth failure,
+  collect user/token, retry via a one-shot credential helper (env-fed, nothing
+  stored). Works local + remote.
+- Chat "File" button (next to Image): browses the workspace via WorkspaceFs
+  (local OR remote), inserts an @relpath reference into the composer. Shared
+  browser UI in views/path_browser.rs.
+- Remote-connect folder browser: "Browse the remote host..." lists dirs over SSH
+  (ls -1Ap, off-thread, starts at login home) so you can pick the working dir
+  visually instead of typing it. Reuses path_browser. ssh::parse_listing +
+  list_dir_command are unit-tested.
+- File-budget hygiene: extracted workspace/file_picker.rs, pending_prompt.rs,
+  git_creds.rs, git/runner.rs; composer.rs back to 594.
+
 Remaining / next:
 - LIVE-VALIDATE the full Rust<->SSH round trip against a real reachable host
   (ssh localhost is off here -- Remote Login disabled). EVERY sidecar op (fs +

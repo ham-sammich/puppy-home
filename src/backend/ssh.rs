@@ -124,6 +124,46 @@ impl SshTarget {
         cmd.arg("--").arg(remote_launch_line(cwd, launcher));
         cmd
     }
+
+    /// The `ssh` call that lists a remote directory for the folder picker.
+    /// `dir` of `None` means the login home. stdout is [`parse_listing`]-shaped.
+    pub fn list_dir_command(&self, dir: Option<&str>) -> Command {
+        let mut cmd = self.base_ssh();
+        cmd.arg("--").arg(remote_list_line(dir));
+        cmd
+    }
+}
+
+/// The remote shell line that resolves + lists a directory: the first output
+/// line is the absolute path (`pwd`), the rest are entries (`ls -1Ap`, so dirs
+/// carry a trailing `/`). `dir` of `None` lists the login home.
+fn remote_list_line(dir: Option<&str>) -> String {
+    match dir {
+        Some(d) => format!("cd {} && pwd && ls -1Ap", sh_quote(d)),
+        None => "cd && pwd && ls -1Ap".to_string(),
+    }
+}
+
+/// Parse [`list_dir_command`](SshTarget::list_dir_command) stdout into the
+/// resolved absolute directory and its `(name, is_dir)` entries.
+pub fn parse_listing(stdout: &str) -> Option<(String, Vec<(String, bool)>)> {
+    let mut lines = stdout.lines();
+    let cwd = lines.next()?.trim_end_matches('\r').to_string();
+    if !cwd.starts_with('/') {
+        return None; // `pwd` must be absolute; otherwise the `cd` failed
+    }
+    let mut entries = Vec::new();
+    for line in lines {
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() {
+            continue;
+        }
+        match line.strip_suffix('/') {
+            Some(name) => entries.push((name.to_string(), true)),
+            None => entries.push((line.to_string(), false)),
+        }
+    }
+    Some((cwd, entries))
 }
 
 /// The remote shell line that starts the sidecar (used as the `ssh` command).
@@ -378,6 +418,32 @@ mod tests {
             line,
             "cd '/srv/my repo' && exec uv run python \"$HOME/.cache/puppy-home/sidecar.py\""
         );
+    }
+
+    #[test]
+    fn remote_list_line_home_and_dir() {
+        assert_eq!(remote_list_line(None), "cd && pwd && ls -1Ap");
+        assert_eq!(
+            remote_list_line(Some("/srv/my repo")),
+            "cd '/srv/my repo' && pwd && ls -1Ap"
+        );
+    }
+
+    #[test]
+    fn parse_listing_splits_pwd_and_marks_dirs() {
+        let (cwd, entries) = parse_listing("/home/alice\nsrc/\nREADME.md\n.config/\n\n").unwrap();
+        assert_eq!(cwd, "/home/alice");
+        assert_eq!(
+            entries,
+            vec![
+                ("src".to_string(), true),
+                ("README.md".to_string(), false),
+                (".config".to_string(), true),
+            ]
+        );
+        // A non-absolute first line means the remote `cd` failed.
+        assert!(parse_listing("no such dir\n").is_none());
+        assert!(parse_listing("").is_none());
     }
 
     #[test]

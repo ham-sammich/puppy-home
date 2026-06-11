@@ -6,7 +6,6 @@ use eframe::egui;
 use crate::backend::CommandInfo;
 
 use super::Workspace;
-use super::state::PendingKind;
 
 impl Workspace {
     pub(crate) fn render_agent_picker(&mut self, ui: &mut egui::Ui) {
@@ -180,6 +179,7 @@ impl Workspace {
         let mut do_steer = false;
         let mut do_pause = false;
         let mut paste_image = false;
+        let mut open_files = false;
         ui.horizontal(|ui| {
             // Commands menu to the left of the input box.
             self.render_commands_menu(ui);
@@ -189,6 +189,13 @@ impl Workspace {
                 .clicked()
             {
                 paste_image = true;
+            }
+            if ui
+                .button("File")
+                .on_hover_text("Browse workspace files and @-reference one in your message")
+                .clicked()
+            {
+                open_files = true;
             }
 
             let running = self.running;
@@ -295,6 +302,9 @@ impl Workspace {
         }
         if paste_image {
             self.try_paste_image(ui.ctx());
+        }
+        if open_files {
+            self.open_file_browser();
         }
 
         self.maybe_request_completion();
@@ -527,60 +537,6 @@ impl Workspace {
                 self.dispatch_command(&format!("/{name}"));
             }
             None => {}
-        }
-    }
-
-    pub(crate) fn render_pending(&mut self, ui: &mut egui::Ui) {
-        let mut submit = false;
-        if let Some(pending) = &mut self.pending {
-            match &pending.kind {
-                PendingKind::Input { prompt, password } => {
-                    ui.label(egui::RichText::new(prompt).strong());
-                    ui.horizontal(|ui| {
-                        let edit = egui::TextEdit::singleline(&mut pending.text)
-                            .desired_width(ui.available_width() - 80.0)
-                            .password(*password);
-                        let field = ui.add(edit);
-                        let enter =
-                            field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        if ui.button("Reply").clicked() || enter {
-                            submit = true;
-                        }
-                    });
-                }
-                PendingKind::Confirm {
-                    title,
-                    description,
-                    options,
-                } => {
-                    ui.label(egui::RichText::new(title).strong());
-                    if !description.is_empty() {
-                        ui.label(description);
-                    }
-                    ui.horizontal(|ui| {
-                        for (i, opt) in options.iter().enumerate() {
-                            if ui.button(opt).clicked() {
-                                pending.selection = i;
-                                submit = true;
-                            }
-                        }
-                    });
-                }
-                PendingKind::Select { prompt, options } => {
-                    ui.label(egui::RichText::new(prompt).strong());
-                    for (i, opt) in options.iter().enumerate() {
-                        if ui.selectable_label(pending.selection == i, opt).clicked() {
-                            pending.selection = i;
-                        }
-                    }
-                    if ui.button("Select").clicked() {
-                        submit = true;
-                    }
-                }
-            }
-        }
-        if submit {
-            self.answer_pending();
         }
     }
 }

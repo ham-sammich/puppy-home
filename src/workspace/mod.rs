@@ -25,11 +25,13 @@ mod composer;
 mod diff;
 mod editor;
 mod events;
+mod file_picker;
 pub(crate) mod fs;
 mod git_creds;
 mod git_graph;
 mod git_graph_view;
 mod git_view;
+mod pending_prompt;
 mod render;
 mod sessions;
 mod state;
@@ -192,6 +194,8 @@ pub struct Workspace {
     pending_rename: Option<crate::workspace::state::PendingRename>,
     /// A new file/folder being created via the tree context menu (modal).
     pending_new: Option<crate::workspace::state::PendingNew>,
+    /// Open "add a file to the chat" browser, holding the directory it shows.
+    file_browser: Option<PathBuf>,
     // Git view (Source Control page + commit/blame tabs)
     git_view: Option<GitView>,
     /// All-branches commits for the graph view (newest first, with parents/refs).
@@ -318,6 +322,7 @@ impl Workspace {
             delete_error: None,
             pending_rename: None,
             pending_new: None,
+            file_browser: None,
             git_view: None,
             git_graph_commits: Vec::new(),
             git_show_graph: true,
