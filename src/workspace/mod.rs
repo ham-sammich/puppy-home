@@ -196,6 +196,9 @@ pub struct Workspace {
     pending_new: Option<crate::workspace::state::PendingNew>,
     /// Open "add a file to the chat" browser, holding the directory it shows.
     file_browser: Option<PathBuf>,
+    /// Render the full transcript instead of just the recent tail (opt-in via
+    /// the "Show older" button; old entries are expensive to re-lay-out).
+    transcript_show_all: bool,
     // Git view (Source Control page + commit/blame tabs)
     git_view: Option<GitView>,
     /// All-branches commits for the graph view (newest first, with parents/refs).
@@ -323,6 +326,7 @@ impl Workspace {
             pending_rename: None,
             pending_new: None,
             file_browser: None,
+            transcript_show_all: false,
             git_view: None,
             git_graph_commits: Vec::new(),
             git_show_graph: true,

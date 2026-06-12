@@ -9,7 +9,7 @@ use eframe::egui;
 
 use crate::backend::{CodePuppy, UiEvent};
 use crate::git::{LocalGit, WorkspaceGit};
-use crate::workspace::fs::{LocalFs, WorkspaceFs};
+use crate::workspace::fs::{CachedFs, LocalFs, WorkspaceFs};
 use crate::workspace::{InstanceStatus, Workspace, WorkspaceId};
 
 pub struct Supervisor {
@@ -31,7 +31,9 @@ impl Supervisor {
     pub fn open(&mut self, root: PathBuf) -> Result<WorkspaceId, String> {
         let (backend, rx) = CodePuppy::spawn(self.ctx.clone(), Some(&root))?;
         let git: Arc<dyn WorkspaceGit> = Arc::new(LocalGit::new(root.clone()));
-        Ok(self.adopt(root, None, Arc::new(LocalFs), git, backend, rx))
+        // TTL-cached so the per-frame tree doesn't enumerate NTFS every frame.
+        let fs: Arc<dyn WorkspaceFs> = Arc::new(CachedFs::new(LocalFs));
+        Ok(self.adopt(root, None, fs, git, backend, rx))
     }
 
     /// Adopt an already-spawned backend (used for remote workspaces, whose SSH

@@ -55,6 +55,8 @@ pub struct PuppyApp {
     pack_breadcrumb_at: std::time::Instant,
     /// Whether breadcrumbs are on disk (so leaving the pack cleans them up).
     pack_breadcrumb_written: bool,
+    /// Last time the session/dock persistence signature was computed (throttle).
+    persist_check_at: std::time::Instant,
     /// The "Connect to remote" dialog, when open.
     remote: Option<crate::views::remote_connect::RemoteConnect>,
     /// An in-flight remote SSH connection (established on a worker thread).
@@ -182,6 +184,7 @@ impl PuppyApp {
             pack_breadcrumb_sig: String::new(),
             pack_breadcrumb_at: std::time::Instant::now(),
             pack_breadcrumb_written: false,
+            persist_check_at: std::time::Instant::now(),
             skills: crate::views::skills_manager::SkillsManagerView::default(),
             agents: crate::views::agent_manager::AgentManagerView::default(),
             remote: None,
@@ -191,6 +194,18 @@ impl PuppyApp {
 
     /// Persist the open-workspace set whenever it changes (open/close/agent/model).
     fn persist_session(&mut self) {
+        // Building the session + signature allocates (it serializes the dock
+        // structure), so don't do it every frame -- once a second is plenty,
+        // and `on_exit` does a final unconditional pass.
+        if self.persist_check_at.elapsed() < std::time::Duration::from_secs(1) {
+            return;
+        }
+        self.persist_check_at = std::time::Instant::now();
+        self.persist_session_now();
+    }
+
+    /// The unthrottled write-if-changed pass (used by the throttle + on exit).
+    fn persist_session_now(&mut self) {
         let session =
             dock_layout::current_session(&self.sup, self.theme.clone(), self.dock.as_ref());
         let sig = dock_layout::persist_sig(&session, self.dock.as_ref());
@@ -355,6 +370,11 @@ fn window_hwnd(_frame: &eframe::Frame) -> Option<i64> {
 }
 
 impl eframe::App for PuppyApp {
+    fn on_exit(&mut self) {
+        // Final layout/session write (the per-frame path is throttled).
+        self.persist_session_now();
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.perf.on_frame(frame);
         self.sup.drain();

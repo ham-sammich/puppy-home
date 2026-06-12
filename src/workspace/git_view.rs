@@ -58,20 +58,25 @@ impl Workspace {
             self.git_pending = false;
             self.git_rx = None;
         }
-        if !self.git_pending && Instant::now() >= self.git_refresh_at {
+        // Each poll spawns a `git status` process; on Windows that means exe
+        // spawn + Defender scanning the repo, so: a wider cadence, and no
+        // polling at all while the window is unfocused (nothing to show).
+        let focused = ctx.input(|i| i.focused);
+        if !self.git_pending && focused && Instant::now() >= self.git_refresh_at {
             let git = self.git.clone();
             let ctx2 = ctx.clone();
             let (tx, rx) = std::sync::mpsc::channel();
             self.git_rx = Some(rx);
             self.git_pending = true;
-            self.git_refresh_at = Instant::now() + std::time::Duration::from_millis(2000);
+            self.git_refresh_at = Instant::now() + std::time::Duration::from_millis(4000);
             std::thread::spawn(move || {
                 let _ = tx.send(git.status());
                 ctx2.request_repaint();
             });
         }
-        // Keep refreshing while this workspace is on screen.
-        ctx.request_repaint_after(std::time::Duration::from_millis(1500));
+        // Keep the poll alive while this workspace is on screen (the wake
+        // matches the poll cadence -- no busier).
+        ctx.request_repaint_after(std::time::Duration::from_secs(4));
     }
 
     /// Show the diff for a git-tracked change.

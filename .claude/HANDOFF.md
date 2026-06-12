@@ -252,6 +252,24 @@ PHASE B (Puppy Pack) in progress:
 >>> PHASE B (Puppy Pack v1, Tiers 1-3) is FEATURE-COMPLETE. <<<
 - NOTE: protocol v3 -- BOTH devices must rebuild (mismatches get a clean
   'protocol mismatch' relay error).
+PERF PASS (Windows sluggishness, 2026-06-11): found + fixed four per-frame
+costs that hit Windows hardest (NTFS/Defender/expensive process spawns):
+1. Transcript rendered EVERY entry every frame (commonmark re-parse + syntect;
+   ScrollArea doesn't cull) -> now renders the last 120 with a 'Show older'
+   opt-in (workspace.transcript_show_all).
+2. poll_git spawned 'git status' every 2s/tab + a 1.5s repaint floor -> 4s
+   cadence, skipped entirely while the window is unfocused, floor matches.
+3. File tree enumerated every expanded dir from disk every frame -> CachedFs
+   (fs.rs): 2s-TTL read_dir cache over LocalFs; mutations through it
+   invalidate instantly (unit-tested). Remote keeps its own event cache.
+4. persist_session built the dock signature every frame -> throttled to 1s +
+   unconditional final write in on_exit.
+Still-known perf debt: editor syntect re-highlights visible files per frame
+(big files); browser overlay does Win32 calls per frame when a browser tab is
+open; egui_commonmark has no layout cache. Windows ops advice: run RELEASE
+builds (debug egui is dramatically slower) + consider Defender exclusions for
+the repo folder + git.exe; the perf HUD (top bar) shows frame cost/repaints.
+
 - Pack polish backlog: remote-workspace breadcrumbs; GUI claim buttons;
   claims surfaced on the Dashboard; relay auth beyond room codes (TLS/proxy =
   the ws upgrade path).

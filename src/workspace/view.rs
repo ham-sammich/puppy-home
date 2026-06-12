@@ -370,6 +370,13 @@ impl Workspace {
         if self.show_terminal {
             self.render_terminal(ui);
         } else {
+            // Immediate-mode markdown is the priciest thing we draw: every
+            // entry below is re-parsed + re-laid-out EVERY frame (a ScrollArea
+            // does not cull off-screen content). Long conversations made the
+            // whole app sluggish -- especially on Windows -- so only the recent
+            // tail renders by default; "Show older" opts into the full history.
+            const TRANSCRIPT_RENDER_TAIL: usize = 120;
+            let mut show_all_clicked = false;
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .stick_to_bottom(true)
@@ -387,14 +394,31 @@ impl Workspace {
                             self.puppy_name
                         ));
                     }
+                    let total = self.transcript.len();
+                    let start = if self.transcript_show_all {
+                        0
+                    } else {
+                        total.saturating_sub(TRANSCRIPT_RENDER_TAIL)
+                    };
+                    if start > 0 {
+                        ui.horizontal(|ui| {
+                            ui.weak(format!("{start} older message(s) hidden for speed."));
+                            if ui.small_button("Show older").clicked() {
+                                show_all_clicked = true;
+                            }
+                        });
+                    }
                     // Namespace each entry's widget ids (commonmark tables use a
                     // Grid) so repeated/duplicate content doesn't clash.
-                    for (i, entry) in self.transcript.iter().enumerate() {
+                    for (i, entry) in self.transcript.iter().enumerate().skip(start) {
                         ui.push_id(("entry", i), |ui| {
                             render_entry(ui, entry, &mut self.md_cache, &self.puppy_name);
                         });
                     }
                 });
+            if show_all_clicked {
+                self.transcript_show_all = true;
+            }
         }
     }
 
