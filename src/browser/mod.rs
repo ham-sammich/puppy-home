@@ -49,6 +49,26 @@ pub fn ensure_cdp_helper() -> Option<std::path::PathBuf> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BrowserId(pub u64);
 
+#[allow(dead_code)] // consumed by the redesign UI branches
+/// Install-panel status (frontend-agnostic mirror of the egui status line).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginStatus {
+    NotFound,
+    Incompatible { version: String, needs: String },
+    ExeMissing { exe: String },
+    Ready,
+}
+
+#[allow(dead_code)] // consumed by the redesign UI branches
+/// Page operations a shell can drive on a running tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NavOp {
+    Back,
+    Forward,
+    Reload,
+    DevTools,
+}
+
 /// Per-tab browser state: URL bar + the (optional) running process.
 #[derive(Default)]
 struct BrowserTab {
@@ -252,6 +272,153 @@ impl BrowserManager {
             Some(u) if !u.is_empty() => format!("Web: {}", host_port(u)),
             _ => "Browser".to_string(),
         }
+    }
+
+    // -- frontend-agnostic surface (the GPUI shell drives these; the egui
+    //    render methods below mutate tabs directly) ------------------------
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Why the Install panel is showing (status line parity with egui's).
+    pub fn plugin_status(&self) -> PluginStatus {
+        match self.registry.get(BROWSER_PLUGIN_ID) {
+            None => PluginStatus::NotFound,
+            Some(p) if !p.manifest.is_compatible() => PluginStatus::Incompatible {
+                version: p.manifest.version.clone(),
+                needs: p.manifest.min_host_version.clone(),
+            },
+            Some(p) if !p.is_runnable() => PluginStatus::ExeMissing {
+                exe: p.manifest.exe.clone(),
+            },
+            Some(_) => PluginStatus::Ready,
+        }
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// The plugins folder (for display / "Open plugins folder").
+    pub fn plugins_dir(&self) -> Option<PathBuf> {
+        self.registry.dir().map(|d| d.to_path_buf())
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Re-discover installed plugins.
+    pub fn rescan(&mut self) {
+        self.registry.rescan();
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// "Install from local build": copy + manifest + rescan, recording any
+    /// error for the Install panel (egui flow, minus the immediate render).
+    pub fn install_local(&mut self) {
+        match self.install_from_local_build() {
+            Ok(()) => {
+                self.install_error = None;
+                self.registry.rescan();
+            }
+            Err(e) => self.install_error = Some(e),
+        }
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// The last install failure, if any.
+    pub fn install_error(&self) -> Option<&str> {
+        self.install_error.as_deref()
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Whether a freshly-built `puppy-browser` sits next to the app.
+    pub fn local_build_available() -> bool {
+        local_build_exe().is_some()
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Open (creating if needed) the plugins folder in the OS file manager.
+    pub fn open_plugins_folder(&self) {
+        if let Some(dir) = self.registry.dir() {
+            let _ = std::fs::create_dir_all(dir);
+            open_in_file_manager(dir);
+        }
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Whether a tab's process is currently running (reaps exits first).
+    pub fn tab_running(&mut self, id: BrowserId) -> bool {
+        let Some(tab) = self.tabs.get_mut(&id) else {
+            return false;
+        };
+        if tab.host.as_mut().map(|h| !h.is_alive()).unwrap_or(false) {
+            tab.host = None;
+        }
+        tab.host.is_some()
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// The last launch failure for a tab, if any.
+    pub fn tab_launch_error(&self, id: BrowserId) -> Option<String> {
+        self.tabs.get(&id).and_then(|t| t.launch_error.clone())
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Drive a running tab's page (no-ops when the process isn't running).
+    pub fn nav(&mut self, id: BrowserId, op: NavOp) {
+        if let Some(h) = self.tabs.get_mut(&id).and_then(|t| t.host.as_mut()) {
+            match op {
+                NavOp::Back => h.back(),
+                NavOp::Forward => h.forward(),
+                NavOp::Reload => h.reload(),
+                NavOp::DevTools => h.devtools(),
+            }
+        }
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Point a tab at a URL: navigate the running process, or launch one
+    /// (the egui URL-bar Enter behavior; input is normalized).
+    pub fn navigate_to(&mut self, id: BrowserId, url_text: &str) {
+        if url_text.trim().is_empty() {
+            return;
+        }
+        let exe = self.registry.get(BROWSER_PLUGIN_ID).map(|p| p.exe_path());
+        let Some(tab) = self.tabs.get_mut(&id) else {
+            return;
+        };
+        let url = normalize_url(url_text.trim());
+        tab.url = url.clone();
+        match tab.host.as_mut() {
+            Some(h) => h.navigate(&url),
+            None => launch(tab, exe.as_deref(), &url),
+        }
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Stop a tab's process but keep the tab (URL stays; relaunchable).
+    /// egui has no explicit stop — closing the dock tab kills the process;
+    /// the GPUI shell's single surface needs the button.
+    pub fn stop_tab(&mut self, id: BrowserId) {
+        if let Some(tab) = self.tabs.get_mut(&id) {
+            if let Some(h) = tab.host.as_mut() {
+                h.close();
+            }
+            tab.host = None;
+            tab.embedded = false;
+            tab.visible = false;
+            tab.placed_rect = None;
+        }
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// The "Launch browser" button: current URL or the example fallback.
+    pub fn launch_tab(&mut self, id: BrowserId) {
+        let exe = self.registry.get(BROWSER_PLUGIN_ID).map(|p| p.exe_path());
+        let Some(tab) = self.tabs.get_mut(&id) else {
+            return;
+        };
+        let url = if tab.url.trim().is_empty() {
+            "https://example.com".to_string()
+        } else {
+            normalize_url(tab.url.trim())
+        };
+        tab.url = url.clone();
+        launch(tab, exe.as_deref(), &url);
     }
 
     /// Render one browser tab: Install panel or the live browser toolbar.

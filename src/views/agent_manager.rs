@@ -42,7 +42,7 @@ pub struct AgentManagerView {
 // ---------------------------------------------------------------------------
 
 /// Case-insensitive name/description filter. `needle` must be lowercased.
-fn matches_filter(agent: &AgentConfigInfo, needle: &str) -> bool {
+pub(crate) fn matches_filter(agent: &AgentConfigInfo, needle: &str) -> bool {
     needle.is_empty()
         || agent.name.to_lowercase().contains(needle)
         || agent.display_name.to_lowercase().contains(needle)
@@ -50,7 +50,7 @@ fn matches_filter(agent: &AgentConfigInfo, needle: &str) -> bool {
 }
 
 /// A short, human badge for where an agent lives.
-fn source_badge(source: &str) -> &str {
+pub(crate) fn source_badge(source: &str) -> &str {
     match source {
         "user" => "user",
         "project" => "project",
