@@ -125,6 +125,114 @@ impl SshTarget {
         cmd
     }
 
+    /// The `ssh` call that preflights a remote workspace. Run after
+    /// provisioning succeeds (auth/network proven good). Distinct exit
+    /// codes keep the verdicts apart:
+    /// * 0 — hostable, path ok
+    /// * 3 — `cwd` doesn't exist (plain error; the old behavior "adopted"
+    ///   a workspace whose sidecar then died on `cd`)
+    /// * 1 — launcher missing (the ONLY SSH-fallback trigger)
+    /// * 255 — ssh-level failure (no verdict at all)
+    ///
+    /// `command test` not bare `test`: rc-file functions shadow verbs
+    /// (the vm840 lesson).
+    pub fn launcher_probe_command(&self, launcher: &str, cwd: Option<&str>) -> Command {
+        let argv0 = launcher.split_whitespace().next().unwrap_or("uv");
+        let mut line = String::new();
+        if let Some(cwd) = cwd {
+            line.push_str(&format!("command test -d {} || exit 3; ", sh_quote(cwd)));
+        }
+        line.push_str(&format!(
+            "command -v {} >/dev/null || exit 1",
+            sh_quote(argv0)
+        ));
+        let mut cmd = self.base_ssh();
+        cmd.arg("--").arg(line);
+        cmd
+    }
+
+    /// The `ssh` call that runs a RAW shell line on the remote (for lines
+    /// needing shell syntax, e.g. `cat > file`); the caller quotes paths.
+    pub fn exec_shell(&self, line: &str) -> Command {
+        let mut cmd = self.base_ssh();
+        cmd.arg("--").arg(line);
+        cmd
+    }
+
+    /// The `ssh` call that runs ONE argv on the remote (the SSH-fallback
+    /// fs/git transport). `argv` is quoted word-by-word; stdin/stdout carry
+    /// the payload. The line is prefixed with `command` so shell FUNCTIONS
+    /// from sourced rc files can't shadow the verb — found live on vm840,
+    /// where a `.bashrc`-sourced rc defined `test()` (printed an IP, exit
+    /// 0), making every `exists()` check return true. Debian bash sources
+    /// rc files for ssh remote commands; quoting stops aliases, not
+    /// functions.
+    pub fn exec_command(&self, argv: &[&str]) -> Command {
+        let line = std::iter::once("command".to_string())
+            .chain(argv.iter().map(|w| sh_quote(w)))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut cmd = self.base_ssh();
+        cmd.arg("--").arg(line);
+        cmd
+    }
+
+    /// The `ssh` call that receives ONE pushed credential/config file on
+    /// stdin into the remote `~/.code_puppy` (the "puppush" feature; see
+    /// `backend::creds_push`). Same pipe-over-stdin convention as sidecar
+    /// provisioning; `BatchMode=yes` from `base_ssh` is right here — no
+    /// PTY, fail fast. Sensitive files get `chmod 600`, matching what
+    /// code_puppy's own auth plugins set locally.
+    pub fn push_file_command(&self, file_name: &str, sensitive: bool) -> Command {
+        debug_assert!(
+            !file_name.contains(['/', '\'', '"', ' ']),
+            "manifest names are static and shell-safe"
+        );
+        let dir = "\"$HOME/.code_puppy\"";
+        let dest = format!("\"$HOME/.code_puppy/{file_name}\"");
+        let mut line = format!("mkdir -p {dir} && cat > {dest}");
+        if sensitive {
+            line.push_str(&format!(" && chmod 600 {dest}"));
+        }
+        let mut cmd = self.base_ssh();
+        cmd.arg("--").arg(line);
+        cmd
+    }
+
+    /// Argv (after `ssh`) for an INTERACTIVE terminal session on this target,
+    /// landing in `remote_root` and exec'ing the login shell (the remote
+    /// workspace's embedded terminal, B13.7).
+    ///
+    /// Deliberately NOT `base_ssh` conventions: the terminal runs on a real
+    /// PTY, so `-t` allocates a remote tty and there is no `BatchMode=yes` —
+    /// password/2FA prompts can flow through the terminal, unlike the
+    /// protocol channels which must fail fast instead of hanging.
+    /// Host-key and timeout conventions match the sidecar connection.
+    pub fn terminal_args(&self, remote_root: &str) -> Vec<String> {
+        let mut args = vec![
+            "-t".to_string(),
+            "-o".to_string(),
+            "ConnectTimeout=10".to_string(),
+            "-o".to_string(),
+            "StrictHostKeyChecking=accept-new".to_string(),
+        ];
+        if let Some(port) = self.port {
+            args.push("-p".to_string());
+            args.push(port.to_string());
+        }
+        if let Some(id) = &self.identity {
+            args.push("-i".to_string());
+            args.push(id.to_string_lossy().into_owned());
+        }
+        args.push(self.destination());
+        args.push("--".to_string());
+        args.push(format!(
+            "cd {} && exec \"${{SHELL:-/bin/sh}}\" -l",
+            sh_quote(remote_root)
+        ));
+        args
+    }
+
     /// The `ssh` call that lists a remote directory for the folder picker.
     /// `dir` of `None` means the login home. stdout is [`parse_listing`]-shaped.
     pub fn list_dir_command(&self, dir: Option<&str>) -> Command {
@@ -450,6 +558,87 @@ mod tests {
     fn launch_line_without_cwd() {
         let line = remote_launch_line(None, "python3");
         assert_eq!(line, "exec python3 \"$HOME/.cache/puppy-home/sidecar.py\"");
+    }
+
+    #[test]
+    fn launcher_probe_checks_argv0_and_optional_cwd() {
+        let t = SshTarget::parse("devbox").unwrap();
+        let a = args(&t.launcher_probe_command("uv run --with code-puppy python", None));
+        assert_eq!(a.last().unwrap(), "command -v 'uv' >/dev/null || exit 1");
+        // Custom launcher: still just the first word; cwd check leads with
+        // its own exit code so the verdicts stay distinguishable.
+        let a = args(&t.launcher_probe_command("/opt/py/bin/python3 -u", Some("/srv/my proj")));
+        assert_eq!(
+            a.last().unwrap(),
+            "command test -d '/srv/my proj' || exit 3; \
+             command -v '/opt/py/bin/python3' >/dev/null || exit 1"
+        );
+    }
+
+    #[test]
+    fn exec_command_quotes_each_word_and_defeats_shell_functions() {
+        let t = SshTarget::parse("devbox").unwrap();
+        let a = args(&t.exec_command(&["ls", "-1Ap", "/srv/my repo"]));
+        // `command` prefix: rc-file shell functions (vm840's `test()`)
+        // must not shadow the verb.
+        assert_eq!(a.last().unwrap(), "command 'ls' '-1Ap' '/srv/my repo'");
+        assert!(a.windows(2).any(|w| w == ["-o", "BatchMode=yes"]));
+    }
+
+    #[test]
+    fn push_file_command_pipes_and_chmods_sensitive() {
+        let t = SshTarget::parse("devbox").unwrap();
+        let a = args(&t.push_file_command("claude_code_oauth.json", true));
+        // Protocol-channel conventions: BatchMode fail-fast (no PTY here).
+        assert!(a.windows(2).any(|w| w == ["-o", "BatchMode=yes"]));
+        let remote = a.last().unwrap();
+        assert_eq!(
+            remote,
+            "mkdir -p \"$HOME/.code_puppy\" \
+             && cat > \"$HOME/.code_puppy/claude_code_oauth.json\" \
+             && chmod 600 \"$HOME/.code_puppy/claude_code_oauth.json\""
+        );
+        // Plain config: no chmod.
+        let a = args(&t.push_file_command("claude_models.json", false));
+        let remote = a.last().unwrap();
+        assert!(remote.ends_with("cat > \"$HOME/.code_puppy/claude_models.json\""));
+        assert!(!remote.contains("chmod"));
+    }
+
+    #[test]
+    fn terminal_args_interactive_shape() {
+        let mut t = SshTarget::parse("alice@host:2222").unwrap();
+        t.identity = Some(PathBuf::from("/keys/id_ed25519"));
+        let a = t.terminal_args("/srv/my repo");
+        // Interactive: tty forced, NO BatchMode (the PTY can take a password).
+        assert_eq!(a[0], "-t");
+        assert!(!a.iter().any(|s| s.contains("BatchMode")));
+        // Sidecar-matching conventions.
+        assert!(
+            a.windows(2)
+                .any(|w| w == ["-o", "StrictHostKeyChecking=accept-new"])
+        );
+        assert!(a.windows(2).any(|w| w == ["-o", "ConnectTimeout=10"]));
+        assert!(a.windows(2).any(|w| w == ["-p", "2222"]));
+        assert!(a.windows(2).any(|w| w == ["-i", "/keys/id_ed25519"]));
+        // Destination then the remote line: quoted cd + login-shell exec.
+        let di = a.iter().position(|s| s == "alice@host").unwrap();
+        assert_eq!(a[di + 1], "--");
+        assert_eq!(
+            a[di + 2],
+            "cd '/srv/my repo' && exec \"${SHELL:-/bin/sh}\" -l"
+        );
+    }
+
+    #[test]
+    fn terminal_args_minimal_target() {
+        let a = SshTarget::parse("devbox").unwrap().terminal_args("/srv");
+        assert!(!a.iter().any(|s| s == "-p" || s == "-i"));
+        assert!(a.contains(&"devbox".to_string()));
+        assert_eq!(
+            a.last().unwrap(),
+            "cd '/srv' && exec \"${SHELL:-/bin/sh}\" -l"
+        );
     }
 
     #[test]

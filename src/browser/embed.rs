@@ -61,6 +61,17 @@ mod imp {
         }
     }
 
+    /// Release a reparented child back to a top-level popup (the GPUI
+    /// pop-out path; inverse of `reparent`). Untested by construction.
+    pub fn unparent(child: i64) {
+        unsafe {
+            let style = GetWindowLongPtrW(hwnd(child), GWL_STYLE) as u32;
+            let new = (style & !WS_CHILD.0) | WS_POPUP.0;
+            SetWindowLongPtrW(hwnd(child), GWL_STYLE, new as isize);
+            let _ = SetParent(hwnd(child), HWND::default());
+        }
+    }
+
     /// Reclaim OS keyboard focus to the host window from the (cross-process)
     /// webview child. The child lives in the plugin's thread, so we briefly
     /// attach input queues to move focus across the thread boundary.
@@ -86,6 +97,7 @@ mod imp {
 #[allow(dead_code)]
 mod imp {
     pub fn reparent(_parent: i64, _child: i64) {}
+    pub fn unparent(_child: i64) {}
     pub fn place(_child: i64, _x: i32, _y: i32, _w: i32, _h: i32) {}
     pub fn show(_child: i64) {}
     pub fn hide(_child: i64) {}
@@ -95,4 +107,4 @@ mod imp {
 // On non-Windows only `focus_host` is used (as a no-op); the rest are part of
 // the uniform embed API but unused there.
 #[allow(unused_imports)]
-pub use imp::{focus_host, hide, place, reparent, show};
+pub use imp::{focus_host, hide, place, reparent, show, unparent};

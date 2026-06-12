@@ -46,6 +46,10 @@ enum WireCmd {
     },
     /// macOS embedding: order this window out (tab inactive / hidden).
     Hide,
+    /// Floating-window mode: show as a normal decorated window (hosts that
+    /// can't embed — the GPUI shell). Embeddable platforms start hidden, so
+    /// without this (or `embed`) the window would never appear at all.
+    Float,
     Close,
 }
 
@@ -97,9 +101,25 @@ fn main() -> wry::Result<()> {
 
     // `mut` is only needed on Windows (CDP args reassign below); silence the
     // unused-mut lint elsewhere so the plugin builds warning-free everywhere.
+    // A modern, mainstream User-Agent. wry's default UA is an anonymous
+    // WebKit string many sites sniff as "unknown old browser" and serve
+    // legacy/degraded layouts to — the engine is evergreen, the DEFAULT
+    // UA is what looked dated. Safari freezes the OS token at 10_15_7 by
+    // design; matching real Safari exactly is the point.
+    let user_agent = if cfg!(target_os = "macos") {
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 \
+         (KHTML, like Gecko) Version/17.6 Safari/605.1.15"
+    } else if cfg!(windows) {
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+         (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0"
+    } else {
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
+         (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+    };
     #[cfg_attr(not(windows), allow(unused_mut))]
     let mut builder = WebViewBuilder::new(&window)
         .with_url(&initial_url)
+        .with_user_agent(user_agent)
         .with_devtools(true);
     #[cfg(windows)]
     if let Some(port) = cdp_port {
@@ -132,6 +152,9 @@ fn main() -> wry::Result<()> {
                 }
                 WireCmd::Devtools => webview.open_devtools(),
                 WireCmd::Embed { x, y, w, h, parent } => {
+                    // Re-embedding after a pop-out (`float`) must shed the
+                    // decorations again; idempotent when already borderless.
+                    window.set_decorations(false);
                     window.set_outer_position(tao::dpi::PhysicalPosition::new(x, y));
                     window.set_inner_size(tao::dpi::PhysicalSize::new(
                         w.max(1) as u32,
@@ -147,6 +170,17 @@ fn main() -> wry::Result<()> {
                     mac_order_out(&window);
                     #[cfg(not(target_os = "macos"))]
                     window.set_visible(false);
+                }
+                WireCmd::Float => {
+                    window.set_decorations(true);
+                    window.set_visible(true);
+                    // Detach visually from the embed spot: left glued in
+                    // place, the floating window covered the host's browser
+                    // toolbar — hiding the pop-in and Stop buttons (the
+                    // "can't pop back in / can't close" reports). A real
+                    // pop-out moves to a standalone position and size.
+                    window.set_outer_position(tao::dpi::LogicalPosition::new(140.0, 120.0));
+                    window.set_inner_size(tao::dpi::LogicalSize::new(1100.0, 740.0));
                 }
                 WireCmd::Close => *control_flow = ControlFlow::Exit,
             },

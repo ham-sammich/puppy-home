@@ -224,7 +224,7 @@ impl Workspace {
                             }
                         });
                     });
-                    if let Some(label) = &self.remote_label {
+                    if let Some(label) = self.remote_label() {
                         // Remote workspace: tree + editor work over SSH.
                         ui.weak(format!("\u{1f517} {label}"));
                     }
@@ -604,9 +604,10 @@ impl Workspace {
         });
     }
 
-    /// Lazily spawn (or respawn) the workspace shell.
+    /// Lazily spawn (or respawn) the workspace shell (remote workspaces get
+    /// an interactive ssh shell in the remote root — shared logic, B13.7).
     pub(crate) fn spawn_terminal(&mut self, ctx: egui::Context) {
-        match crate::terminal::Terminal::spawn(&self.root, crate::waker::egui_waker(&ctx)) {
+        match self.spawn_shell(crate::waker::egui_waker(&ctx)) {
             Ok(t) => self.terminal = Some(t),
             Err(e) => self.status_line = format!("Couldn't start terminal: {e}"),
         }

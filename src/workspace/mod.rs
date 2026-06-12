@@ -119,6 +119,8 @@ pub struct Workspace {
     sessions: Vec<crate::backend::SessionInfo>,
     sessions_current: String,
     show_sessions: bool,
+    show_agent_picker: bool,
+    show_model_picker: bool,
     selected_session: Option<String>,
     session_preview: Option<(String, Vec<crate::backend::SessionEntry>)>,
     preview_cache: CommonMarkCache,
@@ -198,10 +200,11 @@ pub struct Workspace {
     /// remote impl routes these over the sidecar protocol. The tree + editor
     /// go through this instead of calling `std::fs` directly.
     fs: Arc<dyn fs::WorkspaceFs>,
-    /// `Some("user@host")` when this workspace's sidecar runs on a remote host
-    /// over SSH. The chat works today; the file tree + git stay local-only
-    /// until the remote fs/git impls land, so we show a placeholder instead.
-    remote_label: Option<String>,
+    /// Present when this workspace's sidecar runs on a remote host over SSH:
+    /// the display label plus the full target (port/identity included), so
+    /// later transport channels — the embedded terminal — can be opened
+    /// against the same destination (B13.7).
+    remote: Option<RemoteInfo>,
     show_tree: bool,
     open_files: BTreeMap<PathBuf, FileBuffer>,
     editor_open: Vec<EditorItem>,
@@ -247,11 +250,39 @@ pub struct Workspace {
     show_terminal: bool,
 }
 
+/// A remote workspace's SSH origin: display label + the full target
+/// (port/identity included) for opening further channels (the terminal).
+#[derive(Debug, Clone)]
+pub struct RemoteInfo {
+    pub label: String,
+    pub target: crate::backend::ssh::SshTarget,
+    /// SSH-FALLBACK mode: the sidecar runs LOCALLY (remote can't host it);
+    /// fs/git/terminal still speak ssh. Surfaces label this mode.
+    pub fallback: bool,
+}
+
 impl Workspace {
+    /// Spawn this workspace's shell: a local PTY shell, or — for remote
+    /// workspaces — interactive ssh into the remote root (B13.7). Shared by
+    /// both shells' terminal toggles.
+    pub(crate) fn spawn_shell(
+        &self,
+        waker: Arc<dyn crate::waker::UiWaker>,
+    ) -> Result<crate::terminal::Terminal, String> {
+        match &self.remote {
+            Some(r) => crate::terminal::Terminal::spawn_remote(
+                &r.target,
+                &self.root.to_string_lossy(),
+                waker,
+            ),
+            None => crate::terminal::Terminal::spawn(&self.root, waker),
+        }
+    }
+
     pub fn new(
         id: WorkspaceId,
         root: PathBuf,
-        remote_label: Option<String>,
+        remote: Option<RemoteInfo>,
         fs: Arc<dyn fs::WorkspaceFs>,
         git: Arc<dyn crate::git::WorkspaceGit>,
         backend: CodePuppy,
@@ -301,6 +332,8 @@ impl Workspace {
             sessions: Vec::new(),
             sessions_current: String::new(),
             show_sessions: false,
+            show_agent_picker: false,
+            show_model_picker: false,
             selected_session: None,
             session_preview: None,
             preview_cache: CommonMarkCache::default(),
@@ -344,7 +377,7 @@ impl Workspace {
             git_repo: is_git_repo,
             git,
             fs,
-            remote_label,
+            remote,
             git_changes: Vec::new(),
             git_rx: None,
             git_refresh_at: Instant::now(),
@@ -380,7 +413,24 @@ impl Workspace {
     /// Number of file changes recorded so far (for tab badges).
     /// Is this workspace on a remote host (fs/git/sidecar over SSH)?
     pub fn is_remote(&self) -> bool {
-        self.remote_label.is_some()
+        self.remote.is_some()
+    }
+
+    /// The remote's display label (`user@host`), when remote.
+    pub fn remote_label(&self) -> Option<&str> {
+        self.remote.as_ref().map(|r| r.label.as_str())
+    }
+
+    /// The remote's full ssh target (for opening further channels), when remote.
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn remote_target(&self) -> Option<crate::backend::ssh::SshTarget> {
+        self.remote.as_ref().map(|r| r.target.clone())
+    }
+
+    /// Is this an SSH-FALLBACK workspace (local sidecar, ssh transport)?
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn remote_fallback(&self) -> bool {
+        self.remote.as_ref().is_some_and(|r| r.fallback)
     }
 
     pub fn diff_count(&self) -> usize {
@@ -405,32 +455,32 @@ impl Workspace {
         self.paused
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Recent tok/s samples, oldest → newest (this card's sparkline data).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn spark_history(&self) -> &[f32] {
         self.sparks.samples()
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// The model catalog the sidecar announced (the card's model popover).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn model_catalog(&self) -> &[crate::backend::ModelInfo] {
         &self.models
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Transcript entries (the GPUI chat renders a bounded tail of these).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn entries(&self) -> &[Entry] {
         &self.transcript
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// How many oldest entries the ring-buffer cap has dropped (banner text).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn collapsed_count(&self) -> usize {
         self.transcript_collapsed
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// The agent catalog the sidecar announced (composer AgentSwitcher).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn agent_catalog(&self) -> &[AgentInfo] {
         &self.agents
     }
@@ -441,8 +491,8 @@ impl Workspace {
         &self.commands
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Latest sidecar completions (slash palette body) + visibility flag.
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn completion_items(&self) -> &[CompletionItem] {
         &self.completions
     }
@@ -452,9 +502,9 @@ impl Workspace {
         self.comp_visible
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Ask the sidecar to complete `query` (debounced by equality, exactly
     /// like the egui composer): only `/`-commands and `@file` paths complete.
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn update_completions(&mut self, query: &str) {
         if query == self.last_query {
             return;
@@ -471,26 +521,26 @@ impl Workspace {
         }
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Dismiss the completion popover (focus loss / item picked / escape).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn dismiss_completions(&mut self) {
         self.comp_visible = false;
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// File-change records this session (the chat's Changes list).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn diff_records(&self) -> &[diff::DiffRecord] {
         &self.diffs
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Sidecar log lines (the chat's logs panel).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn log_lines(&self) -> &[String] {
         &self.logs
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Editor-area tabs + the active index (the GPUI editor tab bar).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn editor_tabs(&self) -> &[EditorItem] {
         &self.editor_open
     }
@@ -507,9 +557,9 @@ impl Workspace {
         }
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// An open file buffer's view: (content, dirty, load_error, save_error).
     #[allow(clippy::type_complexity)]
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn file_view(
         &self,
         path: &std::path::Path,
@@ -524,8 +574,8 @@ impl Workspace {
         })
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Replace an open file's buffer content (marks it dirty).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn set_file_content(&mut self, path: &std::path::Path, text: String) {
         if let Some(b) = self.open_files.get_mut(path)
             && b.content != text
@@ -535,8 +585,8 @@ impl Workspace {
         }
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Write an open buffer to disk; returns success (egui's inline save).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn save_file(&mut self, path: &std::path::Path) -> bool {
         let Some(b) = self.open_files.get_mut(path) else {
             return false;
@@ -554,54 +604,54 @@ impl Workspace {
         }
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Whether this workspace's folder is a git repo (markers/changes source).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn is_git_repo(&self) -> bool {
         self.git_repo
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Working-tree changes (git repos; the Changes list).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn git_change_list(&self) -> &[crate::git::GitChange] {
         &self.git_changes
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// The diff currently shown in the Changes tab.
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn current_diff_view(&self) -> Option<&diff::DiffRecord> {
         self.current_diff.as_ref()
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Saved-session catalog (answer to `list_sessions`).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn sessions_catalog(&self) -> &[crate::backend::SessionInfo] {
         &self.sessions
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// The session this workspace is currently attached to.
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn sessions_current_name(&self) -> &str {
         &self.sessions_current
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// The most recent session preview (name + entries), if loaded.
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn session_preview_data(
         &self,
     ) -> Option<&(String, Vec<crate::backend::SessionEntry>)> {
         self.session_preview.as_ref()
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Ask the sidecar for the saved-session catalog.
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn request_sessions(&self) {
         if let Some(backend) = &self.backend {
             backend.list_sessions();
         }
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Request a read-only preview of one session (clears the stale one).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn request_session_preview(&mut self, name: &str, source: &str) {
         self.session_preview = None;
         if let Some(backend) = &self.backend {
@@ -609,8 +659,8 @@ impl Workspace {
         }
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Resume a saved session here (egui gate: not while a turn runs).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn resume_session(&mut self, name: &str, source: &str) -> bool {
         if self.running {
             return false;
@@ -622,16 +672,56 @@ impl Workspace {
         false
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Adopt a sidecar-announced working-directory change (`/cd`): swap the
+    /// root, retitle, rebind the git handle (local workspaces) and drop the
+    /// now-stale git state — the regular status poll repopulates it. The
+    /// file tree reads `root` live, so it follows on the next frame.
+    /// Remote workspaces keep their old git binding (the ssh runner is
+    /// root-bound; rebind is a documented PARITY gap).
+    pub(crate) fn set_root(&mut self, new_root: PathBuf) {
+        if new_root.as_os_str().is_empty() || new_root == self.root {
+            return;
+        }
+        self.name = new_root
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| new_root.to_string_lossy().into_owned());
+        if self.remote.is_none() {
+            self.git = Arc::new(crate::git::LocalGit::new(new_root.clone()));
+        }
+        self.root = new_root;
+        self.git_repo = self.git.is_repo();
+        self.git_changes.clear();
+        self.git_rx = None;
+        self.git_view = None;
+        self.transcript.push(Entry::Note(format!(
+            "\u{1f4c2} Working directory: {}",
+            self.root.display()
+        )));
+    }
+
     /// One-shot: the sidecar asked to open the sessions browser (`/resume`).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn wants_sessions(&mut self) -> bool {
         std::mem::take(&mut self.show_sessions)
     }
 
+    /// One-shot: bare `/agent` — the sidecar asked for the agent switcher.
     #[allow(dead_code)] // consumed by the redesign UI branches
+    pub(crate) fn wants_agent_picker(&mut self) -> bool {
+        std::mem::take(&mut self.show_agent_picker)
+    }
+
+    /// One-shot: bare `/model` — the sidecar asked for the model switcher.
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub(crate) fn wants_model_picker(&mut self) -> bool {
+        std::mem::take(&mut self.show_model_picker)
+    }
+
     /// Start a fresh chat: the egui `+ New chat` reuses the /clear machinery
     /// (wipes the transcript, resets the sidecar conversation). Gated like
     /// the egui button: ready, idle, and something to clear.
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn new_chat(&mut self) -> bool {
         if !self.ready || self.running || self.transcript.is_empty() {
             return false;
@@ -655,7 +745,7 @@ impl Workspace {
         waker: &Arc<dyn crate::waker::UiWaker>,
     ) {
         if on && self.terminal.is_none() {
-            match crate::terminal::Terminal::spawn(&self.root, waker.clone()) {
+            match self.spawn_shell(waker.clone()) {
                 Ok(t) => self.terminal = Some(t),
                 Err(e) => {
                     self.transcript
@@ -665,6 +755,13 @@ impl Workspace {
             }
         }
         self.show_terminal = on;
+    }
+
+    /// Append a plain note to the transcript (UI-initiated events that
+    /// should leave a trace, e.g. creds-push results).
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub(crate) fn push_note(&mut self, text: String) {
+        self.transcript.push(Entry::Note(text));
     }
 
     #[allow(dead_code)] // consumed by the redesign UI branches
@@ -677,22 +774,22 @@ impl Workspace {
         self.terminal.as_mut()
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Filesystem handle for this workspace (the chat's file explorer).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn fs_handle(&self) -> Arc<dyn fs::WorkspaceFs> {
         self.fs.clone()
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// The outstanding input/confirm/select request, if any (frontends
     /// render it; answers go through [`Self::pending_choose`] /
     /// [`Self::pending_answer_text`]).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn pending_request(&self) -> Option<&Pending> {
         self.pending.as_ref()
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Answer a confirm/select request by picking option `i`.
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn pending_choose(&mut self, i: usize) {
         if let Some(p) = self.pending.as_mut() {
             p.selection = i;
@@ -700,8 +797,8 @@ impl Workspace {
         }
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Answer an input request with typed text.
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn pending_answer_text(&mut self, text: &str) {
         if let Some(p) = self.pending.as_mut() {
             p.text = text.to_string();
@@ -759,6 +856,7 @@ impl Workspace {
     /// Relaunch a crashed/exited sidecar for this workspace and re-attach the
     /// conversation. The fresh sidecar's `Ready` re-applies agent/model/session
     /// through the existing restore path, so the chat picks up where it died.
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn restart(&mut self, waker: std::sync::Arc<dyn crate::waker::UiWaker>) {
         match CodePuppy::spawn(waker, Some(&self.root)) {
             Ok((backend, rx)) => {

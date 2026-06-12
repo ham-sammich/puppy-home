@@ -56,8 +56,7 @@ impl Workspace {
 
     /// The one prompt-sending path (composer submit + dashboard "New prompt"):
     /// records the turn in the transcript and starts turn tracking. Signature
-    /// converged across BOTH UI branches (text + images superset) — keep all
-    /// three trees identical here or cherry-picks will trip (again).
+    /// converged with redesign/egui (text + images superset).
     pub(crate) fn send_user_prompt(&mut self, text: String, images: Vec<String>) {
         let Some(backend) = &self.backend else { return };
         self.transcript.push(Entry::User(text.clone()));
@@ -68,10 +67,32 @@ impl Workspace {
             )));
         }
         backend.send_prompt(&text, &images);
-        // Optimistic: cards show the prompt immediately; the next status poll
-        // confirms it from the sidecar.
+        // Optimistic: the card shows the prompt immediately; the next status
+        // poll confirms it from the sidecar.
         self.last_prompt = text;
         self.begin_turn();
+    }
+
+    /// Card action: send a fresh prompt (or slash command) with no images.
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn send_prompt_text(&mut self, text: &str) {
+        let text = text.trim().to_string();
+        if text.is_empty() || !self.ready || self.running || self.backend.is_none() {
+            return;
+        }
+        if text.starts_with('/') {
+            self.dispatch_command(&text);
+        } else {
+            self.send_user_prompt(text, Vec::new());
+        }
+    }
+
+    /// Switch the active agent live (sidecar re-announces via `Ready`).
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn set_agent_live(&mut self, name: &str) {
+        if let Some(backend) = &self.backend {
+            backend.set_agent(name);
+        }
     }
 
     /// Shell-style history recall, Up direction: the first recall stashes the
@@ -190,7 +211,7 @@ impl Workspace {
         self.record_history(&text);
         if text.starts_with('/') {
             self.dispatch_command(&text);
-        } else {
+        } else if self.backend.is_some() {
             let images: Vec<String> = self
                 .pending_images
                 .iter()
