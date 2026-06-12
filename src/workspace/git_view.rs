@@ -324,11 +324,20 @@ impl Workspace {
                         );
                     });
                     ui.add_space(4.0);
-                    let box_h = ui.available_height();
+                    // Fill the space above the buttons MINUS a little slack.
+                    // If the box exactly fills the leftover height, any margin/
+                    // rounding overflow raises the resizable panel's min-content
+                    // height, which feeds back into a taller panel (and box)
+                    // on the next repaint -- the box visibly grew on its own.
+                    // The slack plus a 1-row intrinsic minimum (default is 4
+                    // rows, taller than the panel's default) keep the content
+                    // strictly inside the panel, so the loop can't start.
+                    let box_h = (ui.available_height() - 8.0).max(36.0);
                     ui.add_sized(
                         egui::vec2(ui.available_width(), box_h),
                         egui::TextEdit::multiline(&mut self.commit_msg)
                             .id_salt(("commit-msg", id))
+                            .desired_rows(1)
                             .desired_width(f32::INFINITY)
                             .hint_text("Commit message…"),
                     );
