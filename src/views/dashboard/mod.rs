@@ -186,6 +186,7 @@ fn header(ui: &mut egui::Ui, sup: &Supervisor, a: &Accents, puppy: &str) {
     let mut tools = 0u64;
     let mut cost = 0.0f64;
     let mut cost_known = false;
+    let mut cost_estimated = false;
     for ws in sup.iter() {
         match ws.status {
             InstanceStatus::Running | InstanceStatus::Thinking | InstanceStatus::ToolCalling => {
@@ -202,6 +203,7 @@ fn header(ui: &mut egui::Ui, sup: &Supervisor, a: &Accents, puppy: &str) {
         if let Some(c) = ws.cost {
             cost += c;
             cost_known = true;
+            cost_estimated |= ws.cost_estimated;
         }
     }
     let dirs = sup.len();
@@ -248,8 +250,11 @@ fn header(ui: &mut egui::Ui, sup: &Supervisor, a: &Accents, puppy: &str) {
             let err_col = (errors > 0).then_some(a.error);
             stat_tile(ui, "Errors", &errors.to_string(), err_col, None);
             stat_tile(ui, "Tool calls", &tools.to_string(), None, None);
-            // NEVER $0.00 while the ledger is absent — the dash is honest.
-            let spend = if cost_known {
+            // NEVER $0.00 while nothing is priced — the dash is honest. "≈"
+            // marks sums containing snapshot-priced estimates.
+            let spend = if cost_known && cost_estimated {
+                format!("≈${cost:.2}")
+            } else if cost_known {
                 format!("${cost:.2}")
             } else {
                 "—".to_string()

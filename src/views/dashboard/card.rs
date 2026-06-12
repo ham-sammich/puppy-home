@@ -33,9 +33,7 @@ pub(super) fn agent_card(
         header_row(ui, ws, &st, a, view, actions);
         state_line(ui, ws, &st, a);
         last_prompt_block(ui, ws, a);
-        // The mock's 3px context bar needs a context %, which the sidecar's
-        // status payload doesn't report yet -- skipped gracefully (handoff
-        // allows it) until a ctx_pct field lands.
+        context_bar(ui, ws, &st, a);
         stats_row(ui, ws, a);
         sub_agent_rows(ui, ws, a);
         inline_input(ui, ws, a, view, actions);
@@ -228,14 +226,46 @@ fn stats_row(ui: &mut egui::Ui, ws: &Workspace, a: &Accents) {
             });
         });
         stat_cell(&mut cols[4], "cost", |ui| {
-            // No cost ledger sidecar-side yet: an honest dash, never $0.00.
-            stat_value(
-                ui,
-                &ws.cost
-                    .map_or("\u{2014}".to_string(), |c| format!("${c:.2}")),
-            );
+            // null = unknown: an honest dash, never $0.00. "≈" marks values
+            // priced from the sidecar's dated models.dev snapshot.
+            let v = match ws.cost {
+                Some(c) if ws.cost_estimated => format!("\u{2248}${c:.2}"),
+                Some(c) => format!("${c:.2}"),
+                None => "\u{2014}".to_string(),
+            };
+            stat_value(ui, &v);
         });
     });
+}
+
+/// The mock's context-progress bar: 3px, gradient think→run, live cards
+/// only (matches the gpui branch). Unknown (`None`) draws nothing — a 0%
+/// bar would be a lie.
+fn context_bar(ui: &mut egui::Ui, ws: &Workspace, st: &CardState, a: &Accents) {
+    let Some(pct) = ws.ctx_pct.filter(|_| st.live) else {
+        return;
+    };
+    let frac = (pct / 100.0).clamp(0.0, 1.0) as f32;
+    let (rect, resp) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 3.0), egui::Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        painter.rect_filled(rect, 1.5, ui.visuals().faint_bg_color);
+        if frac > 0.0 {
+            let mut fill = rect;
+            fill.set_width((rect.width() * frac).max(3.0));
+            let (c0, c1) = (a.think, a.run);
+            let mut mesh = egui::Mesh::default();
+            mesh.colored_vertex(fill.left_top(), c0);
+            mesh.colored_vertex(fill.right_top(), c1);
+            mesh.colored_vertex(fill.right_bottom(), c1);
+            mesh.colored_vertex(fill.left_bottom(), c0);
+            mesh.add_triangle(0, 1, 2);
+            mesh.add_triangle(0, 2, 3);
+            painter.add(egui::Shape::mesh(mesh));
+        }
+    }
+    resp.on_hover_text(format!("context window {pct:.0}% full"));
 }
 
 fn stat_cell(ui: &mut egui::Ui, k: &str, content: impl FnOnce(&mut egui::Ui)) {

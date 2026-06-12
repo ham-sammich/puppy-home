@@ -90,7 +90,11 @@ pub(super) fn render(
                     resp.on_hover_text(&ws.run_stats);
                 }
 
-                let cost = ws.cost.map_or("—".to_string(), |c| format!("${c:.2}"));
+                let cost = match ws.cost {
+                    Some(c) if ws.cost_estimated => format!("≈${c:.2}"),
+                    Some(c) => format!("${c:.2}"),
+                    None => "—".to_string(),
+                };
                 ui.label(RichText::new(cost).monospace().small());
 
                 ui.horizontal(|ui| {
