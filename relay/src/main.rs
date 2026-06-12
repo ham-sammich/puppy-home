@@ -7,9 +7,10 @@
 use std::net::TcpListener;
 
 /// `PUPPY_RELAY_WATCH_PID=<pid>`: exit when that process dies. Set by
-/// puppy-home's in-app "Host a Den" so a killed app (SIGKILL — Drop
-/// never runs) can't leave an orphan relay. Unix: `kill -0` probe every
-/// 3s; elsewhere we rely on the app-side child kill.
+/// puppy-home's in-app "Host a Den" so a killed app (SIGKILL / killed
+/// from Task Manager — Drop never runs) can't leave an orphan relay.
+/// Unix: `kill -0` probe every 3s; Windows: `tasklist /FI "PID eq N"`
+/// (by construction — G3 gate item verifies).
 fn spawn_parent_watchdog() {
     let Ok(pid) = std::env::var("PUPPY_RELAY_WATCH_PID") else {
         return;
@@ -18,17 +19,24 @@ fn spawn_parent_watchdog() {
         loop {
             std::thread::sleep(std::time::Duration::from_secs(3));
             #[cfg(unix)]
-            {
-                let alive = std::process::Command::new("kill")
-                    .args(["-0", &pid])
-                    .stderr(std::process::Stdio::null())
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(true);
-                if !alive {
-                    eprintln!("puppy-relay: parent {pid} gone, exiting");
-                    std::process::exit(0);
-                }
+            let alive = std::process::Command::new("kill")
+                .args(["-0", &pid])
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(true);
+            #[cfg(windows)]
+            let alive = std::process::Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+                .output()
+                // CSV rows quote each field; a live pid appears as ","N",".
+                .map(|o| String::from_utf8_lossy(&o.stdout).contains(&format!("\"{pid}\"")))
+                .unwrap_or(true);
+            #[cfg(not(any(unix, windows)))]
+            let alive = true;
+            if !alive {
+                eprintln!("puppy-relay: parent {pid} gone, exiting");
+                std::process::exit(0);
             }
         }
     });
