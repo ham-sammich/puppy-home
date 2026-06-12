@@ -22,6 +22,7 @@ pub struct AskArgs<'a> {
     pub answer_input: Option<&'a Entity<ChatInput>>,
     /// Which ask-question index the answer input is bound to (Other text).
     pub other_target: Option<usize>,
+    pub reduce_motion: bool,
 }
 
 /// The whole panel; empty when nothing is blocked.
@@ -31,6 +32,7 @@ pub fn ask_panel(args: &AskArgs) -> AnyElement {
             &args.t,
             format!("\u{1f436} {} asks", args.ws.name),
             ask_body(args, ask),
+            args.reduce_motion,
         );
     }
     if let Some(pending) = args.ws.pending_request() {
@@ -38,12 +40,13 @@ pub fn ask_panel(args: &AskArgs) -> AnyElement {
             &args.t,
             format!("\u{1f436} {} needs you", args.ws.name),
             pending_body(args, pending),
+            args.reduce_motion,
         );
     }
     div().into_any_element()
 }
 
-fn panel_frame(t: &Tokens, title: String, body: AnyElement) -> AnyElement {
+fn panel_frame(t: &Tokens, title: String, body: AnyElement, reduce_motion: bool) -> AnyElement {
     div()
         .flex()
         .flex_col()
@@ -61,7 +64,12 @@ fn panel_frame(t: &Tokens, title: String, body: AnyElement) -> AnyElement {
                 .flex()
                 .items_center()
                 .gap_2()
-                .child(widgets::status_dot(u64::MAX - 1, t.wait, true, false))
+                .child(widgets::status_dot(
+                    u64::MAX - 1,
+                    t.wait,
+                    true,
+                    reduce_motion,
+                ))
                 .child(
                     div()
                         .text_size(px(13.))

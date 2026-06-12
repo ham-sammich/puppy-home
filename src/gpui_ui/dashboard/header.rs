@@ -180,6 +180,7 @@ pub fn attention_banner(
     t: &Tokens,
     waiting: &[(WorkspaceId, String, Option<String>)],
     root: &Entity<RootView>,
+    reduce_motion: bool,
 ) -> AnyElement {
     if waiting.is_empty() {
         return div().into_any_element();
@@ -203,7 +204,7 @@ pub fn attention_banner(
         .bg(alpha(t.wait, 0.08))
         .border_1()
         .border_color(alpha(t.wait, 0.5))
-        .child(widgets::status_dot(u64::MAX, t.wait, true, false))
+        .child(widgets::status_dot(u64::MAX, t.wait, true, reduce_motion))
         .child(
             div()
                 .font_weight(FontWeight::SEMIBOLD)

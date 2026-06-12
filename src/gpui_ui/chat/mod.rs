@@ -63,6 +63,7 @@ pub fn chat_screen(args: &ChatArgs) -> AnyElement {
         root: args.root.clone(),
         answer_input: args.answer_input,
         other_target: args.other_target,
+        reduce_motion: args.reduce_motion,
     });
 
     div()

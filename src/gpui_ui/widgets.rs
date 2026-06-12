@@ -166,12 +166,13 @@ pub fn primary_btn(t: &Tokens, label: impl Into<String>) -> Div {
 }
 
 /// A plain-text hover tooltip view (gpui tooltips are views; this is the
-/// minimal one — used for "hover for full prompt").
-pub struct TextTip(pub String);
+/// minimal one — used for "hover for full prompt"). Tokens resolved once at
+/// build time, not re-parsed from the palette every tooltip frame.
+pub struct TextTip(pub String, Tokens);
 
 impl gpui::Render for TextTip {
     fn render(&mut self, _: &mut gpui::Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
-        let t = Tokens::dark();
+        let t = self.1;
         div()
             .max_w(px(420.))
             .px_2p5()
@@ -191,7 +192,8 @@ impl gpui::Render for TextTip {
 pub fn text_tip(
     text: String,
 ) -> impl Fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView + 'static {
-    move |_, cx| cx.new(|_| TextTip(text.clone())).into()
+    let tokens = Tokens::dark();
+    move |_, cx| cx.new(|_| TextTip(text.clone(), tokens)).into()
 }
 
 /// The toast layer (bottom-center, painted above everything).

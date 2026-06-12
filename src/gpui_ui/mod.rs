@@ -662,7 +662,12 @@ impl RootView {
                             .flex_col()
                             .gap_3()
                             .child(dashboard::pack_header(&t, &puppy, &stats, agg))
-                            .child(dashboard::attention_banner(&t, &waiting, &entity))
+                            .child(dashboard::attention_banner(
+                                &t,
+                                &waiting,
+                                &entity,
+                                self.reduce_motion,
+                            ))
                             .when(empty, |d| {
                                 d.child(
                                     div()
