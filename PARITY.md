@@ -390,7 +390,7 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       "Puppy Browser" window onscreen rendering example.com
       (screenshot-verified), navigate over stdin OK, plugin exits with
       the app. Windows GPUI shell gets the same fix by construction
-      (also starts hidden there) — untestable here, flagged. `<hash5>`
+      (also starts hidden there) — untestable here, flagged. `d6f8017`
 
 - [x] B13.2 REDUX input fields rendered BLACK text in dark mode (user
       report; the earlier sweep fixed surface styling + syntect code
