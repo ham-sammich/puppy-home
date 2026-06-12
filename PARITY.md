@@ -264,10 +264,21 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
 
 ## Phase G — hardening + merge
 
-- [ ] G1. Full perf/motion audit at parity scope (repeat of 2.5 across all
+- [x] G1. Full perf/motion audit at parity scope (repeat of 2.5 across all
       new surfaces; every `with_animation` site gated, every list bounded).
-- [ ] G2. REDESIGN_QA.md rewritten to parity scope (terminal step becomes
-      real; managers/git/editor steps added).
+      DONE @ ba196a8: 6/6 animations gated, all drain upkeeps gated, all
+      rings capped, subprocess ledger bounded. TWO FIXES: uv update now
+      kill-bounded at 5min (pipe-drain threads to dodge the 64KB pipe
+      deadlock); browser embed RAF gated on window_active (no more vsync
+      spin while unfocused). Leftover QW8 sync ALSO LANDED: avatar fields
+      on shared-backend 244336e + egui 4325471 (egui renders the saved
+      avatars via a OnceLock pair; no egui picker by choice).
+- [x] G2. REDESIGN_QA.md rewritten to parity scope (terminal step becomes
+      real; managers/git/editor steps added). DONE: 30-step ~20-min pass
+      across 10 surfaces incl. den hosting, agent-creator, avatars,
+      /cmds+ctx, version/update; stats refreshed (clean release 1m53s,
+      12 MB binary, 970 deps unchanged, 223 tests, +29,675/-393 over 69
+      commits); deviations appendix updated (old composer items obsolete).
 - [ ] G3. **WINDOWS SMOKE GATE (required before merge)**: gpui pin must
       build + run on Windows (DirectX backend; `runtime_shaders` is a
       macOS-only concern). App smoke: open folder, prompt, terminal, den.

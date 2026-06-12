@@ -1,169 +1,201 @@
-# Redesign QA — `redesign/gpui` (Phase 2)
+# Redesign QA — `redesign/gpui` (final scope, Phase G)
 
-A ~10-minute manual walkthrough of the Command Center redesign on the GPUI
-branch. Prereqs: one or two folders you can open as workspaces (at least one
-being a git repo with a `plans.md` is ideal), and optionally a second
-terminal running `puppy-relay` for the Den section (a local
-`cargo run -p puppy-relay` works).
+A ~20-minute manual walkthrough of the full GPUI app before mainline.
+Prereqs: two folders you can open as workspaces (one a git repo, ideally
+with a `plans.md`), network access for §8, and nothing else — the Den
+section now hosts its own relay.
 
-Pass criterion for every step: the described behavior, no visual glitches,
-and no fan-spinning idle CPU. (No perf HUD on this branch — GPUI is
-retained-mode; idle discipline shows up as flat CPU in Activity Monitor.)
+Pass criterion for every step: the described behavior, no visual
+glitches, and no fan-spinning idle CPU (GPUI is retained-mode; idle
+discipline shows up as flat CPU in Activity Monitor — including with a
+Browser tab open while the app is unfocused, per the G1 audit fix).
 
-Probe shortcuts used during development (optional for humans):
-`PUPPY_GPUI_OPEN=/path` auto-opens a workspace, `PUPPY_GPUI_PROBE=1` logs a
-state line, `PUPPY_GPUI_PROMPT="..."` fires one prompt,
-`PUPPY_GPUI_SCREEN=chat` jumps to the chat, `PUPPY_GPUI_DEN=addr,room,user`
-joins a relay room.
+Probe shortcuts (optional for humans): `PUPPY_GPUI_OPEN=/path` opens a
+workspace, `PUPPY_GPUI_PROBE=1` logs state lines,
+`PUPPY_GPUI_PROMPT="..."` fires one prompt, `PUPPY_GPUI_SCREEN=chat`
+jumps to chat, `PUPPY_GPUI_DEN=addr,room,user` joins a relay,
+`PUPPY_GPUI_DEN=host` exercises self-hosting.
 
-## 1. Dashboard
+## 1. Dashboard & toolbar (3 min)
 
-1. Launch the app with no workspaces open. Dashboard shows the empty hint
-   ("No agents running..."). CPU should sit near zero while you don't move
-   the mouse (drain loop idles at 1s; no animations exist while nothing is
-   live).
-2. Open a folder (toolbar "Open Folder..."). A card fades in (entrance
-   animation): dir-name title, `agent · ~path` mono meta line, model pill,
-   "Resting" state.
-3. Send a prompt from the workspace chat (Open ->), return via the
-   Dashboard tab. The card goes live: pulsing state dot, glowing avatar
-   ring (pulse, not spin — GPUI deviation, see below), pack vocabulary
-   (Fetching / Sniffing / Digging) + current tool, elapsed clock ticking,
-   tok/s + mini sparkline filling in, last-prompt inset shows your prompt
-   (hover it for the full text tooltip).
-4. Header: lede counts update ("1 on the hunt"); Throughput tile shows the
-   aggregate sparkline. Spend tile shows an em dash (never $0.00).
-5. Card actions while live: Pause -> "Napping" (amber) + toast; Resume ->
-   live again; Steer -> inline input expands (type, toggle "queue", Nudge)
-   -> last-prompt tag shows "+1 queued"; another with "now". Stop ->
-   turn cancels, card returns to Resting.
-6. Model pill -> popover lists the sidecar's models; pick one -> toast, and
-   the pill + chat status line update after the sidecar re-announces.
-7. Make the agent ask you something (e.g. prompt "use ask_user_question
-   before doing anything"). Card turns pink "Needs you" + the attention
-   banner appears with the question and an "Answer {dir} ->" button that
-   jumps to the chat, where the answer panel sits above the composer:
-   click options (radio/checkbox), try "Other..." free text, Submit.
-   The turn resumes.
-8. Kill the sidecar process externally. The card shows "Stuck" red with a
-   Restart action; Restart revives the session.
-9. Segmented control: Grid -> List (dense table with quick actions) ->
-   Focus (single centered column, max 880px). Restart the app: the chosen
-   view is remembered (session.json — same field the egui branch writes).
-10. Toolbar "Motion: on" -> off (reduce motion). Dot pulses, avatar rings,
-    entrance fades, the empty-state bob, and the Den LIVE blink all freeze
-    (static rings remain so state stays legible). Restart — the setting
-    survives (shared `reduce_motion`).
+1. Launch with no workspaces. Empty hint shows; CPU near zero at idle.
+2. Toolbar (wraps to two rows on narrow windows): brand, identity chip
+   (`{avatar} {puppy}`), ＋New Chat, Open Folder…, Connect Remote…, Web,
+   fleet stats, version chip (`v0.0.xxx`), MCP / Skills / Agents /
+   Models / Config, Join Den, Motion, Theme.
+3. Open Folder → card fades in (entrance animation). Send a prompt from
+   its chat, return: live card — pulsing dot, glowing avatar ring
+   (pulse, not spin), pack vocabulary + tool verb, ticking clock, tok/s
+   sparkline, last-prompt inset (hover for full text), and the 3px
+   context bar once the sidecar reports ctx-% (no bar before — a 0% bar
+   would be a lie). Cost cell shows `~$…` (estimated marker) or an em
+   dash, never $0.00.
+4. Card actions: Pause → "Napping" + toast; Resume; Steer (inline input,
+   now/queue); Stop. Kill the sidecar externally → "Stuck" + Restart
+   revives.
+5. The Whistle button (next to the H1) spawns a home-dir instance instantly; the
+   toolbar ＋New Chat does the same but lands you in its chat, focused.
+6. Grid → List → Focus; restart: view remembered. Motion: off freezes
+   every pulse/bob/blink (static rings stay legible); restart: setting
+   survives (shared `reduce_motion`).
 
-## 2. Workspace Chat
+## 2. Chat: composer, transcript, sessions, logs (4 min)
 
-11. Open a workspace chat with no conversation. The empty state shows:
-    breathing puppy, floating z z z, "How can {puppy} help you?". Under
-    reduce-motion both freeze.
-12. Composer dock: status line reads "Ready · {agent} · {model}" with a
-    state-colored dot.
-13. Footer gear ("Composer: Classic") -> popover lists Classic / Unified /
-    Palette / Guided with descriptions. Switch through all four; the input
-    draft survives style switches (one shared ChatInput entity). Restart —
-    the style is remembered (`composer_style`, shared field).
-14. Input behaviors (any style): type with full cursor/selection (mouse
-    drag, shift-arrows, cmd-A), cmd-V paste, IME composition (e.g. pinyin —
-    marked text underlines), Enter sends, Shift+Enter newlines (the input
-    grows, up to 8 rows). While a turn runs, Enter steers ("now" delivery)
-    instead.
-15. Typing `/` shows the completion palette above the composer (sidecar
-    completions); click an item to insert it. `@` paths complete too.
-16. Agent/model pills -> popovers over the live sidecar catalogs; picking
-    calls set_agent/set_model (status line updates after re-announce).
-    Guided style: starter chips fill the input; big "Send to {puppy} ->".
-17. Transcript: your turns show a person avatar + "you"; puppy turns show
-    the dog avatar + "{puppy}  agent · model" tag with markdown bodies
-    (headings, bullets, `inline code`, fenced blocks with language tag);
-    tool output renders as chips; an edit renders a chip with "+A −D" whose
-    click expands green/red/dim mono diff rows (collapsed by default);
-    thinking folds toggle open/closed. Long histories: only the latest 120
-    entries render, with "Show older".
-18. Explorer: the left tree lists the workspace (dirs first, lazy expand,
-    dotfiles hidden); the Changes list at the bottom shows per-file
-    +adds/−dels as the agent edits. The ▤ toggle collapses the panel.
-19. Terminal: N/A on this branch by decision — "Terminal: egui branch
-    only" (see GPUI_NOTES.md). The Classic composer row says so.
+7. Empty chat: breathing puppy (your avatar choice, see §9) + z z z.
+8. Status line: state dot + "Ready · agent · model"; once a turn has
+   run, a `ctx N%` chip appears when known (weak <60, amber <85, red
+   above); right side: `/cmds ▾` pill — popover lists /pop, /pop N…,
+   /compact, /truncate N…, /dump_context, /clear. Direct ones send
+   exactly like typing (mid-turn: no-op, same as typing); the `N…` ones
+   seed the input for you to complete. Typed slash commands still work
+   identically.
+9. Composer styles via the footer gear: Classic / Unified / Palette /
+   Guided; the draft survives switches; restart remembers the style.
+10. Input: full cursor/selection/IME, soft wrap, up/down across lines,
+    prompt-history recall (Up at top), Enter sends, Shift+Enter
+    newlines (grows to 8 rows), Enter mid-turn steers (now/queue
+    toggle). `/` and `@` completion palettes; @File button inserts
+    chips; paste an image → thumbnail chip rides the next prompt.
+11. Transcript: you-turns (your avatar) and puppy-turns (markdown:
+    headings, bullets, fences, tables, links); tool chips; diff chips
+    expanding to green/red rows; thinking folds auto-collapse at
+    turn-end; >120 entries → "Show older".
+12. Sessions button → browser overlay: filter, preview (last
+    exchanges), Load (transcript + autosave swap), New chat (rotates
+    autosave). Logs button → tail panel (last 200 lines, mono).
+13. Explorer tree: lazy dirs, A/M/D markers while the agent edits,
+    right-click panel (new file/folder, rename, delete), Changes list
+    with +adds/−dels.
 
-## 3. The Den
+## 3. Editor (2 min)
 
-20. Start a relay (`cargo run -p puppy-relay`), click "Join Den" in the
-    toolbar. The join card shows relay/room/name fields (relay defaults to
-    `127.0.0.1:9220` or `$PUPPY_RELAY`); join a room (e.g. `qa-room-1`).
-21. Header: LIVE blinks (freezes under reduce-motion); clicking the
-    room-code chip copies it + toasts; "+ Invite" copies a shareable
-    room+relay line; relay address shows mono on the right.
-22. Join from a second instance/terminal with a different name. Both
-    sides: member list grows, a system feed entry narrates the join, each
-    member gets a distinct relay-assigned color.
-23. Roster: each member shows their agent cards (state, agent · model,
-    dir, tok/s, verb + file, +A −D) within ~3s of activity; the little
-    sparkline appears after a few roster broadcasts. Open appears on YOUR
-    cards only. Nudge posts a puppy message into the feed (+ toast).
-24. Feed: human messages in owner colors; puppy messages with a colored
-    left rule, "-> {puppy}" when addressed, and a review badge when
-    flagged; send a message from the composer (Enter works). The feed is
-    bottom-pinned; scrolling up holds your place (reversed-column model);
-    long rooms render the latest 150 with "show all".
-25. Board: add a card in any column (+), retitle via the card's ⋯ menu,
-    Assign to me / Unassign, move across columns, delete. A second
-    instance sees every change live. Owner chips take member colors;
-    plan-derived cards show the plan tag.
-26. Plans: in a workspace root, create a `plans.md` with `- [ ]`/`- [x]`
-    lines. Board -> "Share to den" -> pick the workspace. A plan card
-    appears for everyone (done rows struck, n/m counter). "Unshare my
-    plan" removes it.
-27. Presence: unfocus the window — the second instance shows you idle
-    (heuristic: unfocused OR >5min without interaction; sent only on
-    change). Refocus + click anywhere to flip back to active.
-28. Leave den (header button or the tab's ) -> back to the dashboard;
-    the second instance sees the leave; the Den tab disappears.
+14. Click a file in the tree → editor tab: syntect highlighting, soft
+    wrap, full editing (≤200 KB highlighted; larger files plain).
+    Edit → dirty dot; Cmd+S saves; close via the tab's x. The Changes tab
+    shows the working-tree diff with stage/unstage per file.
+
+## 4. Git view & graph (2 min)
+
+15. Git toolbar button (git workspaces): status list (staged/unstaged/
+    untracked w/ checkboxes), commit box (message + Commit button),
+    branch chip. The graph renders commit lanes with refs; clicking a
+    commit shows its files; push/pull buttons surface errors inline
+    (creds prompts ride the credential-helper flow).
+
+## 5. Terminal (1 min)
+
+16. Terminal toggle (chat toolbar or Classic composer row): fills the
+    chat area; run `ls`, `top` (colors, live update), arrow keys +
+    Tab reach the shell (bindingless key context); scrollback wheel +
+    banner; resize the window → PTY follows next frame. Toggle off →
+    transcript returns. (Feature parity with egui is exact: fg/bg/
+    inverse/underline; no selection-copy, no mouse reporting.)
+
+## 6. Managers: MCP / Skills / Agents / Models / Config (3 min)
+
+17. Each manager opens a centered overlay over any screen, served by
+    the first ready sidecar ("via {workspace}" subtitle), filter field,
+    Refresh, 2-5-10s polling cadences — except Config, which is
+    file-based and works sidecar-less.
+18. MCP: list w/ enabled toggles + status; Add → wizard (stdio/SSE/
+    HTTP steps or JSON paste w/ syntect); edit/remove round-trip.
+19. Skills: user+project lists, toggles, detail view; Create/Edit →
+    wizard (form steps or SKILL.md paste mode).
+20. Agents: list + detail; Clone/Delete (confirm); ＋Create agent →
+    JSON wizard (tools/MCP checkboxes, prompts, paste mode w/ JSON
+    highlighting); Create with Agent Creator → fresh $HOME session
+    already running code_puppy's agent-creator — describe the agent
+    conversationally.
+21. Models: catalog rows (provider type, ctx length, "custom" badge,
+    ● active); Set active switches the serving workspace's model;
+    "Edit extra_models.json" → JSON editor, Save validates + writes
+    ("restart workspaces to load"); the x button removes custom entries.
+22. Config: puppy.cfg as a settings list (priority keys pinned,
+    banner_colors alphabetical); Edit inline → Save rewrites ONE line
+    (comments/sections survive); secret-looking keys masked + locked.
+
+## 7. Version & updates (1 min)
+
+23. Toolbar `v0.0.xxx` chip (live from the sidecar) → About panel:
+    Check for updates hits PyPI (offline → inline error); when newer,
+    Update now refreshes uv's cache and reports the landed version +
+    "restart workspaces to apply". Update is bounded (5-min kill).
+
+## 8. Den: join, HOST, collaborate (3 min)
+
+24. Join Den with no relay running → "Host a Den": relay spawns
+    locally (binary next to the app, cargo fallback in dev), you
+    auto-join, header shows `HOSTING · share ip:port · room` + Stop
+    hosting. Join from a second instance using that line.
+25. Roster cards (state, agent·model, tok/s sparkline, verb) within
+    ~3s; Nudge; feed (owner colors, → addressing, review badges,
+    bottom-pinned, latest 150 + show all); board (add/retitle/assign/
+    move/delete, live on both sides); plans.md share → plan card.
+26. Presence: unfocus → idle on the other side; refocus + click flips
+    back. Stop hosting → both sides disconnect (rooms are in-memory).
+    Quit the host app with the relay up → the relay self-exits (PID
+    watchdog; verify no `puppy-relay` survives in `ps`).
+
+## 9. Avatars & identity (1 min)
+
+27. Click the identity chip → Avatars panel: switch You/Puppy, pick
+    from the grid or type any emoji + Use; transcript, empty state,
+    ask headers, dashboard lede, and the chip update instantly;
+    restart: persisted (session.json, shared with the egui shell —
+    egui renders your choice on its next launch).
+
+## 10. Browser, remote, themes (2 min)
+
+28. Web button → embedded browser tab (address bar, back/fwd, popout
+    to floating, re-embed; close kills the child process). Switch
+    to Dashboard → embed hides; minimize → hides; CPU flat while
+    unfocused with the tab open (G1 fix).
+29. Connect Remote… → ssh target + folder browse; a remote workspace
+    behaves like a local one (badge in card meta). On a host without
+    code_puppy: ssh-fallback mode is flagged in the session row; creds
+    push (toolbar key icon) arms → confirms → pushes ~/.code_puppy
+    credentials (never logged).
+30. Theme button cycles Dark/Light (+ custom theme files if present);
+    restart: theme survives. All overlays/popovers/toasts re-skin.
 
 ---
 
-## Branch stats (for the Phase-3 comparison)
+## Branch stats (refreshed at final scope, Phase G1)
 
-Recorded on macOS (Apple Silicon), 2026-06-12, commit `95f9502` + the 2.5
-audit commit:
+Recorded on macOS (Apple Silicon), 2026-06-13, commit `ba196a8`:
 
 | Metric | Value |
 |---|---|
-| `cargo build --release` (clean, wall time) | 2m 27s (real 147.0s · user 672.5s) |
-| Release binary size (`target/release/puppy-home`) | 6.8 MB |
-| Branch diff vs fork point (`git diff --stat 0f00eed`) | 35 files, +12,970 / −199 (incl. this QA doc) |
-| Dependency delta (Cargo.lock packages) | 630 -> 970 (**+340**, gpui's transitive tree; new direct deps: gpui @ pinned sha, futures, anyhow, unicode-segmentation) |
-| Test count on branch | 168 unit/integration + 12 dock + 6 relay e2e = 186, all green |
+| `cargo build --release` (clean, wall time) | 1m 53s (real 113.1s · user 561.9s) — faster than 2.5's 2m 27s (same deps, better parallelism) |
+| Release binary size (`target/release/puppy-home`) | 12 MB (was 6.8 MB at 2.5 — syntect grammars/themes + editor + git graph + terminal + managers since) |
+| Branch diff vs fork point (`git diff --stat 0f00eed`) | 89 files, +29,675 / −393 |
+| Commits since fork | 69 |
+| Dependency count (Cargo.lock packages) | 970 (unchanged since the 2.5 audit — every phase since rode existing deps) |
+| Test count | 223 green (205 app: 203 unit + pty_live + vt100_grid; 18 relay) |
 | Compiler warnings | 0 (one pre-existing `block v0.1.6` future-incompat from `objc`, same as base) |
-| Clean debug build | ~53s wall (515-crate cold) · warm incremental ~1-3s |
 
-Branch commits: `070586d` turn-end metrics fix · `9006a70` 2.1 scaffold ·
-`d318801` card-action ports · `dc3e939` 2.2 dashboard · `1c75d11` chat
-shared surface · `a84a5e8` 2.3 chat · `a2005e0` answer UI · `95f9502` 2.4
-den · (+2.5 audit/QA).
+### Known deliberate deviations (final)
 
-### Known deliberate deviations from the mocks
-
-- Avatar ring **pulses** instead of spinning (no cheap rotation transform
-  on a styled div at this gpui pin; a conic-gradient spin would need a
-  custom shader path).
-- Grid view uses flex-wrap `minmax(420,1fr)`-style sizing; last-row cards
-  may stretch wider than a CSS grid would.
-- Composer input: no soft wrap (long lines clip), no up/down cursor
-  movement, no cursor blink. IME/selection/clipboard all work.
-- Markdown is an in-house subset (headings/bullets/inline-code/bold/
-  fences); no tables/links/images (Zed's markdown crate rejected for
-  dependency weight — GPUI_NOTES.md).
-- Terminal: deferred entirely (egui branch only).
-- No image paste / attachments in the composer; no ＋New chat / sessions
-  browser / logs panel / git view; no A/M/D markers in the file tree.
-- Den: no legacy Activity status broadcast; no `.puppy/pack.json` Tier-2
-  breadcrumb sync; plan cards cap at 8 checklist rows; kanban drag-drop
-  deferred (menus, same as egui).
-- No context-% bar on cards and cost always renders an em dash: the
-  sidecar's status payload carries neither yet (backend gap, not UI —
-  identical on both branches).
-- Emoji render in **full color** (a GPUI capability the egui branch lacks).
+- Avatar ring **pulses** instead of spinning (no cheap rotation
+  transform at this gpui pin).
+- Grid view flex-wrap sizing; last-row cards may stretch wider than a
+  CSS grid would.
+- Markdown is an in-house subset — now with tables + links; still no
+  images (Zed's markdown crate rejected for dependency weight).
+- Terminal: fg/bg/inverse/underline only (matches egui exactly); no
+  selection-copy or mouse reporting on either branch. vt100 0.16 has
+  no damage API — full-grid reshape per render, bounded, only while
+  the terminal is visible.
+- Manager wizards: env/header pair rows are KEY=VALUE lines (one
+  field), not add/remove row pairs.
+- Den: plan cards cap at 8 checklist rows; kanban drag-drop is
+  menu-driven (same as egui); avatars don't ride the roster (no
+  protocol slot — ledgered); one den at a time (single PackClient —
+  multi-den ledgered).
+- egui shell has no avatar picker (renders the GPUI choice on next
+  launch); cost cell is `~$` estimated when the sidecar lacks pricing.
+- Composer input: no cursor blink. Soft wrap, vertical cursor moves,
+  and history recall all landed in Phase B (the old deviations list is
+  obsolete).
+- Emoji render in **full color** (a GPUI capability the egui branch
+  lacks).
