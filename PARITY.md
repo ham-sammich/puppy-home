@@ -401,7 +401,7 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       Probes: PUPPY_GPUI_BROWSER=launch:<url> (UA canary),
       cycle probe stage 5 = close. Plugin rebuilt + reinstalled.
       Occluded-window captures via `screencapture -l <id>` (user was
-      using the machine — full-screen shots were Discord). `<hash7>`
+      using the machine — full-screen shots were Discord). `968eb44`
 
 - [x] E8 REDUX #2 GPUI IN-TAB BROWSER EMBEDDING (user: "should appear
       embedded with a pop-out icon"). The E8 "embedding N/A in GPUI"
