@@ -179,7 +179,7 @@ fn ws_toolbar(args: &ChatArgs) -> AnyElement {
     let t = args.t;
     let ws = args.ws;
     let id = ws.id;
-    let can_new = ws.is_ready() && !ws.is_running_turn() && ws.entries().is_empty() == false;
+    let can_new = ws.is_ready() && !ws.is_running_turn() && !ws.entries().is_empty();
     let new_chat = {
         let root = args.root.clone();
         div()
@@ -256,7 +256,7 @@ fn ws_toolbar(args: &ChatArgs) -> AnyElement {
         .border_color(t.line_soft)
         .child(new_chat)
         .child(sessions_btn)
-        .children(args.ws.is_git_repo().then(|| git_btn))
+        .children(args.ws.is_git_repo().then_some(git_btn))
         .child(crate::gpui_ui::terminal::terminal_toggle_btn(
             &t,
             id,
@@ -514,7 +514,7 @@ fn alpha_accent(t: &crate::gpui_ui::Tokens) -> gpui::Rgba {
 
 /// Append one directory's rows (and recursively, its expanded children).
 /// Depth is capped defensively; listings come from the TTL-cached fs.
-fn push_dir_rows(args: &ChatArgs, dir: &PathBuf, depth: usize, rows: &mut Vec<AnyElement>) {
+fn push_dir_rows(args: &ChatArgs, dir: &std::path::Path, depth: usize, rows: &mut Vec<AnyElement>) {
     const MAX_DEPTH: usize = 12;
     const MAX_ROWS: usize = 400;
     if depth > MAX_DEPTH || rows.len() > MAX_ROWS {

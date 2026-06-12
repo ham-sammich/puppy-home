@@ -7,7 +7,7 @@
 //! (same sets egui_extras ships); colors come from the theme's foreground
 //! styles over our own background.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::OnceLock;
 
 use gpui::{
@@ -226,7 +226,7 @@ fn tab_bar(args: &EditorArgs) -> AnyElement {
 
 /// One open file: path bar (dirty marker + Save) over the code input in a
 /// both-axes scroll container.
-fn file_view(args: &EditorArgs, path: &PathBuf) -> AnyElement {
+fn file_view(args: &EditorArgs, path: &Path) -> AnyElement {
     let t = args.t;
     let ws = args.ws;
     let id = ws.id;
@@ -268,7 +268,7 @@ fn file_view(args: &EditorArgs, path: &PathBuf) -> AnyElement {
         .children(ws.is_git_repo().then(|| {
             let on = ws.blame_enabled(path);
             let root = args.root.clone();
-            let p = path.clone();
+            let p = path.to_path_buf();
             widgets::btn(&t, "\u{1f50d} Blame")
                 .when(on, |d| {
                     d.border_color(crate::gpui_ui::widgets::alpha(t.accent, 0.8))
@@ -286,7 +286,7 @@ fn file_view(args: &EditorArgs, path: &PathBuf) -> AnyElement {
                 .id(("editor-save", id.0))
                 .on_click({
                     let root = args.root.clone();
-                    let path = path.clone();
+                    let path = path.to_path_buf();
                     move |_, _, cx| {
                         root.update(cx, |r, cx| {
                             r.dispatch(DashAction::EditorSave(id, path.clone()), cx)

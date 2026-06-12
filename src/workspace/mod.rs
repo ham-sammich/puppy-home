@@ -498,11 +498,11 @@ impl Workspace {
 
     /// Replace an open file's buffer content (marks it dirty).
     pub(crate) fn set_file_content(&mut self, path: &std::path::Path, text: String) {
-        if let Some(b) = self.open_files.get_mut(path) {
-            if b.content != text {
-                b.content = text;
-                b.dirty = true;
-            }
+        if let Some(b) = self.open_files.get_mut(path)
+            && b.content != text
+        {
+            b.content = text;
+            b.dirty = true;
         }
     }
 

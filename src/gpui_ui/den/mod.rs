@@ -368,7 +368,7 @@ pub fn join_screen(args: &JoinArgs) -> AnyElement {
                         .map(|e| div().text_size(px(12.)).text_color(t.error).child(e)),
                 )
                 .child(
-                    widgets::primary_btn(&t, &format!("Join {DEN_LABEL} \u{2192}"))
+                    widgets::primary_btn(&t, format!("Join {DEN_LABEL} \u{2192}"))
                         .id("den-join")
                         .on_click({
                             let root = args.root.clone();

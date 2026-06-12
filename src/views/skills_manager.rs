@@ -45,7 +45,7 @@ pub struct SkillsManagerView {
 /// Return the markdown body of a SKILL.md: everything after the closing
 /// `---` frontmatter fence. Content without a well-formed fence is returned
 /// unchanged.
-fn skill_body(content: &str) -> &str {
+pub(crate) fn skill_body(content: &str) -> &str {
     let trimmed = content.trim_start_matches('\u{feff}');
     let Some(rest) = trimmed.strip_prefix("---") else {
         return content;
@@ -67,7 +67,7 @@ fn skill_body(content: &str) -> &str {
 }
 
 /// Case-insensitive name/description filter. `needle` must be lowercased.
-fn matches_filter(skill: &SkillInfo, needle: &str) -> bool {
+pub(crate) fn matches_filter(skill: &SkillInfo, needle: &str) -> bool {
     needle.is_empty()
         || skill.name.to_lowercase().contains(needle)
         || skill.description.to_lowercase().contains(needle)

@@ -143,6 +143,8 @@ pub enum DashAction {
     TermScroll(WorkspaceId, i32),
     /// Den interactions (join/leave/feed/kanban/plans/...).
     Den(den::DenAction),
+    /// Manager overlays (MCP / Skills / Agents).
+    Mgr(super::managers::MgrAction),
 }
 
 /// What the tree-op input is editing.
@@ -158,24 +160,6 @@ pub enum TreeOp {
 fn file_token(root: &std::path::Path, path: &std::path::Path) -> String {
     let rel = path.strip_prefix(root).unwrap_or(path);
     format!("@{}", rel.to_string_lossy().replace('\\', "/"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn file_token_relativizes_under_root() {
-        let root = std::path::Path::new("/repo");
-        assert_eq!(
-            file_token(root, std::path::Path::new("/repo/src/main.rs")),
-            "@src/main.rs"
-        );
-        assert_eq!(
-            file_token(root, std::path::Path::new("/elsewhere/x.txt")),
-            "@/elsewhere/x.txt"
-        );
-    }
 }
 
 impl RootView {
@@ -402,6 +386,10 @@ impl RootView {
                 self.dispatch_den(den_action, cx);
                 return;
             }
+            DashAction::Mgr(mgr_action) => {
+                self.dispatch_mgr(mgr_action, cx);
+                return;
+            }
             DashAction::SetChatSteerQueue(q) => self.chat_steer_queue = q,
             DashAction::PickerOpen(id) => {
                 let root_dir = self.supervisor.get(id).map(|w| w.root.clone());
@@ -437,15 +425,15 @@ impl RootView {
                 }
             }
             DashAction::NewChat(id) => {
-                if let Some(ws) = self.supervisor.get_mut(id) {
-                    if ws.new_chat() {
-                        let name = ws.name.clone();
-                        // Fresh chat: stale per-entry UI state dies with it.
-                        self.expanded_entries.retain(|(wid, _)| *wid != id.0);
-                        self.collapsed_thinking.retain(|(wid, _)| *wid != id.0);
-                        self.show_all_chat.remove(&id);
-                        self.toast(format!("New chat in {name}"), accent);
-                    }
+                if let Some(ws) = self.supervisor.get_mut(id)
+                    && ws.new_chat()
+                {
+                    let name = ws.name.clone();
+                    // Fresh chat: stale per-entry UI state dies with it.
+                    self.expanded_entries.retain(|(wid, _)| *wid != id.0);
+                    self.collapsed_thinking.retain(|(wid, _)| *wid != id.0);
+                    self.show_all_chat.remove(&id);
+                    self.toast(format!("New chat in {name}"), accent);
                 }
             }
             DashAction::ToggleLogs(id) => {
@@ -526,9 +514,9 @@ impl RootView {
                 let dirty = self
                     .supervisor
                     .get(id)
-                    .and_then(|ws| match ws.editor_tabs().get(ix) {
-                        Some(crate::workspace::EditorItem::File(p)) => Some(ws.is_file_dirty(p)),
-                        _ => Some(false),
+                    .map(|ws| match ws.editor_tabs().get(ix) {
+                        Some(crate::workspace::EditorItem::File(p)) => ws.is_file_dirty(p),
+                        _ => false,
                     })
                     .unwrap_or(false);
                 if dirty && self.editor_close_confirm != Some((id, ix)) {
@@ -997,5 +985,23 @@ impl RootView {
         self.palette_sel = 0;
         self.sync_palette_flag(id, cx);
         input.update(cx, |i, cx| i.clear(cx));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_token_relativizes_under_root() {
+        let root = std::path::Path::new("/repo");
+        assert_eq!(
+            file_token(root, std::path::Path::new("/repo/src/main.rs")),
+            "@src/main.rs"
+        );
+        assert_eq!(
+            file_token(root, std::path::Path::new("/elsewhere/x.txt")),
+            "@/elsewhere/x.txt"
+        );
     }
 }

@@ -19,6 +19,12 @@ pub mod den;
 pub mod editor;
 pub mod gitpanel;
 pub mod input;
+pub mod managers;
+pub mod managers_agents;
+pub mod managers_agents_wizard;
+pub mod managers_mcp;
+pub mod managers_skills;
+pub mod managers_ui;
 pub mod markdown;
 pub mod terminal;
 pub mod tokens;
@@ -185,6 +191,20 @@ pub struct RootView {
     term_resize: terminal::ResizeSlot,
     term_probe_stage: u8,
     term_probe_at: Instant,
+    // -- manager state --
+    pub(crate) manager_open: Option<managers::MgrKind>,
+    pub(crate) mgr_inputs: Vec<Entity<ChatInput>>,
+    pub(crate) mgr_paste_input: Option<Entity<ChatInput>>,
+    pub(crate) mgr_selected: Option<String>,
+    /// Which (workspace, catalog generation) the open manager last saw.
+    pub(crate) mgr_seen: Option<(WorkspaceId, u64)>,
+    pub(crate) mgr_last_request: Option<Instant>,
+    /// Optimistic toggle overrides (name -> desired), cleared on fresh data.
+    pub(crate) mgr_pending: HashMap<String, bool>,
+    pub(crate) mcp_wizard: Option<crate::views::mcp_wizard::Wizard>,
+    pub(crate) skills_wizard: Option<crate::views::skills_wizard::Wizard>,
+    pub(crate) agent_wizard: Option<crate::views::agent_wizard::Wizard>,
+    pub(crate) agent_delete_confirm: Option<String>,
 }
 
 /// One pasted image: the wire form + the displayable form.
@@ -295,6 +315,17 @@ impl RootView {
             term_resize: std::sync::Arc::new(std::sync::Mutex::new(None)),
             term_probe_stage: 0,
             term_probe_at: Instant::now(),
+            manager_open: None,
+            mgr_inputs: Vec::new(),
+            mgr_paste_input: None,
+            mgr_selected: None,
+            mgr_seen: None,
+            mgr_last_request: None,
+            mgr_pending: HashMap::new(),
+            mcp_wizard: None,
+            skills_wizard: None,
+            agent_wizard: None,
+            agent_delete_confirm: None,
         }
     }
 
@@ -371,10 +402,10 @@ impl RootView {
     pub(crate) fn ensure_editor_input(
         &mut self,
         id: WorkspaceId,
-        path: &PathBuf,
+        path: &std::path::Path,
         cx: &mut Context<Self>,
     ) {
-        let key = (id.0, path.clone());
+        let key = (id.0, path.to_path_buf());
         if self.editor_inputs.contains_key(&key) {
             return;
         }
@@ -391,7 +422,7 @@ impl RootView {
             input
         });
         let sub = {
-            let path = path.clone();
+            let path = path.to_path_buf();
             cx.subscribe(
                 &entity,
                 move |this, input, event: &InputEvent, cx| match event {
@@ -546,6 +577,26 @@ impl RootView {
             }
             _ => {}
         }
+    }
+
+    /// Probe: `PUPPY_GPUI_MGR=mcp|skills|agents` opens a manager overlay
+    /// once a sidecar is ready (render-survival validation).
+    fn maybe_probe_manager(&mut self, cx: &mut Context<Self>) {
+        if self.manager_open.is_some() || self.first_ready_ws().is_none() {
+            return;
+        }
+        let Ok(kind) = std::env::var("PUPPY_GPUI_MGR") else {
+            return;
+        };
+        let kind = match kind.as_str() {
+            "mcp" => managers::MgrKind::Mcp,
+            "skills" => managers::MgrKind::Skills,
+            "agents" => managers::MgrKind::Agents,
+            _ => return,
+        };
+        unsafe { std::env::remove_var("PUPPY_GPUI_MGR") };
+        self.dispatch(DashAction::Mgr(managers::MgrAction::Open(kind)), cx);
+        eprintln!("[probe] opened manager overlay: {kind:?}");
     }
 
     /// Probe: jump to the first ready workspace's chat once, if asked to.
@@ -709,6 +760,8 @@ impl RootView {
                     root.maybe_send_probe_prompt();
                     root.maybe_probe_chat_screen(cx);
                     root.maybe_probe_terminal(cx);
+                    root.maybe_probe_manager(cx);
+                    root.mgr_upkeep();
                     root.ensure_answer_input_if_needed(cx);
                     root.prune_toasts();
                     cx.notify();
@@ -936,6 +989,36 @@ impl RootView {
                     .child(stats_sub),
             )
             .child(
+                widgets::btn(t, "MCP")
+                    .id("tb-mcp")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.dispatch(
+                            DashAction::Mgr(managers::MgrAction::Open(managers::MgrKind::Mcp)),
+                            cx,
+                        )
+                    })),
+            )
+            .child(
+                widgets::btn(t, "Skills")
+                    .id("tb-skills")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.dispatch(
+                            DashAction::Mgr(managers::MgrAction::Open(managers::MgrKind::Skills)),
+                            cx,
+                        )
+                    })),
+            )
+            .child(
+                widgets::btn(t, "Agents")
+                    .id("tb-agents")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.dispatch(
+                            DashAction::Mgr(managers::MgrAction::Open(managers::MgrKind::Agents)),
+                            cx,
+                        )
+                    })),
+            )
+            .child(
                 widgets::btn(
                     t,
                     &if let Some(den_conn) = &self.den {
@@ -1136,6 +1219,33 @@ impl Render for RootView {
                     .map(|e| div().text_size(px(12.)).text_color(t.error).child(e)),
             )
             .child(body)
+            .children(self.manager_open.map(|kind| {
+                let ws = self.serving_ws();
+                managers_ui::overlay(&managers_ui::MgrArgs {
+                    t,
+                    kind,
+                    ws,
+                    root: cx.entity(),
+                    inputs: &self.mgr_inputs,
+                    paste_input: self.mgr_paste_input.as_ref(),
+                    filter: self
+                        .mgr_inputs
+                        .get(managers::F_FILTER)
+                        .map(|i| i.read(cx).text().to_string())
+                        .unwrap_or_default(),
+                    tool_filter: self
+                        .mgr_inputs
+                        .get(managers::F_TOOLF)
+                        .map(|i| i.read(cx).text().to_string())
+                        .unwrap_or_default(),
+                    selected: self.mgr_selected.as_deref(),
+                    pending: &self.mgr_pending,
+                    mcp_wizard: self.mcp_wizard.as_ref(),
+                    skills_wizard: self.skills_wizard.as_ref(),
+                    agent_wizard: self.agent_wizard.as_ref(),
+                    agent_delete_confirm: self.agent_delete_confirm.as_deref(),
+                })
+            }))
             .child(widgets::toast_layer(&t, &self.toasts))
     }
 }

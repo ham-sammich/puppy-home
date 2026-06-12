@@ -28,14 +28,14 @@ impl Scope {
         }
     }
 
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Scope::User => "User (all projects)",
             Scope::Project => "Project (this folder)",
         }
     }
 
-    fn blurb(self) -> &'static str {
+    pub(crate) fn blurb(self) -> &'static str {
         match self {
             Scope::User => "Saved under ~/.code_puppy/agents.",
             Scope::Project => "Saved under ./.code_puppy/agents in the serving workspace.",
@@ -57,7 +57,9 @@ Describe the agent's role, what it is good at, and any rules it must follow.";
 
 /// The wizard's state (4 steps: basics, prompt, tools, review).
 pub struct Wizard {
-    step: usize,
+    // Non-pub fields are pub(crate) so the GPUI manager drives the same
+    // state machine (sync note: mirror on the egui branch at batch time).
+    pub(crate) step: usize,
     pub name: String,
     pub display_name: String,
     pub description: String,
@@ -70,14 +72,14 @@ pub struct Wizard {
     pub mcp_servers: Vec<String>,
     pub scope: Scope,
     /// Tool-list filter (basics-step ergonomics; not persisted).
-    tool_filter: String,
+    pub(crate) tool_filter: String,
     /// `true` when opened from "Edit" (changes title and button wording).
-    editing: bool,
-    error: Option<String>,
+    pub(crate) editing: bool,
+    pub(crate) error: Option<String>,
     /// Form (guided steps) vs. Paste (drop in a whole agent JSON and validate).
-    mode: EditMode,
+    pub(crate) mode: EditMode,
     /// The raw-paste buffer (a full agent JSON), seeded from the form on entry.
-    paste: String,
+    pub(crate) paste: String,
 }
 
 impl Wizard {
@@ -122,7 +124,7 @@ impl Wizard {
         }
     }
 
-    fn title(&self) -> &'static str {
+    pub(crate) fn title(&self) -> &'static str {
         if self.editing {
             "Edit agent"
         } else {
@@ -146,12 +148,12 @@ impl Wizard {
     }
 
     /// Seed the paste buffer from the current form fields (canonical JSON).
-    fn sync_paste_from_form(&mut self) {
+    pub(crate) fn sync_paste_from_form(&mut self) {
         self.paste = compose_preview(self);
     }
 
     /// Parse the paste buffer back into the form fields (the syntax check).
-    fn apply_paste(&mut self) -> Result<(), String> {
+    pub(crate) fn apply_paste(&mut self) -> Result<(), String> {
         let p = parse_agent_json(&self.paste)?;
         self.name = p.name;
         self.display_name = p.display_name;
@@ -200,7 +202,7 @@ fn json_array(items: &[String]) -> String {
 /// Assemble the on-disk agent JSON for the review step; mirrors the sidecar's
 /// `json.dumps(config, indent=2)` field order and optional-field omission so
 /// the user reviews exactly what lands on disk.
-fn compose_preview(w: &Wizard) -> String {
+pub(crate) fn compose_preview(w: &Wizard) -> String {
     let mut entries: Vec<(&str, String)> = vec![
         ("name", json_str(w.name.trim())),
         ("description", json_str(w.description.trim())),
@@ -296,7 +298,7 @@ fn parse_agent_json(text: &str) -> Result<ParsedAgent, String> {
 
 /// Validate the basics step; mirrors the sidecar's checks so the user hears
 /// about problems before the op crosses the wire.
-fn validate_basics(w: &Wizard) -> Result<(), String> {
+pub(crate) fn validate_basics(w: &Wizard) -> Result<(), String> {
     validate_name(&w.name)?;
     if w.description.trim().is_empty() {
         return Err("a description is required (it's how the agent is summarised)".into());

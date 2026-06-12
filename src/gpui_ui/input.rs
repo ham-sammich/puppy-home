@@ -15,6 +15,7 @@
 //! - **Image paste**: clipboard image entries emit `InputEvent::Image`
 //!   (PNG bytes); non-PNG clipboards fall back to the shared arboard
 //!   pipeline (`workspace::clipboard`).
+//!
 //! Deliberate punts: no goal-column stickiness on Up/Down, no internal
 //! scroll past [`MAX_VISIBLE_ROWS`] (content clips), no cursor blink.
 

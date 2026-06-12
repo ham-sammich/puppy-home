@@ -144,7 +144,7 @@ pub fn git_view(args: &GitArgs) -> AnyElement {
                 .overflow_y_scroll()
                 .font_family("JetBrains Mono")
                 .text_size(px(12.))
-                .children(args.commit_input.map(|i| i.clone())),
+                .children(args.commit_input.cloned()),
         )
         .child(
             div()

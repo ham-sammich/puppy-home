@@ -454,7 +454,7 @@ pub(crate) fn named_key_seq(name: &str) -> Option<&'static [u8]> {
 
 /// Ctrl+<letter> -> control byte (Ctrl+A = 0x01 ... Ctrl+Z = 0x1a).
 pub(crate) fn ctrl_byte(c: char) -> Option<u8> {
-    c.is_ascii_lowercase().then(|| (c as u8) & 0x1f)
+    c.is_ascii_lowercase().then_some((c as u8) & 0x1f)
 }
 
 fn key_seq(key: egui::Key, mods: egui::Modifiers) -> Option<Vec<u8>> {
