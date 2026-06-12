@@ -5765,6 +5765,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "syntect",
  "unicode-segmentation",
  "vt100",
  "windows 0.58.0",

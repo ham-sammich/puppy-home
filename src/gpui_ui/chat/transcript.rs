@@ -370,7 +370,7 @@ fn tool_chip(
 }
 
 /// Colored add/remove/context rows for an opened diff (capped at 200 rows).
-fn diff_body(t: &Tokens, lines: &[diff::DiffLine]) -> AnyElement {
+pub(crate) fn diff_body(t: &Tokens, lines: &[diff::DiffLine]) -> AnyElement {
     const MAX_ROWS: usize = 200;
     div()
         .flex()

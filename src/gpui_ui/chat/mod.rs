@@ -7,7 +7,7 @@ pub mod composer;
 pub mod sessions;
 pub mod transcript;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use gpui::{AnyElement, Entity, IntoElement, ParentElement as _, Styled as _, div, prelude::*, px};
@@ -46,6 +46,20 @@ pub struct ChatArgs<'a> {
     pub collapsed_thinking: &'a HashSet<(u64, usize)>,
     /// Sessions browser overlay state (open when Some).
     pub sessions: Option<sessions::SessionsArgs<'a>>,
+    // -- editor area + tree state --
+    /// The active file tab's code input (if the active tab is a file).
+    pub editor_input: Option<&'a Entity<ChatInput>>,
+    /// Tab index awaiting a dirty-close second click.
+    pub editor_close_confirm: Option<usize>,
+    /// A/M/D markers per absolute path (ws.tree_markers()).
+    pub markers: HashMap<PathBuf, char>,
+    /// Open tree context panel target (path, is_dir) for THIS workspace.
+    pub tree_menu: Option<(PathBuf, bool)>,
+    /// Rename/new input (shown inside the context panel when an op is armed).
+    pub tree_op_input: Option<&'a Entity<ChatInput>>,
+    pub tree_op_armed: bool,
+    /// Delete awaiting confirmation (path shown in the panel).
+    pub tree_delete_pending: Option<PathBuf>,
 }
 
 /// The whole chat screen body (below the tab strip).
@@ -101,6 +115,15 @@ pub fn chat_screen(args: &ChatArgs) -> AnyElement {
                 .bg(t.card)
                 .overflow_hidden()
                 .child(ws_toolbar(args))
+                .child(crate::gpui_ui::editor::editor_area(
+                    &crate::gpui_ui::editor::EditorArgs {
+                        t,
+                        ws: args.ws,
+                        root: args.root.clone(),
+                        active_input: args.editor_input,
+                        close_confirm: args.editor_close_confirm,
+                    },
+                ))
                 .child(body)
                 .children(args.logs_open.then(|| logs_panel(args)))
                 .child(answer)
@@ -294,8 +317,135 @@ fn tree_panel(args: &ChatArgs) -> AnyElement {
         .flex()
         .flex_col()
         .py_1()
+        .children(tree_op_panel(args))
         .children(rows)
         .into_any_element()
+}
+
+/// Context panel for a right-clicked tree row: New file / New folder (dirs),
+/// Rename, Delete (click-again confirm), with the inline name input while a
+/// rename/new is armed. Replaces egui's three modals — same operations.
+fn tree_op_panel(args: &ChatArgs) -> Option<AnyElement> {
+    let t = args.t;
+    let id = args.ws.id;
+    let (path, is_dir) = args.tree_menu.clone()?;
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    let mk = |label: &str, key: &'static str, action: DashAction, root: &Entity<RootView>| {
+        let root = root.clone();
+        div()
+            .id((key, id.0))
+            .px_1p5()
+            .py_0p5()
+            .rounded(px(6.))
+            .text_size(px(10.5))
+            .text_color(t.text)
+            .cursor_pointer()
+            .hover(|d| d.bg(t.well))
+            .child(label.to_string())
+            .on_click(move |_, _, cx| {
+                let a = action.clone();
+                root.update(cx, |r, cx| r.dispatch(a, cx));
+            })
+            .into_any_element()
+    };
+    let mut row: Vec<AnyElement> = Vec::new();
+    if is_dir {
+        row.push(mk(
+            "\u{ff0b} file",
+            "tree-new-file",
+            DashAction::TreeNew(id, path.clone(), false),
+            &args.root,
+        ));
+        row.push(mk(
+            "\u{ff0b} folder",
+            "tree-new-dir",
+            DashAction::TreeNew(id, path.clone(), true),
+            &args.root,
+        ));
+    }
+    row.push(mk(
+        "rename",
+        "tree-rename",
+        DashAction::TreeRename(id, path.clone()),
+        &args.root,
+    ));
+    let deleting = args.tree_delete_pending.as_ref() == Some(&path);
+    row.push({
+        let root = args.root.clone();
+        let action = if deleting {
+            DashAction::TreeDeleteConfirm
+        } else {
+            DashAction::TreeDelete(id, path.clone(), is_dir)
+        };
+        div()
+            .id(("tree-delete", id.0))
+            .px_1p5()
+            .py_0p5()
+            .rounded(px(6.))
+            .text_size(px(10.5))
+            .text_color(t.error)
+            .cursor_pointer()
+            .hover(|d| d.bg(t.well))
+            .child(if deleting { "sure? delete" } else { "delete" })
+            .on_click(move |_, _, cx| {
+                let a = action.clone();
+                root.update(cx, |r, cx| r.dispatch(a, cx));
+            })
+            .into_any_element()
+    });
+    row.push(mk(
+        "\u{2715}",
+        "tree-menu-close",
+        DashAction::CloseChatPop,
+        &args.root,
+    ));
+
+    Some(
+        div()
+            .mx_1()
+            .mb_1()
+            .p_1p5()
+            .rounded(px(8.))
+            .bg(t.well)
+            .border_1()
+            .border_color(alpha_accent(&t))
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .font_family("JetBrains Mono")
+                    .text_size(px(10.))
+                    .text_color(t.weak)
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .child(name),
+            )
+            .child(div().flex().flex_wrap().gap_0p5().children(row))
+            .children(
+                (args.tree_op_armed && args.tree_op_input.is_some()).then(|| {
+                    div()
+                        .px_1p5()
+                        .py_0p5()
+                        .rounded(px(6.))
+                        .bg(t.card)
+                        .border_1()
+                        .border_color(alpha_accent(&t))
+                        .font_family("JetBrains Mono")
+                        .text_size(px(11.))
+                        .child(args.tree_op_input.unwrap().clone())
+                }),
+            )
+            .into_any_element(),
+    )
+}
+
+fn alpha_accent(t: &crate::gpui_ui::Tokens) -> gpui::Rgba {
+    crate::gpui_ui::widgets::alpha(t.accent, 0.5)
 }
 
 /// Append one directory's rows (and recursively, its expanded children).
@@ -327,6 +477,7 @@ fn push_dir_rows(args: &ChatArgs, dir: &PathBuf, depth: usize, rows: &mut Vec<An
         } else {
             "\u{b7}"
         };
+        let marker = args.markers.get(&entry.path).copied();
         let row = div()
             .id(("tree-row", rows.len() as u64))
             .flex()
@@ -341,21 +492,37 @@ fn push_dir_rows(args: &ChatArgs, dir: &PathBuf, depth: usize, rows: &mut Vec<An
             .overflow_hidden()
             .text_ellipsis()
             .child(div().w(px(10.)).flex_none().text_color(t.dim).child(glyph))
-            .child(entry.name.clone());
-        let row = if entry.is_dir {
-            let root = args.root.clone();
-            let path = entry.path.clone();
-            row.cursor_pointer()
-                .hover(|d| d.bg(t.well))
-                .on_click(move |_, _, cx| {
-                    root.update(cx, |r, cx| {
-                        r.dispatch(DashAction::ToggleDir(id, path.clone()), cx)
-                    });
-                })
-                .into_any_element()
+            .child(div().min_w_0().flex_1().child(entry.name.clone()))
+            .children(marker.map(|m| {
+                div()
+                    .flex_none()
+                    .font_family("JetBrains Mono")
+                    .text_size(px(10.))
+                    .text_color(crate::gpui_ui::editor::marker_color(&t, m))
+                    .child(m.to_string())
+            }));
+        // Left-click: dirs toggle, files open in the editor. Right-click:
+        // the context panel (rename/new/delete) for either.
+        let click_action = if entry.is_dir {
+            DashAction::ToggleDir(id, entry.path.clone())
         } else {
-            row.into_any_element()
+            DashAction::OpenEditorFile(id, entry.path.clone())
         };
+        let menu_pop = ChatPop::TreeMenu(id, entry.path.clone(), entry.is_dir);
+        let root_click = args.root.clone();
+        let root_menu = args.root.clone();
+        let row = row
+            .cursor_pointer()
+            .hover(|d| d.bg(t.well))
+            .on_click(move |_, _, cx| {
+                let a = click_action.clone();
+                root_click.update(cx, |r, cx| r.dispatch(a, cx));
+            })
+            .on_mouse_down(gpui::MouseButton::Right, move |_, _, cx| {
+                let pop = menu_pop.clone();
+                root_menu.update(cx, |r, cx| r.dispatch(DashAction::ToggleChatPop(pop), cx));
+            })
+            .into_any_element();
         rows.push(row);
         if open {
             push_dir_rows(args, &entry.path, depth + 1, rows);
@@ -363,9 +530,80 @@ fn push_dir_rows(args: &ChatArgs, dir: &PathBuf, depth: usize, rows: &mut Vec<An
     }
 }
 
-/// The session Changes list pinned under the tree (+adds/−dels per file).
+/// The Changes list pinned under the tree: git working-tree changes when
+/// the folder is a repo (click -> git diff in the Changes tab), else the
+/// Code-Puppy-reported diffs (+adds/−dels).
 fn changes_panel(args: &ChatArgs) -> AnyElement {
     let t = args.t;
+    let id = args.ws.id;
+    if args.ws.is_git_repo() {
+        let changes = args.ws.git_change_list();
+        return div()
+            .flex_none()
+            .max_h(px(180.))
+            .id(("changes-scroll", id.0))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .border_t_1()
+            .border_color(t.line_soft)
+            .child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .text_size(px(10.5))
+                    .text_color(t.weak)
+                    .child(format!("CHANGES ({})", changes.len())),
+            )
+            .children((changes.is_empty()).then(|| {
+                div()
+                    .px_2()
+                    .pb_1()
+                    .text_size(px(11.))
+                    .text_color(t.dim)
+                    .child("Working tree clean.")
+            }))
+            .children(changes.iter().take(60).enumerate().map(|(i, c)| {
+                let root = args.root.clone();
+                let path = c.path.clone();
+                let marker = c.marker;
+                div()
+                    .id(("git-change-row", i as u64))
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
+                    .px_2()
+                    .py_0p5()
+                    .font_family("JetBrains Mono")
+                    .text_size(px(10.5))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(t.well))
+                    .child(
+                        div()
+                            .w(px(10.))
+                            .flex_none()
+                            .text_color(crate::gpui_ui::editor::marker_color(&t, marker))
+                            .child(marker.to_string()),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .text_color(t.text)
+                            .child(c.path.clone()),
+                    )
+                    .on_click(move |_, _, cx| {
+                        root.update(cx, |r, cx| {
+                            r.dispatch(DashAction::LoadGitChange(id, path.clone(), marker), cx)
+                        });
+                    })
+                    .into_any_element()
+            }))
+            .into_any_element();
+    }
     let records = args.ws.diff_records();
     div()
         .flex_none()
@@ -397,10 +635,20 @@ fn changes_panel(args: &ChatArgs) -> AnyElement {
         } else {
             records
                 .iter()
+                .enumerate()
                 .rev()
                 .take(40)
-                .map(|d| {
+                .map(|(ix, d)| {
+                    let root = args.root.clone();
                     div()
+                        .id(("diff-change-row", ix as u64))
+                        .cursor_pointer()
+                        .hover(|x| x.bg(t.well))
+                        .on_click(move |_, _, cx| {
+                            root.update(cx, |r, cx| {
+                                r.dispatch(DashAction::LoadDiffIndex(id, ix), cx)
+                            });
+                        })
                         .flex()
                         .items_center()
                         .gap_1p5()

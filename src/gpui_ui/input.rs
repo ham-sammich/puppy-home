@@ -61,6 +61,7 @@ actions!(
         Newline,
         EscapeKey,
         TabKey,
+        SaveFile,
     ]
 );
 
@@ -98,6 +99,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-enter", Newline, CTX),
         KeyBinding::new("escape", EscapeKey, CTX),
         KeyBinding::new("tab", TabKey, CTX),
+        KeyBinding::new("cmd-s", SaveFile, CTX),
+        KeyBinding::new("ctrl-s", SaveFile, CTX),
     ]);
 }
 
@@ -120,7 +123,13 @@ pub enum InputEvent {
     PaletteDismiss,
     /// An image was pasted (PNG bytes).
     Image(Vec<u8>),
+    /// Cmd/Ctrl+S (editor surfaces route this to a file save).
+    Save,
 }
+
+/// Per-logical-line syntax runs: `(byte_len, color)` segments covering the
+/// line (the editor recomputes these on change, never per frame).
+pub type SyntaxRuns = std::sync::Arc<Vec<Vec<(usize, gpui::Hsla)>>>;
 
 /// Per-paint wrapped layout: one [`WrappedLine`] per logical line.
 struct WrapLayout {
@@ -173,13 +182,23 @@ pub struct ChatInput {
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
-    last_layout: Option<WrapLayout>,
+    last_layout: Option<std::sync::Arc<WrapLayout>>,
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
     tokens: Tokens,
     /// Set by the root while the completion palette is showing: nav keys
     /// route to the palette instead of the buffer.
     pub palette_open: bool,
+    /// Code mode: no soft wrap (horizontal scroll), no visible-row cap.
+    soft_wrap: bool,
+    /// Syntax color runs (code mode); see [`SyntaxRuns`].
+    syntax: Option<SyntaxRuns>,
+    /// Bumped on every content/syntax change — keys the layout cache.
+    generation: u64,
+    /// Cached shaped layout, keyed by (generation, wrap-width px). Editors
+    /// re-render on every drain notify; reshaping a whole file per frame
+    /// would be O(file) at 4Hz, so we shape only when content/width change.
+    cache: std::cell::RefCell<Option<(u64, i32, std::sync::Arc<WrapLayout>)>>,
 }
 
 impl EventEmitter<InputEvent> for ChatInput {}
@@ -204,7 +223,25 @@ impl ChatInput {
             is_selecting: false,
             tokens: Tokens::dark(),
             palette_open: false,
+            soft_wrap: true,
+            syntax: None,
+            generation: 0,
+            cache: std::cell::RefCell::new(None),
         }
+    }
+
+    /// Code-editor mode: no soft wrap, no row cap, syntax runs supported.
+    pub fn new_code(cx: &mut Context<Self>) -> Self {
+        let mut this = Self::new("", cx);
+        this.soft_wrap = false;
+        this
+    }
+
+    /// Install/replace syntax runs (recomputed by the editor on change).
+    pub fn set_syntax(&mut self, runs: Option<SyntaxRuns>, cx: &mut Context<Self>) {
+        self.syntax = runs;
+        self.generation += 1;
+        cx.notify();
     }
 
     pub fn text(&self) -> &str {
@@ -216,6 +253,7 @@ impl ChatInput {
         let end = self.content.len();
         self.selected_range = end..end;
         self.marked_range = None;
+        self.generation += 1;
         cx.emit(InputEvent::Edited);
         cx.notify();
     }
@@ -224,12 +262,19 @@ impl ChatInput {
         self.set_text("", cx);
     }
 
-    fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
+    fn submit(&mut self, _: &Submit, window: &mut Window, cx: &mut Context<Self>) {
         if self.palette_open {
             cx.emit(InputEvent::PaletteAccept);
+        } else if !self.soft_wrap {
+            // Code mode: Enter is a newline, not a send.
+            self.replace_text_in_range(None, "\n", window, cx);
         } else {
             cx.emit(InputEvent::Submitted);
         }
+    }
+
+    fn save_file(&mut self, _: &SaveFile, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(InputEvent::Save);
     }
 
     fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
@@ -570,6 +615,32 @@ fn line_col(starts: &[usize], offset: usize) -> (usize, usize) {
     (row, offset - starts[row])
 }
 
+impl ChatInput {
+    /// The shaped layout for this content at `wrap_px` (-1 = no wrap),
+    /// served from the generation-keyed cache; shaping happens only when
+    /// content/syntax/width actually changed.
+    fn cached_layout(&self, wrap_px: i32, window: &mut Window) -> std::sync::Arc<WrapLayout> {
+        if let Some((generation, key, layout)) = self.cache.borrow().as_ref()
+            && *generation == self.generation
+            && *key == wrap_px
+        {
+            return layout.clone();
+        }
+        let color = window.text_style().color;
+        let wrap = (wrap_px >= 0).then(|| px(wrap_px as f32));
+        let layout = std::sync::Arc::new(shape_lines(
+            &self.content,
+            &self.marked_range,
+            self.syntax.as_ref(),
+            color,
+            wrap,
+            window,
+        ));
+        *self.cache.borrow_mut() = Some((self.generation, wrap_px, layout.clone()));
+        layout
+    }
+}
+
 impl EntityInputHandler for ChatInput {
     fn text_for_range(
         &mut self,
@@ -621,6 +692,7 @@ impl EntityInputHandler for ChatInput {
             self.content[0..range.start].to_owned() + new_text + &self.content[range.end..];
         self.selected_range = range.start + new_text.len()..range.start + new_text.len();
         self.marked_range.take();
+        self.generation += 1;
         cx.emit(InputEvent::Edited);
         cx.notify();
     }
@@ -650,6 +722,7 @@ impl EntityInputHandler for ChatInput {
             .map(|r| self.range_from_utf16(r))
             .map(|new_range| new_range.start + range.start..new_range.end + range.end)
             .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
+        self.generation += 1;
         cx.emit(InputEvent::Edited);
         cx.notify();
     }
@@ -690,7 +763,7 @@ struct TextElement {
 }
 
 struct PrepaintState {
-    layout: Option<WrapLayout>,
+    layout: Option<std::sync::Arc<WrapLayout>>,
     cursor: Option<PaintQuad>,
     selections: Vec<PaintQuad>,
 }
@@ -702,12 +775,14 @@ impl IntoElement for TextElement {
     }
 }
 
-/// Shape `content` into wrapped logical lines at `wrap_width`.
-fn shape(
+/// Shape `content` into logical lines; `wrap_width: None` = code mode (no
+/// soft wrap, one visual row per logical line, horizontal overflow).
+fn shape_lines(
     content: &str,
     marked: &Option<Range<usize>>,
+    syntax: Option<&SyntaxRuns>,
     color: gpui::Hsla,
-    wrap_width: Pixels,
+    wrap_width: Option<Pixels>,
     window: &mut Window,
 ) -> WrapLayout {
     let style = window.text_style();
@@ -718,17 +793,20 @@ fn shape(
     let mut y_offsets = Vec::new();
     let mut y = px(0.);
     let mut byte = 0usize;
-    for seg in content.split('\n') {
+    for (line_ix, seg) in content.split('\n').enumerate() {
         starts.push(byte);
         y_offsets.push(y);
-        let runs = marked_runs(&style, color, marked, byte, seg.len());
+        let runs = match syntax.and_then(|sy| sy.get(line_ix)) {
+            Some(spans) => syntax_runs(&style, color, spans, seg.len()),
+            None => marked_runs(&style, color, marked, byte, seg.len()),
+        };
         let shaped = window
             .text_system()
             .shape_text(
                 SharedString::from(seg.to_string()),
                 font_size,
                 &runs,
-                Some(wrap_width),
+                wrap_width,
                 None,
             )
             .ok()
@@ -773,19 +851,32 @@ impl gpui::Element for TextElement {
         let layout_id =
             window.request_measured_layout(style, move |known, available, window, cx| {
                 let line_height = window.line_height();
-                let width = known.width.unwrap_or(match available.width {
+                let avail = known.width.unwrap_or(match available.width {
                     gpui::AvailableSpace::Definite(w) => w,
                     _ => px(360.),
                 });
                 let state = input.read(cx);
-                let content = if state.content.is_empty() {
-                    state.placeholder.to_string()
+                if state.content.is_empty() {
+                    return size(avail, line_height);
+                }
+                if state.soft_wrap {
+                    let layout = state.cached_layout(f32::from(avail) as i32, window);
+                    let max = line_height * MAX_VISIBLE_ROWS as f32;
+                    size(avail, layout.total_height.min(max).max(line_height))
                 } else {
-                    state.content.clone()
-                };
-                let layout = shape(&content, &None, gpui::black(), width, window);
-                let max = line_height * MAX_VISIBLE_ROWS as f32;
-                size(width, layout.total_height.min(max).max(line_height))
+                    // Code mode: width = widest line (horizontal scroll),
+                    // height = every row (vertical scroll is the parent's).
+                    let layout = state.cached_layout(-1, window);
+                    let widest = layout
+                        .lines
+                        .iter()
+                        .map(|l| f32::from(l.width()))
+                        .fold(0.0f32, f32::max);
+                    size(
+                        px(widest + 8.0).max(avail),
+                        layout.total_height.max(line_height),
+                    )
+                }
             });
         (layout_id, ())
     }
@@ -808,15 +899,24 @@ impl gpui::Element for TextElement {
         let style = window.text_style();
 
         let placeholder = content.is_empty();
-        let (shown, color) = if placeholder {
-            (
-                input.placeholder.to_string(),
+        let layout = if placeholder {
+            std::sync::Arc::new(shape_lines(
+                input.placeholder.as_ref(),
+                &None,
+                None,
                 gpui::Hsla::from(alpha(t.dim, 0.7)),
-            )
+                Some(bounds.size.width),
+                window,
+            ))
         } else {
-            (content.clone(), style.color)
+            let key = if input.soft_wrap {
+                f32::from(bounds.size.width) as i32
+            } else {
+                -1
+            };
+            input.cached_layout(key, window)
         };
-        let layout = shape(&shown, &marked, color, bounds.size.width, window);
+        let _ = (style, marked);
 
         let mut selections = Vec::new();
         let mut cursor = None;
@@ -905,6 +1005,58 @@ impl gpui::Element for TextElement {
     }
 }
 
+/// Syntax-colored text runs for one logical line (code mode); the run list
+/// is clamped/padded so lengths always sum to the line length. IME marked
+/// underline is skipped in code mode (documented punt).
+fn syntax_runs(
+    style: &gpui::TextStyle,
+    fallback: gpui::Hsla,
+    spans: &[(usize, gpui::Hsla)],
+    line_len: usize,
+) -> Vec<TextRun> {
+    let mut out = Vec::with_capacity(spans.len() + 1);
+    let mut covered = 0usize;
+    for (len, color) in spans {
+        if covered >= line_len {
+            break;
+        }
+        let len = (*len).min(line_len - covered);
+        if len == 0 {
+            continue;
+        }
+        out.push(TextRun {
+            len,
+            font: style.font(),
+            color: *color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        });
+        covered += len;
+    }
+    if covered < line_len {
+        out.push(TextRun {
+            len: line_len - covered,
+            font: style.font(),
+            color: fallback,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        });
+    }
+    if out.is_empty() {
+        out.push(TextRun {
+            len: line_len,
+            font: style.font(),
+            color: fallback,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        });
+    }
+    out
+}
+
 /// Text runs for one logical line, underlining any IME marked-range overlap.
 fn marked_runs(
     style: &gpui::TextStyle,
@@ -981,6 +1133,7 @@ impl Render for ChatInput {
             .on_action(cx.listener(|this, _: &Cut, window, cx| this.cut(window, cx)))
             .on_action(cx.listener(Self::show_character_palette))
             .on_action(cx.listener(Self::submit))
+            .on_action(cx.listener(Self::save_file))
             .on_action(cx.listener(Self::newline))
             .on_action(cx.listener(Self::escape))
             .on_action(cx.listener(Self::tab))

@@ -39,12 +39,13 @@ mod tree_ops;
 mod view;
 
 pub(crate) use ask::AskState;
+pub(crate) use editor::language_for;
 pub(crate) use render::short_session;
-pub(crate) use state::{Entry, Pending, PendingKind};
+pub(crate) use state::{EditorItem, Entry, Pending, PendingKind};
 pub use state::{InstanceStatus, SPARK_SAMPLES, SparkRing};
 
 use diff::DiffRecord;
-use state::{EditorItem, FileBuffer, GitView};
+use state::{FileBuffer, GitView};
 
 /// Stable, never-reused identity for a workspace.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -461,6 +462,80 @@ impl Workspace {
     /// Sidecar log lines (the chat's logs panel).
     pub(crate) fn log_lines(&self) -> &[String] {
         &self.logs
+    }
+
+    /// Editor-area tabs + the active index (the GPUI editor tab bar).
+    pub(crate) fn editor_tabs(&self) -> &[EditorItem] {
+        &self.editor_open
+    }
+
+    pub(crate) fn editor_active_ix(&self) -> usize {
+        self.editor_active
+    }
+
+    pub(crate) fn set_editor_active(&mut self, ix: usize) {
+        if ix < self.editor_open.len() {
+            self.editor_active = ix;
+        }
+    }
+
+    /// An open file buffer's view: (content, dirty, load_error, save_error).
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn file_view(
+        &self,
+        path: &std::path::Path,
+    ) -> Option<(&str, bool, Option<&str>, Option<&str>)> {
+        self.open_files.get(path).map(|b| {
+            (
+                b.content.as_str(),
+                b.dirty,
+                b.load_error.as_deref(),
+                b.save_error.as_deref(),
+            )
+        })
+    }
+
+    /// Replace an open file's buffer content (marks it dirty).
+    pub(crate) fn set_file_content(&mut self, path: &std::path::Path, text: String) {
+        if let Some(b) = self.open_files.get_mut(path) {
+            if b.content != text {
+                b.content = text;
+                b.dirty = true;
+            }
+        }
+    }
+
+    /// Write an open buffer to disk; returns success (egui's inline save).
+    pub(crate) fn save_file(&mut self, path: &std::path::Path) -> bool {
+        let Some(b) = self.open_files.get_mut(path) else {
+            return false;
+        };
+        match self.fs.write(path, b.content.as_bytes()) {
+            Ok(()) => {
+                b.dirty = false;
+                b.save_error = None;
+                true
+            }
+            Err(e) => {
+                b.save_error = Some(e.to_string());
+                false
+            }
+        }
+    }
+
+    /// Whether this workspace's folder is a git repo (markers/changes source).
+    pub(crate) fn is_git_repo(&self) -> bool {
+        self.git_repo
+    }
+
+    /// Working-tree changes (git repos; the Changes list).
+    pub(crate) fn git_change_list(&self) -> &[crate::git::GitChange] {
+        &self.git_changes
+    }
+
+    /// The diff currently shown in the Changes tab.
+    pub(crate) fn current_diff_view(&self) -> Option<&diff::DiffRecord> {
+        self.current_diff.as_ref()
     }
 
     /// Saved-session catalog (answer to `list_sessions`).

@@ -16,6 +16,7 @@ pub mod assets;
 pub mod chat;
 pub mod dashboard;
 pub mod den;
+pub mod editor;
 pub mod input;
 pub mod markdown;
 pub mod tokens;
@@ -38,7 +39,7 @@ use crate::session::{self, ComposerStyle, DashboardViewMode};
 use crate::supervisor::Supervisor;
 use crate::waker::UiWaker;
 use crate::workspace::WorkspaceId;
-pub use actions::{ChatPop, DashAction};
+pub use actions::{ChatPop, DashAction, TreeOp};
 use dashboard::CardInput;
 use den::{DenConn, DenPop, DenSeg, TaskTarget};
 use input::{ChatInput, InputEvent};
@@ -156,6 +157,14 @@ pub struct RootView {
     sessions_filter_input: Option<Entity<ChatInput>>,
     /// Thinking folds that are closed (turn-end auto-collapse + manual).
     collapsed_thinking: HashSet<(u64, usize)>,
+    /// Code-editor input entities, one per open (workspace, file).
+    editor_inputs: HashMap<(u64, PathBuf), Entity<ChatInput>>,
+    /// Dirty-close confirmation: second click on this tab's X closes it.
+    pub(crate) editor_close_confirm: Option<(WorkspaceId, usize)>,
+    /// Active tree operation (rename / new file / new folder) + its input.
+    pub(crate) tree_op: Option<TreeOp>,
+    pub(crate) tree_op_input: Option<Entity<ChatInput>>,
+    pub(crate) tree_delete_confirm: Option<(WorkspaceId, PathBuf, bool)>,
 }
 
 /// One pasted image: the wire form + the displayable form.
@@ -249,7 +258,77 @@ impl RootView {
             session_selected: None,
             sessions_filter_input: None,
             collapsed_thinking: HashSet::new(),
+            editor_inputs: HashMap::new(),
+            editor_close_confirm: None,
+            tree_op: None,
+            tree_op_input: None,
+            tree_delete_confirm: None,
         }
+    }
+
+    /// Create (once) the code-editor input for an open file: seeded from the
+    /// buffer, syntax-highlighted on load and on every edit (200 KB cap),
+    /// Cmd/Ctrl+S routed to the save action.
+    pub(crate) fn ensure_editor_input(
+        &mut self,
+        id: WorkspaceId,
+        path: &PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        let key = (id.0, path.clone());
+        if self.editor_inputs.contains_key(&key) {
+            return;
+        }
+        let content = self
+            .supervisor
+            .get(id)
+            .and_then(|ws| ws.file_view(path).map(|(c, ..)| c.to_string()))
+            .unwrap_or_default();
+        let runs = editor::highlight(&content, path);
+        let entity = cx.new(|cx| {
+            let mut input = ChatInput::new_code(cx);
+            input.set_text(content, cx);
+            input.set_syntax(runs, cx);
+            input
+        });
+        let sub = {
+            let path = path.clone();
+            cx.subscribe(
+                &entity,
+                move |this, input, event: &InputEvent, cx| match event {
+                    InputEvent::Edited => {
+                        let text = input.read(cx).text().to_string();
+                        let runs = editor::highlight(&text, &path);
+                        if let Some(ws) = this.supervisor.get_mut(id) {
+                            ws.set_file_content(&path, text);
+                        }
+                        input.update(cx, |i, cx| i.set_syntax(runs, cx));
+                        cx.notify();
+                    }
+                    InputEvent::Save => {
+                        this.dispatch(DashAction::EditorSave(id, path.clone()), cx);
+                    }
+                    _ => {}
+                },
+            )
+        };
+        self.editor_inputs.insert(key, entity);
+        self.chat_subs.push(sub);
+    }
+
+    /// The tree-op (rename/new) name input, created on demand.
+    pub(crate) fn ensure_tree_op_input(&mut self, cx: &mut Context<Self>) {
+        if self.tree_op_input.is_some() {
+            return;
+        }
+        let entity = cx.new(|cx| ChatInput::new("name\u{2026}", cx));
+        let sub = cx.subscribe(&entity, |this, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Submitted) {
+                this.dispatch(DashAction::TreeOpSubmit, cx);
+            }
+        });
+        self.tree_op_input = Some(entity);
+        self.chat_subs.push(sub);
     }
 
     /// Filter box for the sessions browser (created on first open).
@@ -424,6 +503,7 @@ impl RootView {
                 self.sync_palette_flag(id, cx);
                 cx.notify();
             }
+            InputEvent::Save => {} // composer has nothing to save
             InputEvent::Image(png) => {
                 use base64::Engine as _;
                 let b64 = base64::engine::general_purpose::STANDARD.encode(png);
@@ -831,6 +911,30 @@ impl Render for RootView {
                         .unwrap_or_default(),
                     palette_sel: self.palette_sel,
                     steer_queue: self.chat_steer_queue,
+                    editor_input: match ws.editor_tabs().get(ws.editor_active_ix()) {
+                        Some(crate::workspace::EditorItem::File(p)) => {
+                            self.editor_inputs.get(&(id.0, p.clone()))
+                        }
+                        _ => None,
+                    },
+                    editor_close_confirm: self
+                        .editor_close_confirm
+                        .filter(|(cid, _)| *cid == id)
+                        .map(|(_, ix)| ix),
+                    markers: ws.tree_markers(),
+                    tree_menu: match &self.chat_pop {
+                        Some(ChatPop::TreeMenu(tid, path, is_dir)) if *tid == id => {
+                            Some((path.clone(), *is_dir))
+                        }
+                        _ => None,
+                    },
+                    tree_op_input: self.tree_op_input.as_ref(),
+                    tree_op_armed: self.tree_op.is_some(),
+                    tree_delete_pending: self
+                        .tree_delete_confirm
+                        .as_ref()
+                        .filter(|(cid, ..)| *cid == id)
+                        .map(|(_, p, _)| p.clone()),
                     logs_open: self.logs_open.contains(&id),
                     collapsed_thinking: &self.collapsed_thinking,
                     sessions: (self.sessions_open == Some(id)).then(|| {

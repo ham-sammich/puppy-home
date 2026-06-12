@@ -21,6 +21,8 @@ pub enum ChatPop {
     Model(WorkspaceId),
     Style,
     FilePicker(WorkspaceId, PathBuf),
+    /// Tree-row context panel: (workspace, path, is_dir).
+    TreeMenu(WorkspaceId, PathBuf, bool),
 }
 
 /// Every dashboard interaction, funneled through [`RootView::dispatch`].
@@ -92,8 +94,32 @@ pub enum DashAction {
     SessionResume(WorkspaceId, String, String),
     /// Toggle a thinking fold (auto-collapse one-shot still wins first).
     ToggleThinking(WorkspaceId, usize),
+    // -- editor area --
+    OpenEditorFile(WorkspaceId, PathBuf),
+    EditorTab(WorkspaceId, usize),
+    /// Close a tab (dirty files ask once: second click within the confirm
+    /// state closes for real).
+    EditorClose(WorkspaceId, usize),
+    EditorSave(WorkspaceId, PathBuf),
+    /// Load a git working-tree change into the Changes tab.
+    LoadGitChange(WorkspaceId, String, char),
+    /// Load a Code-Puppy-reported diff (non-git fallback).
+    LoadDiffIndex(WorkspaceId, usize),
+    // -- tree ops --
+    TreeRename(WorkspaceId, PathBuf),
+    TreeNew(WorkspaceId, PathBuf, bool),
+    TreeOpSubmit,
+    TreeDelete(WorkspaceId, PathBuf, bool),
+    TreeDeleteConfirm,
     /// Den interactions (join/leave/feed/kanban/plans/...).
     Den(den::DenAction),
+}
+
+/// What the tree-op input is editing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TreeOp {
+    Rename(WorkspaceId, PathBuf),
+    New(WorkspaceId, PathBuf, bool),
 }
 
 /// `@<path>` reference token, exactly like the egui composer: paths under
@@ -192,11 +218,9 @@ impl RootView {
             DashAction::Changes(id) => {
                 self.ensure_chat_input(id, cx);
                 self.screen = Screen::Chat(id);
-                self.pending_focus = Some(id);
-                self.toast(
-                    "Changes are in the transcript chips \u{2014} a dedicated diff view is egui-only for now".to_string(),
-                    accent,
-                );
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.show_changes();
+                }
             }
             DashAction::ShowDashboard => {
                 self.screen = Screen::Dashboard;
@@ -454,6 +478,128 @@ impl RootView {
                 if !self.collapsed_thinking.remove(&key) {
                     self.collapsed_thinking.insert(key);
                 }
+            }
+            DashAction::OpenEditorFile(id, path) => {
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.open_editor_file(path.clone());
+                }
+                self.ensure_editor_input(id, &path, cx);
+                self.chat_pop = None;
+            }
+            DashAction::EditorTab(id, ix) => {
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.set_editor_active(ix);
+                }
+                self.editor_close_confirm = None;
+            }
+            DashAction::EditorClose(id, ix) => {
+                let dirty = self
+                    .supervisor
+                    .get(id)
+                    .and_then(|ws| match ws.editor_tabs().get(ix) {
+                        Some(crate::workspace::EditorItem::File(p)) => Some(ws.is_file_dirty(p)),
+                        _ => Some(false),
+                    })
+                    .unwrap_or(false);
+                if dirty && self.editor_close_confirm != Some((id, ix)) {
+                    self.editor_close_confirm = Some((id, ix));
+                } else {
+                    self.editor_close_confirm = None;
+                    if let Some(ws) = self.supervisor.get_mut(id) {
+                        ws.close_editor(ix);
+                    }
+                }
+            }
+            DashAction::EditorSave(id, path) => {
+                let saved = self
+                    .supervisor
+                    .get_mut(id)
+                    .map(|ws| ws.save_file(&path))
+                    .unwrap_or(false);
+                if saved {
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    self.toast(format!("Saved {name}"), accent);
+                }
+            }
+            DashAction::LoadGitChange(id, path, marker) => {
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.load_git_diff(&path, marker);
+                }
+            }
+            DashAction::LoadDiffIndex(id, ix) => {
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.load_diff_index(ix);
+                }
+            }
+            DashAction::TreeRename(id, path) => {
+                self.ensure_tree_op_input(cx);
+                let seed = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if let Some(input) = &self.tree_op_input {
+                    input.update(cx, |i, cx| i.set_text(seed, cx));
+                }
+                self.tree_op = Some(TreeOp::Rename(id, path));
+                self.tree_delete_confirm = None;
+            }
+            DashAction::TreeNew(id, parent, is_dir) => {
+                self.ensure_tree_op_input(cx);
+                if let Some(input) = &self.tree_op_input {
+                    input.update(cx, |i, cx| i.clear(cx));
+                }
+                self.tree_op = Some(TreeOp::New(id, parent, is_dir));
+                self.tree_delete_confirm = None;
+            }
+            DashAction::TreeOpSubmit => {
+                let Some(op) = self.tree_op.take() else {
+                    return;
+                };
+                let name = self
+                    .tree_op_input
+                    .as_ref()
+                    .map(|i| i.read(cx).text().trim().to_string())
+                    .unwrap_or_default();
+                if name.is_empty() {
+                    return;
+                }
+                let result = match &op {
+                    TreeOp::Rename(id, path) => self
+                        .supervisor
+                        .get_mut(*id)
+                        .map(|ws| ws.perform_rename(path, &name)),
+                    TreeOp::New(id, parent, is_dir) => self
+                        .supervisor
+                        .get_mut(*id)
+                        .map(|ws| ws.perform_new(parent, *is_dir, &name)),
+                };
+                match result {
+                    Some(Ok(())) => self.toast(format!("\u{2713} {name}"), accent),
+                    Some(Err(e)) => self.toast(e, self.tokens.error),
+                    None => {}
+                }
+                self.chat_pop = None;
+            }
+            DashAction::TreeDelete(id, path, is_dir) => {
+                self.tree_delete_confirm = Some((id, path, is_dir));
+            }
+            DashAction::TreeDeleteConfirm => {
+                let Some((id, path, is_dir)) = self.tree_delete_confirm.take() else {
+                    return;
+                };
+                let result = self
+                    .supervisor
+                    .get_mut(id)
+                    .map(|ws| ws.delete_path(&path, is_dir));
+                match result {
+                    Some(Ok(())) => self.toast("Deleted".to_string(), accent),
+                    Some(Err(e)) => self.toast(e, self.tokens.error),
+                    None => {}
+                }
+                self.chat_pop = None;
             }
             DashAction::AnswerEnter => {
                 // Route Enter in the answer input: input prompts submit
