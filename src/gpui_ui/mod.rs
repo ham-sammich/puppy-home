@@ -107,6 +107,10 @@ pub struct RootView {
     last_error: Option<String>,
     /// `PUPPY_GPUI_PROMPT`: one-shot probe prompt (Task 2.1 instrumentation).
     probe_prompt: Option<String>,
+    /// Log remote connect outcomes to stderr (set by the remote E2E probe).
+    pub(crate) probe_remote_log: bool,
+    /// Armed transcript dump: (workspace, sent-at, wait-secs).
+    probe_prompt_dump: Option<(WorkspaceId, Instant, u64)>,
     // -- dashboard state --
     dash_mode: DashboardViewMode,
     reduce_motion: bool,
@@ -305,6 +309,8 @@ impl RootView {
             tokens: resolved_tokens,
             last_error,
             probe_prompt: std::env::var("PUPPY_GPUI_PROMPT").ok(),
+            probe_remote_log: false,
+            probe_prompt_dump: None,
             dash_mode: saved.dashboard_view,
             reduce_motion: saved.reduce_motion,
             toasts: Vec::new(),
@@ -703,10 +709,15 @@ impl RootView {
             self.dispatch(DashAction::Theme(theme_ui::ThemeAction::EditorOpen), cx);
             eprintln!("[probe] picked theme {spec:?} + opened the editor");
         }
-        if std::env::var_os("PUPPY_GPUI_REMOTE").is_some() {
+        if let Ok(spec) = std::env::var("PUPPY_GPUI_REMOTE") {
             unsafe { std::env::remove_var("PUPPY_GPUI_REMOTE") };
             self.dispatch(DashAction::Remote(remote::RemoteAction::Open), cx);
             eprintln!("[probe] opened the remote-connect dialog");
+            // `PUPPY_GPUI_REMOTE=<target>:</path>` drives a full connect
+            // (the headless remote-stack E2E); plain `1` just opens it.
+            if spec != "1" {
+                self.probe_remote_connect(&spec, cx);
+            }
         }
         if let Some(v) = std::env::var_os("PUPPY_GPUI_BROWSER") {
             unsafe { std::env::remove_var("PUPPY_GPUI_BROWSER") };
@@ -1015,9 +1026,41 @@ impl RootView {
     /// Fire the probe prompt once the first sidecar reports ready.
     fn maybe_send_probe_prompt(&mut self) {
         let Some(prompt) = &self.probe_prompt else {
+            // After a dump-armed prompt: print the tail of the transcript
+            // once the wait elapses (headless agent-behavior verification).
+            if let Some((id, at, secs)) = self.probe_prompt_dump
+                && at.elapsed() > Duration::from_secs(secs)
+            {
+                self.probe_prompt_dump = None;
+                if let Some(ws) = self.supervisor.get(id) {
+                    eprintln!("[probe] transcript tail of {}:", ws.name);
+                    for e in ws.entries().iter().rev().take(12).collect::<Vec<_>>() {
+                        use crate::workspace::Entry;
+                        let (tag, text) = match e {
+                            Entry::User(t) => ("user", t.as_str()),
+                            Entry::Agent(t) => ("agent", t.as_str()),
+                            Entry::Note(t) => ("note", t.as_str()),
+                            Entry::Error(t) => ("error", t.as_str()),
+                            Entry::Thinking { text, .. } => ("thinking", text.as_str()),
+                            Entry::Message(_) => ("message", "<structured>"),
+                        };
+                        let text: String = text.chars().take(600).collect();
+                        eprintln!("  [{tag}] {text}");
+                    }
+                }
+            }
             return;
         };
-        let Some(id) = self.supervisor.iter().find(|w| w.is_ready()).map(|w| w.id) else {
+        // `PUPPY_GPUI_PROMPT_REMOTE=1` restricts the target to a REMOTE
+        // workspace (the fallback E2E: session-restored local workspaces
+        // become ready first and would steal the prompt otherwise).
+        let want_remote = std::env::var_os("PUPPY_GPUI_PROMPT_REMOTE").is_some();
+        let Some(id) = self
+            .supervisor
+            .iter()
+            .find(|w| w.is_ready() && (!want_remote || w.is_remote()))
+            .map(|w| w.id)
+        else {
             return;
         };
         let prompt = prompt.clone();
@@ -1025,6 +1068,13 @@ impl RootView {
             eprintln!("[probe] sending prompt to {}: {prompt:?}", ws.name);
             ws.send_prompt_text(&prompt);
             self.probe_prompt = None;
+            // `PUPPY_GPUI_PROMPT_DUMP=<secs>` arms the transcript dump.
+            if let Some(secs) = std::env::var("PUPPY_GPUI_PROMPT_DUMP")
+                .ok()
+                .and_then(|s| s.parse().ok())
+            {
+                self.probe_prompt_dump = Some((id, Instant::now(), secs));
+            }
         }
     }
 

@@ -25,7 +25,7 @@ use crate::backend::ssh::{self, SshTarget};
 use crate::backend::{CodePuppy, UiEvent};
 use crate::git::WorkspaceGit;
 use crate::gpui_ui::input::ChatInput;
-use crate::gpui_ui::{RootView, Screen};
+use crate::gpui_ui::{DashAction, RootView, Screen};
 use crate::views::remote_connect::{ListResult, join_remote, list_remote_blocking, parent_remote};
 use crate::workspace::fs::WorkspaceFs;
 
@@ -407,6 +407,22 @@ impl RootView {
                 Err(TryRecvError::Disconnected) => b.pending = None,
             }
         }
+        // Probe: auto-accept a pending fallback offer (headless E2E).
+        if self
+            .remote
+            .as_ref()
+            .is_some_and(|st| st.fallback_offer.is_some())
+            && std::env::var_os("PUPPY_GPUI_REMOTE_FALLBACK").is_some()
+        {
+            unsafe { std::env::remove_var("PUPPY_GPUI_REMOTE_FALLBACK") };
+            let launcher = self
+                .remote
+                .as_ref()
+                .and_then(|st| st.fallback_offer.clone())
+                .unwrap_or_default();
+            eprintln!("[probe] fallback offered (launcher {launcher:?}); accepting");
+            self.dispatch(DashAction::Remote(RemoteAction::ConnectFallback), cx);
+        }
         // Connection result -> adopt into the Supervisor (egui poll_remote).
         let Some(pending) = self.remote_pending.take() else {
             return;
@@ -450,6 +466,12 @@ impl RootView {
                 self.ensure_chat_input(id, cx);
                 self.screen = Screen::Chat(id);
                 self.pending_focus = Some(id);
+                if self.probe_remote_log {
+                    eprintln!(
+                        "[probe] remote connected: {} fallback={}",
+                        pending.label, pending.fallback
+                    );
+                }
                 let mode = if pending.fallback {
                     " (ssh-fallback)"
                 } else {
@@ -463,6 +485,9 @@ impl RootView {
                 // fallback OFFER, every other failure stays a plain error
                 // (wrong creds must never silently switch modes).
                 let error_color = self.tokens.error;
+                if self.probe_remote_log {
+                    eprintln!("[probe] remote connect failed: {e}");
+                }
                 if let Some(st) = self.remote.as_mut() {
                     st.connecting = false;
                     match e {
@@ -490,6 +515,21 @@ impl RootView {
                 self.chat_subs.push(sub);
             }
         }
+    }
+
+    /// Probe (`PUPPY_GPUI_REMOTE=<target>:</path>`): seed the open dialog
+    /// and dispatch Connect — the headless remote-stack E2E driver. With
+    /// `PUPPY_GPUI_REMOTE_FALLBACK=1`, upkeep auto-accepts a fallback offer.
+    pub(crate) fn probe_remote_connect(&mut self, spec: &str, cx: &mut gpui::Context<Self>) {
+        let Some((target, path)) = spec.split_once(":/") else {
+            eprintln!("[probe] bad remote spec {spec:?} (want target:/path)");
+            return;
+        };
+        self.seed_remote(0, target.to_string(), cx);
+        self.seed_remote(1, format!("/{path}"), cx);
+        self.probe_remote_log = true;
+        self.dispatch(DashAction::Remote(RemoteAction::Connect), cx);
+        eprintln!("[probe] remote connect dispatched: {spec}");
     }
 
     fn remote_text(&self, ix: usize, cx: &gpui::Context<Self>) -> String {
