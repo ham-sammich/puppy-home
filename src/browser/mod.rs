@@ -62,6 +62,7 @@ pub enum PluginStatus {
 }
 
 /// How the GPUI shell presents a browser tab's webview window.
+#[allow(dead_code)] // driven by the gpui shell; egui always embeds
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EmbedMode {
     /// Borderless overlay glued inside the Browser screen (the default).
@@ -427,6 +428,7 @@ impl BrowserManager {
     #[allow(dead_code)] // consumed by the redesign UI branches
     /// The "Launch browser" button: current URL or the example fallback.
     /// GPUI presentation mode of a tab (egui never consults this).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn tab_mode(&self, id: BrowserId) -> EmbedMode {
         self.tabs
             .get(&id)
@@ -434,6 +436,7 @@ impl BrowserManager {
             .unwrap_or(EmbedMode::Embedded)
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn set_tab_mode(&mut self, id: BrowserId, mode: EmbedMode) {
         if let Some(tab) = self.tabs.get_mut(&id) {
             tab.gpui_mode = mode;
@@ -444,6 +447,7 @@ impl BrowserManager {
     }
 
     /// Has the plugin reported its window exists?
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn tab_ready(&self, id: BrowserId) -> bool {
         self.tabs
             .get(&id)
@@ -455,6 +459,7 @@ impl BrowserManager {
     /// top-left PHYSICAL px) just above host window `parent`. Sent every
     /// render while the Browser screen is up — same per-frame re-assert
     /// the egui pump does (z-order can reshuffle on any click).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn embed_tab(&mut self, id: BrowserId, rect: (i32, i32, i32, i32), parent: i64) {
         if let Some(tab) = self.tabs.get_mut(&id)
             && let Some(h) = tab.host.as_mut()
@@ -470,6 +475,7 @@ impl BrowserManager {
 
     /// GPUI: order the overlay out (screen switch / minimize). No-op for a
     /// popped-out floating window — that one is MEANT to persist.
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn hide_tab(&mut self, id: BrowserId) {
         if let Some(tab) = self.tabs.get_mut(&id)
             && tab.gpui_mode == EmbedMode::Embedded
@@ -485,6 +491,7 @@ impl BrowserManager {
     /// mode-flip/launch; the plugin call is idempotent anyway). On Windows
     /// a previously reparented child must be released first (untested by
     /// construction — no Windows box here).
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn float_tab(&mut self, id: BrowserId) {
         if let Some(tab) = self.tabs.get_mut(&id)
             && !tab.floated
@@ -531,6 +538,7 @@ impl BrowserManager {
         }
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn launch_tab(&mut self, id: BrowserId) {
         let exe = self.registry.get(BROWSER_PLUGIN_ID).map(|p| p.exe_path());
         let Some(tab) = self.tabs.get_mut(&id) else {

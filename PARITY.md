@@ -589,7 +589,19 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       tested; same code path), Windows-side ssh quoting.
       `34978da`
 
-      SYNC QUEUE (phase-end batch): sidecar/sidecar.py (picker
+      SYNC QUEUE — SYNCED (shared-backend ac772f0 / egui 853a3a8; the
+      full Phase E/F batch). Shared layer copied wholesale; divergent
+      files (workspace/mod+chat+view, supervisor, app/remote) went in
+      as 3-way merges against the pre-sync shared base, egui idioms
+      kept. egui ALSO got its two queued UI ports: the CannotHost
+      SSH-fallback offer (explicit, never automatic) and the B13.8
+      headline-puppy local pin on the dashboard lede. Deliberately NOT
+      synced: gpui's removed allow(dead_code) annotations (each branch
+      keeps allows for accessors its UI doesn't consume); gpui took
+      back shared's annotated browser/mod.rs, embed_mac.rs,
+      creds_push.rs, backend/mod.rs for byte-lockstep (allows are
+      inert where consumed). Original queue text follows.
+      sidecar/sidecar.py (picker
       intercepts + cwd event + open flags), backend/mod.rs (Wire/UiEvent
       Agents/Models open + Cwd), workspace/events.rs + mod.rs
       (show_agent_picker/show_model_picker one-shots, set_root).

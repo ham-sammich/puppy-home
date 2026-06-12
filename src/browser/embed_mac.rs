@@ -15,6 +15,7 @@
 //! multi-display setups.
 
 #![cfg(target_os = "macos")]
+#![allow(dead_code)] // consumed by the gpui shell's embed upkeep
 
 use objc::runtime::Object;
 use objc::{class, msg_send, sel, sel_impl};

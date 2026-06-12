@@ -973,6 +973,7 @@ impl CodePuppy {
     /// fs/git ride one-shot ssh execs against the real remote files. Used
     /// when [`spawn_remote`](Self::spawn_remote) says CannotHost and the
     /// user explicitly opts in.
+    #[allow(dead_code)] // consumed by the gpui shell's fallback offer flow
     pub fn spawn_ssh_fallback(
         waker: Arc<dyn UiWaker>,
         target: &ssh::SshTarget,

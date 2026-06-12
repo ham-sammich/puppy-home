@@ -24,6 +24,8 @@
 //! files get `chmod 600` remotely (the same mode code_puppy's own plugins
 //! set locally). File contents are never logged.
 
+#![allow(dead_code)] // consumed by the gpui shell (puppush UI); shared/egui
+// keep the module in lockstep per the no-divergence rule.
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
