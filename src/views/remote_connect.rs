@@ -60,6 +60,9 @@ pub struct RemoteConnect {
     pub error: Option<String>,
     /// True while the SSH connection is being established off-thread.
     pub connecting: bool,
+    /// Set when connect failed with CannotHost (the missing launcher's
+    /// name): the dialog offers SSH-fallback mode — explicit opt-in only.
+    pub fallback_offer: Option<String>,
     /// Active remote folder browser, when open.
     browser: Option<DirBrowser>,
 }
@@ -73,6 +76,7 @@ impl RemoteConnect {
             hosts: ssh::config_hosts(),
             error: None,
             connecting: false,
+            fallback_offer: None,
             browser: None,
         }
     }
@@ -83,6 +87,8 @@ impl RemoteConnect {
 pub struct Outcome {
     /// Validated target + remote path to connect to.
     pub connect: Option<(SshTarget, String)>,
+    /// The user accepted the SSH-fallback offer (target + remote path).
+    pub fallback: Option<(SshTarget, String)>,
     /// The user dismissed the dialog.
     pub cancel: bool,
 }
@@ -169,6 +175,33 @@ pub fn render(ctx: &egui::Context, st: &mut RemoteConnect) -> Outcome {
             if let Some(err) = &st.error {
                 ui.add_space(6.0);
                 ui.colored_label(ui.visuals().error_fg_color, err);
+            }
+
+            // CannotHost verdict: offer SSH-fallback mode explicitly
+            // (mirrors the gpui shell's offer — never automatic).
+            if let Some(launcher) = st.fallback_offer.clone() {
+                ui.add_space(8.0);
+                ui.label(format!(
+                    "The remote can't run Code Puppy (`{launcher}` not found). \
+                     Fallback: the agent runs LOCALLY and operates on the \
+                     remote project over ssh — slower, and tools run on this \
+                     machine, not the remote."
+                ));
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Use SSH fallback (limited)").clicked() {
+                        match SshTarget::parse(st.target.trim()) {
+                            Ok(target) => {
+                                out.fallback = Some((target, st.path.trim().to_string()));
+                            }
+                            Err(e) => st.error = Some(e),
+                        }
+                    }
+                    if ui.button("Back").clicked() {
+                        st.fallback_offer = None;
+                    }
+                });
+                return;
             }
 
             ui.add_space(12.0);

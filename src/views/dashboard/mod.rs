@@ -132,10 +132,14 @@ pub(crate) fn tilde_path(path: &std::path::Path) -> String {
     }
 }
 
-/// The user's one puppy name, from the first workspace that learned its real
-/// name (falls back to Code Puppy's default "Puppy" until a sidecar reports).
+/// The user's one puppy name, from the first LOCAL workspace that learned its
+/// real name (falls back to Code Puppy's default "Puppy" until a sidecar
+/// reports). Remote sidecars announce the remote host's puppy — that identity
+/// belongs to its workspace's own surfaces, never the app headline (B13.8).
+/// SSH-fallback sidecars run locally, so they stay headline-eligible.
 fn puppy_name(sup: &Supervisor) -> String {
     sup.iter()
+        .filter(|w| !w.is_remote() || w.remote_fallback())
         .map(|w| w.puppy_name.clone())
         .find(|p| !p.is_empty() && p != "Puppy")
         .unwrap_or_else(|| "Puppy".to_string())

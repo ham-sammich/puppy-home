@@ -244,7 +244,7 @@ impl Workspace {
                             }
                         });
                     });
-                    if let Some(label) = &self.remote_label {
+                    if let Some(label) = self.remote_label() {
                         // Remote workspace: tree + editor work over SSH.
                         ui.weak(format!("\u{1f517} {label}"));
                     }

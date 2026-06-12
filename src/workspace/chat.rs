@@ -75,8 +75,9 @@ impl Workspace {
     }
 
     /// The one prompt-sending path (composer submit + dashboard "New prompt"):
-    /// records the turn in the transcript and starts turn tracking.
-    fn send_user_prompt(&mut self, text: String, images: Vec<String>) {
+    /// records the turn in the transcript and starts turn tracking. Signature
+    /// converged with redesign/egui (text + images superset).
+    pub(crate) fn send_user_prompt(&mut self, text: String, images: Vec<String>) {
         let Some(backend) = &self.backend else { return };
         self.transcript.push(Entry::User(text.clone()));
         if !images.is_empty() {
@@ -116,6 +117,14 @@ impl Workspace {
         let queue = self.steer_queue_mode;
         if self.steer_text(&text, queue) {
             self.input.clear();
+        }
+    }
+
+    /// Switch the active agent live (sidecar re-announces via `Ready`).
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn set_agent_live(&mut self, name: &str) {
+        if let Some(backend) = &self.backend {
+            backend.set_agent(name);
         }
     }
 

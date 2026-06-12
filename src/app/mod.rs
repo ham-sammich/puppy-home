@@ -618,6 +618,13 @@ impl eframe::App for PuppyApp {
                     st.error = None;
                 }
                 self.begin_remote_connect(target, path, ui.ctx());
+            } else if let Some((target, path)) = outcome.fallback {
+                if let Some(st) = self.remote.as_mut() {
+                    st.connecting = true;
+                    st.error = None;
+                    st.fallback_offer = None;
+                }
+                self.begin_remote_fallback(target, path, ui.ctx());
             } else if outcome.cancel {
                 let connecting = self.remote.as_ref().is_some_and(|s| s.connecting);
                 if !connecting {

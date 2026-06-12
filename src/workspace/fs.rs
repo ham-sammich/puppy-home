@@ -111,17 +111,19 @@ const TREE_CACHE_TTL: Duration = Duration::from_millis(2000);
 /// cache immediately, so the UI updates in the same frame; outside changes
 /// (the agent, the user's editor) appear within the TTL.
 ///
-/// The remote fs keeps its own event-driven cache -- wrapping it here would
-/// add pointless SSH refetches, so this is local-only by construction.
+/// The sidecar-RPC remote fs keeps its own event-driven cache -- wrapping it
+/// here would add pointless refetches. The SSH-fallback fs has no cache of
+/// its own, so it DOES ride this wrapper (each listing is an ssh round-trip
+/// -- the TTL matters even more there than on NTFS).
 pub struct CachedFs {
-    inner: LocalFs,
+    inner: Box<dyn WorkspaceFs>,
     cache: Mutex<HashMap<PathBuf, (Instant, Vec<DirEntry>)>>,
 }
 
 impl CachedFs {
-    pub fn new(inner: LocalFs) -> Self {
+    pub fn new(inner: impl WorkspaceFs + 'static) -> Self {
         CachedFs {
-            inner,
+            inner: Box::new(inner),
             cache: Mutex::new(HashMap::new()),
         }
     }

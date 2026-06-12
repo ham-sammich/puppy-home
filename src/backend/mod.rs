@@ -22,9 +22,11 @@ use serde_json::Value;
 
 use crate::waker::UiWaker;
 
+pub mod creds_push;
 mod protocol;
 pub mod remote;
 pub mod ssh;
+pub mod ssh_fallback;
 
 /// The sidecar source, embedded so the executable is self-contained.
 const SIDECAR_PY: &str = include_str!("../../sidecar/sidecar.py");
@@ -303,10 +305,12 @@ pub enum UiEvent {
     Message(BackendMessage),
     /// The catalog of available slash commands.
     Commands(Vec<CommandInfo>),
+    /// The sidecar's working directory changed (`/cd` — workspaces follow).
+    Cwd(String),
     /// The catalog of available agents.
-    Agents(Vec<AgentInfo>),
+    Agents { items: Vec<AgentInfo>, open: bool },
     /// The catalog of available models.
-    Models(Vec<ModelInfo>),
+    Models { items: Vec<ModelInfo>, open: bool },
     /// Completion candidates for a `request_completion` (correlated by `id`).
     Completions { id: u64, items: Vec<CompletionItem> },
     /// An interactive question — answer via `ask_response` / `ask_cancel`.
@@ -433,13 +437,24 @@ enum Wire {
         #[serde(default)]
         items: Vec<CommandInfo>,
     },
+    /// The sidecar's working directory changed (`/cd`).
+    Cwd {
+        #[serde(default)]
+        path: String,
+    },
     Agents {
         #[serde(default)]
         items: Vec<AgentInfo>,
+        /// Bare `/agent`: the sidecar asks the GUI to open its switcher.
+        #[serde(default)]
+        open: bool,
     },
     Models {
         #[serde(default)]
         items: Vec<ModelInfo>,
+        /// Bare `/model`: the sidecar asks the GUI to open its switcher.
+        #[serde(default)]
+        open: bool,
     },
     Completions {
         #[serde(default)]
@@ -613,8 +628,9 @@ impl From<Wire> for UiEvent {
                 payload,
             }),
             Wire::Commands { items } => UiEvent::Commands(items),
-            Wire::Agents { items } => UiEvent::Agents(items),
-            Wire::Models { items } => UiEvent::Models(items),
+            Wire::Cwd { path } => UiEvent::Cwd(path),
+            Wire::Agents { items, open } => UiEvent::Agents { items, open },
+            Wire::Models { items, open } => UiEvent::Models { items, open },
             Wire::Completions { id, items } => UiEvent::Completions { id, items },
             Wire::Ask { id, questions } => UiEvent::Ask { id, questions },
             Wire::Result { id, output } => UiEvent::Result { id, output },
@@ -728,12 +744,48 @@ impl From<Wire> for UiEvent {
 /// A freshly spawned remote sidecar: the handle, its event stream, and the
 /// remote filesystem + git backends the workspace drives the tree/editor/git
 /// through.
-type RemoteHandle = (
+pub type RemoteHandle = (
     CodePuppy,
     Receiver<UiEvent>,
     Arc<dyn crate::workspace::fs::WorkspaceFs>,
     Arc<dyn crate::git::WorkspaceGit>,
 );
+
+/// Why a remote spawn failed -- structured so the UI can offer SSH-fallback
+/// mode for "can't host" and ONLY for "can't host".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteError {
+    /// Auth + shell are fine (provisioning succeeded) but the sidecar
+    /// launcher is missing on the remote.
+    CannotHost { launcher: String },
+    /// Everything else: auth, network, ssh-level failures. Never triggers
+    /// a fallback offer.
+    Other(String),
+}
+
+impl std::fmt::Display for RemoteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RemoteError::CannotHost { launcher } => write!(
+                f,
+                "the remote can't run Code Puppy (`{launcher}` not found)"
+            ),
+            RemoteError::Other(e) => f.write_str(e),
+        }
+    }
+}
+
+impl From<String> for RemoteError {
+    fn from(e: String) -> Self {
+        RemoteError::Other(e)
+    }
+}
+
+impl From<&str> for RemoteError {
+    fn from(e: &str) -> Self {
+        RemoteError::Other(e.to_string())
+    }
+}
 
 /// A running Code Puppy sidecar we can drive.
 pub struct CodePuppy {
@@ -795,11 +847,17 @@ impl CodePuppy {
     /// `sidecar.py` to the remote cache, then runs it; the returned handle and
     /// event stream are identical to [`spawn`](Self::spawn) -- the JSON protocol
     /// is transport-agnostic. `remote_cwd` is a path *on the remote*.
+    ///
+    /// Errors are structured: [`RemoteError::CannotHost`] fires only AFTER
+    /// provisioning succeeded (auth + network proven good) when the launcher
+    /// binary is missing on the remote -- the UI offers SSH-fallback mode for
+    /// that case and ONLY that case (auth failures must never silently
+    /// switch modes).
     pub fn spawn_remote(
         waker: Arc<dyn UiWaker>,
         target: &ssh::SshTarget,
         remote_cwd: Option<&str>,
-    ) -> Result<RemoteHandle, String> {
+    ) -> Result<RemoteHandle, RemoteError> {
         // 1. Provision: ship sidecar.py to the remote cache (bytes on stdin).
         let mut prov = target.provision_command();
         crate::proc::hide_console(&mut prov);
@@ -809,27 +867,63 @@ impl CodePuppy {
         let mut prov_child = prov
             .spawn()
             .map_err(|e| format!("starting ssh to provision sidecar: {e}"))?;
-        {
+        let send_err = {
             let mut si = prov_child.stdin.take().ok_or("no stdin pipe (provision)")?;
-            si.write_all(SIDECAR_PY.as_bytes())
-                .map_err(|e| format!("sending sidecar to remote: {e}"))?;
+            si.write_all(SIDECAR_PY.as_bytes()).err()
             // `si` drops here -> EOF, so the remote `cat` finishes.
-        }
+        };
         let prov_out = prov_child
             .wait_with_output()
             .map_err(|e| format!("waiting on remote provisioning: {e}"))?;
-        if !prov_out.status.success() {
+        if !prov_out.status.success() || send_err.is_some() {
+            // Prefer ssh's own stderr ("Could not resolve hostname", auth
+            // refusals) over a raw broken-pipe write error — when ssh dies
+            // early the pipe breaks FIRST, but the reason is on stderr.
             let err = String::from_utf8_lossy(&prov_out.stderr);
             let err = err.trim();
-            return Err(if err.is_empty() {
-                "remote provisioning failed (check the SSH target and auth)".to_string()
-            } else {
+            return Err(RemoteError::Other(if !err.is_empty() {
                 format!("remote provisioning failed: {err}")
+            } else if let Some(e) = send_err {
+                format!("sending sidecar to remote: {e}")
+            } else {
+                "remote provisioning failed (check the SSH target and auth)".to_string()
+            }));
+        }
+
+        // 2. Preflight: can this host RUN the sidecar? Provisioning proved
+        // auth + a POSIX shell; now `command -v <launcher argv0>`. Exit 1 =
+        // launcher missing (CannotHost -> the UI can offer SSH-fallback);
+        // exit 255 = ssh-level failure mid-flow (NOT a hosting verdict).
+        let launcher = ssh::default_remote_launcher();
+        let mut probe = target.launcher_probe_command(&launcher, remote_cwd);
+        crate::proc::hide_console(&mut probe);
+        probe
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let probe_status = probe
+            .status()
+            .map_err(|e| format!("probing the remote launcher: {e}"))?;
+        if !probe_status.success() {
+            let argv0 = launcher.split_whitespace().next().unwrap_or("uv");
+            return Err(match probe_status.code() {
+                // Exit 3: the requested path doesn't exist — a plain error
+                // on ANY connect mode (previously this "connected" and the
+                // sidecar died on `cd` right after adoption).
+                Some(3) => RemoteError::Other(format!(
+                    "remote path {} doesn't exist",
+                    remote_cwd.unwrap_or("?")
+                )),
+                Some(255) => {
+                    RemoteError::Other("ssh failed while probing the remote launcher".to_string())
+                }
+                _ => RemoteError::CannotHost {
+                    launcher: argv0.to_string(),
+                },
             });
         }
 
-        // 2. Launch: run the remote sidecar; stdio carries the protocol.
-        let launcher = ssh::default_remote_launcher();
+        // 3. Launch: run the remote sidecar; stdio carries the protocol.
         let mut command = target.launch_command(remote_cwd, &launcher);
         crate::proc::hide_console(&mut command);
         command
@@ -871,6 +965,30 @@ impl CodePuppy {
             remote_fs,
             remote_git,
         ))
+    }
+
+    /// SSH-FALLBACK mode (see `backend::ssh_fallback`): the sidecar runs
+    /// LOCALLY in a scratch cwd whose generated AGENTS.md instructs the
+    /// agent to operate on the remote project via ssh commands; the GUI's
+    /// fs/git ride one-shot ssh execs against the real remote files. Used
+    /// when [`spawn_remote`](Self::spawn_remote) says CannotHost and the
+    /// user explicitly opts in.
+    #[allow(dead_code)] // consumed by the gpui shell's fallback offer flow
+    pub fn spawn_ssh_fallback(
+        waker: Arc<dyn UiWaker>,
+        target: &ssh::SshTarget,
+        remote_root: &str,
+    ) -> Result<RemoteHandle, String> {
+        let scratch = ssh_fallback::prepare_scratch_dir(target, remote_root)?;
+        let (backend, rx) = Self::spawn(waker, Some(&scratch))?;
+        let fs: Arc<dyn crate::workspace::fs::WorkspaceFs> = Arc::new(
+            crate::workspace::fs::CachedFs::new(ssh_fallback::SshFs::new(target.clone())),
+        );
+        let git: Arc<dyn crate::git::WorkspaceGit> = Arc::new(ssh_fallback::SshGit::new(
+            target.clone(),
+            remote_root.to_string(),
+        ));
+        Ok((backend, rx, fs, git))
     }
 
     fn write(&self, obj: Value) {

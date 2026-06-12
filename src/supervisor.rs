@@ -48,12 +48,12 @@ impl Supervisor {
     }
 
     /// Adopt an already-spawned backend (used for remote workspaces, whose SSH
-    /// connection is established off-thread). `remote_label` is `Some("user@host")`
-    /// for a remote sidecar, `None` for local.
+    /// connection is established off-thread). `remote` carries the label AND
+    /// the full ssh target for a remote sidecar, `None` for local.
     pub fn adopt(
         &mut self,
         root: PathBuf,
-        remote_label: Option<String>,
+        remote: Option<crate::workspace::RemoteInfo>,
         fs: Arc<dyn WorkspaceFs>,
         git: Arc<dyn WorkspaceGit>,
         backend: CodePuppy,
@@ -61,16 +61,23 @@ impl Supervisor {
     ) -> WorkspaceId {
         let id = WorkspaceId(self.next_id);
         self.next_id += 1;
-        self.workspaces.insert(
-            id,
-            Workspace::new(id, root, remote_label, fs, git, backend, rx),
-        );
+        self.workspaces
+            .insert(id, Workspace::new(id, root, remote, fs, git, backend, rx));
         id
     }
 
     /// Close a workspace (drops the handle → shuts down + kills the child).
     pub fn close(&mut self, id: WorkspaceId) {
         self.workspaces.remove(&id);
+    }
+
+    /// Relaunch a dead workspace's sidecar (the card's "Restart" action).
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn restart(&mut self, id: WorkspaceId) {
+        let waker = self.waker.clone();
+        if let Some(ws) = self.workspaces.get_mut(&id) {
+            ws.restart(waker);
+        }
     }
 
     /// Fold each workspace's pending events into its state.
@@ -105,14 +112,6 @@ impl Supervisor {
     /// Fleet-wide tok/s samples, oldest → newest (the Command Center spark).
     pub fn aggregate_sparks(&self) -> &[f32] {
         self.agg_sparks.samples()
-    }
-
-    /// Relaunch a dead workspace's sidecar (the dashboard card's Restart).
-    pub fn restart(&mut self, id: WorkspaceId) {
-        let waker = self.waker.clone();
-        if let Some(ws) = self.workspaces.get_mut(&id) {
-            ws.restart(waker);
-        }
     }
 
     pub fn get(&self, id: WorkspaceId) -> Option<&Workspace> {

@@ -68,17 +68,28 @@ impl Workspace {
             }
             UiEvent::Message(msg) => self.on_message(msg),
             UiEvent::Commands(items) => self.commands = items,
-            UiEvent::Agents(items) => {
+            UiEvent::Cwd(path) => {
+                self.cwd = path.clone();
+                self.set_root(std::path::PathBuf::from(path));
+            }
+            UiEvent::Agents { items, open } => {
                 if let Some(cur) = items.iter().find(|a| a.current) {
                     self.agent = cur.name.clone();
                 }
                 self.agents = items;
+                if open {
+                    // Bare `/agent`: the CLI shows its picker — we show ours.
+                    self.show_agent_picker = true;
+                }
             }
-            UiEvent::Models(items) => {
+            UiEvent::Models { items, open } => {
                 if let Some(cur) = items.iter().find(|m| m.current) {
                     self.model = cur.name.clone();
                 }
                 self.models = items;
+                if open {
+                    self.show_model_picker = true;
+                }
             }
             UiEvent::Completions { id, items } => {
                 if id == self.comp_request_id {

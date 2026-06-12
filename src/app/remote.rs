@@ -12,7 +12,7 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use eframe::egui;
 
 use crate::backend::ssh::SshTarget;
-use crate::backend::{CodePuppy, UiEvent};
+use crate::backend::{CodePuppy, RemoteError, UiEvent};
 use crate::git::WorkspaceGit;
 use crate::shell::Tab;
 use crate::workspace::fs::WorkspaceFs;
@@ -28,7 +28,7 @@ pub(super) type RemoteSpawn = Result<
         Arc<dyn WorkspaceFs>,
         Arc<dyn WorkspaceGit>,
     ),
-    String,
+    RemoteError,
 >;
 /// A remote connection being established off-thread, plus what we need to adopt
 /// the workspace once it lands.
@@ -38,6 +38,12 @@ pub(super) struct RemotePending {
     pub(super) root: PathBuf,
     /// `user@host` for display.
     pub(super) label: String,
+    /// The full target — kept so the workspace can open further ssh
+    /// channels (the embedded terminal, B13.7).
+    pub(super) target: SshTarget,
+    /// True when this pending spawn is SSH-fallback mode (CannotHost +
+    /// explicit user opt-in).
+    pub(super) fallback: bool,
 }
 
 impl PuppyApp {
@@ -56,8 +62,9 @@ impl PuppyApp {
         let (tx, rx) = std::sync::mpsc::channel();
         let waker = crate::waker::egui_waker(ctx);
         let path = remote_path.clone();
+        let worker_target = target.clone();
         std::thread::spawn(move || {
-            let result = CodePuppy::spawn_remote(waker.clone(), &target, Some(&path));
+            let result = CodePuppy::spawn_remote(waker.clone(), &worker_target, Some(&path));
             let _ = tx.send(result);
             waker.wake();
         });
@@ -65,6 +72,41 @@ impl PuppyApp {
             rx,
             root: PathBuf::from(remote_path),
             label,
+            target,
+            fallback: false,
+        });
+    }
+
+    /// Spawn SSH-FALLBACK mode on a worker thread: the sidecar runs LOCALLY
+    /// against a scratch cwd instructed to operate on the remote over ssh
+    /// (see `backend::ssh_fallback`). Only offered after a CannotHost
+    /// verdict and explicit user opt-in — never automatic.
+    pub(super) fn begin_remote_fallback(
+        &mut self,
+        target: SshTarget,
+        remote_path: String,
+        ctx: &egui::Context,
+    ) {
+        if self.remote_pending.is_some() {
+            return;
+        }
+        let label = target.destination();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let waker = crate::waker::egui_waker(ctx);
+        let path = remote_path.clone();
+        let worker_target = target.clone();
+        std::thread::spawn(move || {
+            let result = CodePuppy::spawn_ssh_fallback(waker.clone(), &worker_target, &path)
+                .map_err(RemoteError::Other);
+            let _ = tx.send(result);
+            waker.wake();
+        });
+        self.remote_pending = Some(RemotePending {
+            rx,
+            root: PathBuf::from(remote_path),
+            label,
+            target,
+            fallback: true,
         });
     }
 
@@ -84,9 +126,18 @@ impl PuppyApp {
         let pending = self.remote_pending.take().expect("pending present");
         match result {
             Ok((backend, ev_rx, fs, git)) => {
-                let id = self
-                    .sup
-                    .adopt(pending.root, Some(pending.label), fs, git, backend, ev_rx);
+                let id = self.sup.adopt(
+                    pending.root,
+                    Some(crate::workspace::RemoteInfo {
+                        label: pending.label,
+                        target: pending.target,
+                        fallback: pending.fallback,
+                    }),
+                    fs,
+                    git,
+                    backend,
+                    ev_rx,
+                );
                 if let Some(dock) = self.dock.as_mut() {
                     dock.push_to_focused_leaf(Tab::Chat(id));
                 }
@@ -94,10 +145,17 @@ impl PuppyApp {
                 self.status.clear();
             }
             Err(e) => {
-                // Keep the dialog open and show the failure inline.
+                // Keep the dialog open; CannotHost gets the explicit
+                // SSH-fallback offer, everything else shows inline.
                 if let Some(st) = self.remote.as_mut() {
                     st.connecting = false;
-                    st.error = Some(e);
+                    match e {
+                        RemoteError::CannotHost { launcher } => {
+                            st.error = None;
+                            st.fallback_offer = Some(launcher);
+                        }
+                        RemoteError::Other(e) => st.error = Some(e),
+                    }
                 } else {
                     self.status = format!("Remote connect failed: {e}");
                 }
