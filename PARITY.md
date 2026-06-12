@@ -428,12 +428,57 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       XDG mirror, command shape, summary. Live push vs the human's now
       working remote = human QA. `2253af5`
 
+- [x] FEATURE SSH-FALLBACK MODE (user: "if the remote host doesn't
+      support code puppy — use our local code puppy to send commands via
+      ssh as a fallback").
+      DETECTION: spawn_remote now preflights after provisioning succeeds
+      (auth + POSIX shell proven): `command -v <launcher argv0>` over
+      ssh. Exit 1 -> RemoteError::CannotHost (fallback OFFERED, never
+      automatic); exit 255 (ssh-level) or any provisioning failure ->
+      RemoteError::Other (plain error — wrong creds can never silently
+      switch modes). Previously a uv-less host "connected" then died
+      moments later; now it's caught before launch.
+      APPROACHES: (a) SHIPPED — local sidecar in a scratch cwd
+      (~/.cache/puppy-home/ssh-fallback/<slug>/) with a generated
+      AGENTS.md; code_puppy natively loads ./AGENTS.md into the system
+      prompt, so the instruction injection needs zero sidecar/protocol
+      changes. (b) sshfs REJECTED: macFUSE install burden, no trivial
+      detection. (c) code_puppy-native remote tooling REJECTED: source
+      checked, no ssh/remote plugin exists.
+      CAPABILITY MATRIX (honest):
+        tree/editor          ssh-native SshFs (one-shot execs, CachedFs TTL)  REAL remote files
+        git view/graph/stage ssh-native SshGit (GitRunner over ssh + macro)   REAL remote git
+        terminal             B13.7 interactive ssh                            unchanged
+        agent shell tool     works via `ssh target '...'` per instructions    model-dependent compliance
+        agent file tools     LOCAL ONLY — instructed never to use them on     the honest gap;
+                             project files; scratch cwd keeps strays penned   noted in-UI
+        puppy identity       LOCAL puppy (it IS the local install);           headline-eligible
+                             (B13.8 filter passes fallback workspaces)
+      UI: dialog offer box on CannotHost (accent-framed, explicit
+      Connect-in-fallback / Cancel); card meta gains "· ssh-fallback";
+      chat toolbar badge w/ capability tooltip; transcript note on
+      connect spelling out the limitation; toast labels the mode.
+      Sidecar-RPC RemoteFs/RemoteGit were NOT reusable for this (they
+      serve the sidecar host's disk = local in fallback) — that's WHY
+      SshFs/SshGit exist. CachedFs generalized to Box<dyn WorkspaceFs>.
+      egui safety net: maps RemoteError to text, no offer flow (queued
+      for redesign/egui along with the rest). E2E vs a real uv-less
+      host = human QA (delete uv from PATH on the test box, connect).
+      `<hash4>`
+
       SYNC QUEUE (phase-end batch): sidecar/sidecar.py (picker
       intercepts + cwd event + open flags), backend/mod.rs (Wire/UiEvent
       Agents/Models open + Cwd), workspace/events.rs + mod.rs
       (show_agent_picker/show_model_picker one-shots, set_root).
       egui-side consumption of the new one-shots is egui UI work, not
       queued here.
+      SSH-FALLBACK additions: backend/ssh.rs (launcher_probe_command,
+      exec_command, exec_shell + tests), backend/ssh_fallback.rs (new,
+      shared), backend/mod.rs (RemoteError, preflight, spawn_ssh_fallback),
+      workspace/fs.rs (CachedFs over Box<dyn WorkspaceFs>),
+      workspace/mod.rs (RemoteInfo.fallback, remote_fallback()).
+      redesign/egui needs: RemoteInfo.fallback at its adopt site,
+      RemoteError mapping, optionally its own offer UI.
       B13.7 additions: terminal.rs (spawn_cmd split + spawn_remote),
       backend/ssh.rs (terminal_args + tests), workspace/mod.rs
       (RemoteInfo, spawn_shell, remote_label()), workspace/view.rs +

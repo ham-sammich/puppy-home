@@ -127,6 +127,8 @@ pub struct CardSnapshot {
     /// The workspace's puppy when it differs from the app headline (a
     /// remote host's puppy) — shown subtly on the meta line (B13.8).
     pub puppy: Option<String>,
+    /// SSH-fallback workspace: local sidecar, ssh transport (meta-labeled).
+    pub fallback: bool,
     pub agent: String,
     pub model: String,
     pub path: String,
@@ -193,6 +195,7 @@ pub fn snapshot(
         id: ws.id,
         name: ws.name.clone(),
         puppy,
+        fallback: ws.remote_fallback(),
         agent: if ws.agent.is_empty() {
             "agent".to_string()
         } else {

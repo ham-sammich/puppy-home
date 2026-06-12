@@ -256,6 +256,9 @@ pub struct Workspace {
 pub struct RemoteInfo {
     pub label: String,
     pub target: crate::backend::ssh::SshTarget,
+    /// SSH-FALLBACK mode: the sidecar runs LOCALLY (remote can't host it);
+    /// fs/git/terminal still speak ssh. Surfaces label this mode.
+    pub fallback: bool,
 }
 
 impl Workspace {
@@ -422,6 +425,12 @@ impl Workspace {
     #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn remote_target(&self) -> Option<crate::backend::ssh::SshTarget> {
         self.remote.as_ref().map(|r| r.target.clone())
+    }
+
+    /// Is this an SSH-FALLBACK workspace (local sidecar, ssh transport)?
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn remote_fallback(&self) -> bool {
+        self.remote.as_ref().is_some_and(|r| r.fallback)
     }
 
     pub fn diff_count(&self) -> usize {

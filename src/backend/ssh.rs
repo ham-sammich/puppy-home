@@ -125,6 +125,40 @@ impl SshTarget {
         cmd
     }
 
+    /// The `ssh` call that checks whether the remote can HOST a sidecar:
+    /// `command -v <argv0-of-launcher>`. Run after provisioning succeeds
+    /// (so auth/network are already proven good): exit 0 = hostable,
+    /// exit 1 = launcher missing (the SSH-fallback trigger), exit 255 =
+    /// ssh-level failure (do NOT treat as "can't host").
+    pub fn launcher_probe_command(&self, launcher: &str) -> Command {
+        let argv0 = launcher.split_whitespace().next().unwrap_or("uv");
+        let mut cmd = self.base_ssh();
+        cmd.arg("--").arg(format!("command -v {}", sh_quote(argv0)));
+        cmd
+    }
+
+    /// The `ssh` call that runs a RAW shell line on the remote (for lines
+    /// needing shell syntax, e.g. `cat > file`); the caller quotes paths.
+    pub fn exec_shell(&self, line: &str) -> Command {
+        let mut cmd = self.base_ssh();
+        cmd.arg("--").arg(line);
+        cmd
+    }
+
+    /// The `ssh` call that runs ONE argv on the remote (the SSH-fallback
+    /// fs/git transport). `argv` is quoted word-by-word; stdin/stdout carry
+    /// the payload.
+    pub fn exec_command(&self, argv: &[&str]) -> Command {
+        let line = argv
+            .iter()
+            .map(|w| sh_quote(w))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut cmd = self.base_ssh();
+        cmd.arg("--").arg(line);
+        cmd
+    }
+
     /// The `ssh` call that receives ONE pushed credential/config file on
     /// stdin into the remote `~/.code_puppy` (the "puppush" feature; see
     /// `backend::creds_push`). Same pipe-over-stdin convention as sidecar
@@ -506,6 +540,24 @@ mod tests {
     fn launch_line_without_cwd() {
         let line = remote_launch_line(None, "python3");
         assert_eq!(line, "exec python3 \"$HOME/.cache/puppy-home/sidecar.py\"");
+    }
+
+    #[test]
+    fn launcher_probe_checks_argv0_only() {
+        let t = SshTarget::parse("devbox").unwrap();
+        let a = args(&t.launcher_probe_command("uv run --with code-puppy python"));
+        assert_eq!(a.last().unwrap(), "command -v 'uv'");
+        // Custom launcher: still just the first word.
+        let a = args(&t.launcher_probe_command("/opt/py/bin/python3 -u"));
+        assert_eq!(a.last().unwrap(), "command -v '/opt/py/bin/python3'");
+    }
+
+    #[test]
+    fn exec_command_quotes_each_word() {
+        let t = SshTarget::parse("devbox").unwrap();
+        let a = args(&t.exec_command(&["ls", "-1Ap", "/srv/my repo"]));
+        assert_eq!(a.last().unwrap(), "'ls' '-1Ap' '/srv/my repo'");
+        assert!(a.windows(2).any(|w| w == ["-o", "BatchMode=yes"]));
     }
 
     #[test]

@@ -61,7 +61,10 @@ impl PuppyApp {
         let path = remote_path.clone();
         let worker_target = target.clone();
         std::thread::spawn(move || {
-            let result = CodePuppy::spawn_remote(waker.clone(), &worker_target, Some(&path));
+            // The egui safety-net shell shows structured errors as text; the
+            // SSH-fallback OFFER is a gpui-shell feature (PARITY sync note).
+            let result = CodePuppy::spawn_remote(waker.clone(), &worker_target, Some(&path))
+                .map_err(|e| e.to_string());
             let _ = tx.send(result);
             waker.wake();
         });
@@ -94,6 +97,8 @@ impl PuppyApp {
                     Some(crate::workspace::RemoteInfo {
                         label: pending.label,
                         target: pending.target,
+                        // The egui safety net has no fallback flow.
+                        fallback: false,
                     }),
                     fs,
                     git,

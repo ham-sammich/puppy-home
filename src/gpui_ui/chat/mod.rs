@@ -295,6 +295,26 @@ fn ws_toolbar(args: &ChatArgs) -> AnyElement {
         .border_color(t.line_soft)
         .child(new_chat)
         .child(sessions_btn)
+        .children(args.ws.remote_fallback().then(|| {
+            // Mode label, always visible in fallback chats (with the
+            // honest capability note on hover).
+            div()
+                .px_1p5()
+                .py_0p5()
+                .rounded(px(6.))
+                .border_1()
+                .border_color(t.line_soft)
+                .text_size(px(10.))
+                .text_color(t.weak)
+                .id(("ws-fallback-badge", id.0))
+                .tooltip(crate::gpui_ui::widgets::text_tip(
+                    "SSH-fallback: the sidecar runs locally; the agent works \
+                     on the remote via ssh commands. Tree/editor/git/terminal \
+                     are over ssh."
+                        .into(),
+                ))
+                .child("ssh-fallback")
+        }))
         .children(args.ws.is_remote().then(|| creds_btn(args)))
         .children(args.ws.is_git_repo().then_some(git_btn))
         .child(crate::gpui_ui::terminal::terminal_toggle_btn(

@@ -250,6 +250,44 @@ pub(crate) fn overlay(
         ))
         .child(path_section)
         .child(push_section)
+        .children(st.fallback_offer.as_ref().map(|launcher| {
+            // CannotHost verdict: offer SSH-fallback mode explicitly.
+            div()
+                .flex()
+                .flex_col()
+                .gap_1p5()
+                .p_2()
+                .rounded(px(9.))
+                .bg(alpha(t.accent, 0.08))
+                .border_1()
+                .border_color(alpha(t.accent, 0.4))
+                .child(small(
+                    &t,
+                    format!(
+                        "Remote can't run Code Puppy (`{launcher}` not found). \
+                         Connect in SSH-fallback mode? Your LOCAL puppy will \
+                         operate on the project via ssh commands; tree, editor, \
+                         git and terminal still work over ssh."
+                    ),
+                    t.text,
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1p5()
+                        .child(
+                            widgets::primary_btn(&t, "Connect in SSH-fallback mode")
+                                .id("remote-fallback-go")
+                                .on_click(ract(root, RemoteAction::ConnectFallback)),
+                        )
+                        .child(
+                            widgets::btn(&t, "Cancel")
+                                .id("remote-fallback-no")
+                                .on_click(ract(root, RemoteAction::FallbackDismiss)),
+                        ),
+                )
+        }))
         .children(st.error.clone().map(|e| small(&t, e, t.error)))
         .child(footer);
 

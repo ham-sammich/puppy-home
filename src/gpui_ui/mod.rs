@@ -993,11 +993,11 @@ impl RootView {
     /// remote host's puppy — that identity belongs to its workspace's own
     /// surfaces, never the app-global headline (B13.8).
     fn puppy_name(&self) -> String {
-        headline_puppy(
-            self.supervisor
-                .iter()
-                .map(|w| (w.puppy_name.as_str(), w.is_remote())),
-        )
+        headline_puppy(self.supervisor.iter().map(|w| {
+            // SSH-fallback sidecars run LOCALLY — their announcement IS the
+            // local puppy, so they stay headline-eligible (B13.8 semantics).
+            (w.puppy_name.as_str(), w.is_remote() && !w.remote_fallback())
+        }))
         .to_string()
     }
 

@@ -29,7 +29,8 @@ use crate::gpui_ui::{RootView, Screen};
 use crate::views::remote_connect::{ListResult, join_remote, list_remote_blocking, parent_remote};
 use crate::workspace::fs::WorkspaceFs;
 
-/// What a remote-connect worker thread sends back (egui `RemoteSpawn`).
+/// What a remote-connect worker thread sends back: structured errors so
+/// the UI can offer SSH-fallback on CannotHost and only then.
 type RemoteSpawn = Result<
     (
         CodePuppy,
@@ -37,7 +38,7 @@ type RemoteSpawn = Result<
         Arc<dyn WorkspaceFs>,
         Arc<dyn WorkspaceGit>,
     ),
-    String,
+    crate::backend::RemoteError,
 >;
 
 /// An SSH connection being established off-thread + what adoption needs.
@@ -50,6 +51,8 @@ pub(crate) struct RemotePending {
     /// The full target — kept so the workspace can open further ssh
     /// channels (the embedded terminal, B13.7).
     target: SshTarget,
+    /// True when this is an SSH-FALLBACK connect (local sidecar).
+    fallback: bool,
 }
 
 /// The remote folder browser, when open (egui `DirBrowser`).
@@ -73,6 +76,9 @@ pub(crate) struct RemoteState {
     /// Armed "really send credentials?" confirm for the dialog's puppush
     /// button (two-step, like the tree-delete confirm).
     pub(crate) push_confirm: bool,
+    /// Set when the last connect failed with CannotHost (launcher name):
+    /// the dialog offers SSH-fallback mode — explicitly, never silently.
+    pub(crate) fallback_offer: Option<String>,
 }
 
 /// Remote-connect interactions, nested under `DashAction::Remote`.
@@ -83,6 +89,10 @@ pub enum RemoteAction {
     /// Click a config host: seed the target field.
     HostPick(String),
     Connect,
+    /// Connect in SSH-FALLBACK mode (local sidecar + ssh fs/git) after a
+    /// CannotHost verdict — only ever offered, never automatic.
+    ConnectFallback,
+    FallbackDismiss,
     /// "Push my auth + models to this host" — first dispatch arms the
     /// confirm, the second actually sends (it's credentials).
     PushCreds,
@@ -147,6 +157,7 @@ impl RootView {
                     connecting: false,
                     browser: None,
                     push_confirm: false,
+                    fallback_offer: None,
                 });
             }
             RemoteAction::Close => {
@@ -170,6 +181,28 @@ impl RootView {
                         self.begin_remote_connect(target, path);
                     }
                     Err(e) => st.error = Some(e),
+                }
+            }
+            RemoteAction::ConnectFallback => {
+                let target_text = self.remote_text(0, cx);
+                let path = self.remote_text(1, cx).trim().to_string();
+                let Some(st) = &mut self.remote else { return };
+                if st.connecting || path.is_empty() {
+                    return;
+                }
+                match SshTarget::parse(target_text.trim()) {
+                    Ok(target) => {
+                        st.error = None;
+                        st.fallback_offer = None;
+                        st.connecting = true;
+                        self.begin_remote_connect_fallback(target, path);
+                    }
+                    Err(e) => st.error = Some(e),
+                }
+            }
+            RemoteAction::FallbackDismiss => {
+                if let Some(st) = &mut self.remote {
+                    st.fallback_offer = None;
                 }
             }
             RemoteAction::PushCreds => {
@@ -280,6 +313,33 @@ impl RootView {
             root: PathBuf::from(remote_path),
             label,
             target,
+            fallback: false,
+        });
+    }
+
+    /// SSH-fallback connect: LOCAL sidecar (scratch cwd with the generated
+    /// ssh instructions) + ssh-backed fs/git. Same pending pipeline.
+    fn begin_remote_connect_fallback(&mut self, target: SshTarget, remote_path: String) {
+        if self.remote_pending.is_some() {
+            return;
+        }
+        let label = target.destination();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let waker = self.waker.clone();
+        let path = remote_path.clone();
+        let worker_target = target.clone();
+        std::thread::spawn(move || {
+            let result = CodePuppy::spawn_ssh_fallback(waker.clone(), &worker_target, &path)
+                .map_err(crate::backend::RemoteError::Other);
+            let _ = tx.send(result);
+            waker.wake();
+        });
+        self.remote_pending = Some(RemotePending {
+            rx,
+            root: PathBuf::from(remote_path),
+            label,
+            target,
+            fallback: true,
         });
     }
 
@@ -367,12 +427,22 @@ impl RootView {
                     Some(crate::workspace::RemoteInfo {
                         label: pending.label.clone(),
                         target: pending.target.clone(),
+                        fallback: pending.fallback,
                     }),
                     fs,
                     git,
                     backend,
                     ev_rx,
                 );
+                if pending.fallback
+                    && let Some(ws) = self.supervisor.get_mut(id)
+                {
+                    // The honest limitation note, where the user will see it.
+                    ws.push_note(format!(
+                        "SSH-FALLBACK mode: your LOCAL puppy is connected to \n                         {}. The file tree, editor, git view and terminal all \n                         work over ssh. The agent has been instructed to run \n                         every project operation via `ssh` commands — its own \n                         file tools only touch this machine, so treat \n                         agent-side file edits with extra review.",
+                        pending.label
+                    ));
+                }
                 // egui pushes a Chat tab for the new workspace; our shape
                 // of that is jumping to its chat screen. The input MUST
                 // exist before the screen flips — render assumes it
@@ -380,15 +450,28 @@ impl RootView {
                 self.ensure_chat_input(id, cx);
                 self.screen = Screen::Chat(id);
                 self.pending_focus = Some(id);
-                self.toast(format!("Connected {}", pending.label), accent);
+                let mode = if pending.fallback {
+                    " (ssh-fallback)"
+                } else {
+                    ""
+                };
+                self.toast(format!("Connected {}{mode}", pending.label), accent);
                 self.remote = None; // close the dialog
             }
             Err(e) => {
-                // Keep the dialog open and show the failure inline.
+                // Keep the dialog open; CannotHost gets the explicit
+                // fallback OFFER, every other failure stays a plain error
+                // (wrong creds must never silently switch modes).
                 let error_color = self.tokens.error;
                 if let Some(st) = self.remote.as_mut() {
                     st.connecting = false;
-                    st.error = Some(e);
+                    match e {
+                        crate::backend::RemoteError::CannotHost { launcher } => {
+                            st.error = None;
+                            st.fallback_offer = Some(launcher);
+                        }
+                        crate::backend::RemoteError::Other(msg) => st.error = Some(msg),
+                    }
                 } else {
                     self.toast(format!("Remote connect failed: {e}"), error_color);
                 }

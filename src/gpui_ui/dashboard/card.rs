@@ -84,14 +84,22 @@ impl AgentCard {
                             .overflow_hidden()
                             .text_ellipsis()
                             .whitespace_nowrap()
-                            .child(match &s.puppy {
-                                // A foreign (remote-host) puppy: lead the
-                                // meta line with it, subtle — full identity
-                                // theater is reserved for the Den.
-                                Some(p) => {
-                                    format!("\u{1f436} {p} \u{b7} {} \u{b7} {}", s.agent, s.path)
+                            .child({
+                                // A foreign (remote-host) puppy leads the
+                                // meta line (B13.8); ssh-fallback mode is
+                                // flagged at the end — subtle, but always
+                                // visible (the user must know the mode).
+                                let mut meta = match &s.puppy {
+                                    Some(p) => format!(
+                                        "\u{1f436} {p} \u{b7} {} \u{b7} {}",
+                                        s.agent, s.path
+                                    ),
+                                    None => format!("{} \u{b7} {}", s.agent, s.path),
+                                };
+                                if s.fallback {
+                                    meta.push_str(" \u{b7} ssh-fallback");
                                 }
-                                None => format!("{} \u{b7} {}", s.agent, s.path),
+                                meta
                             }),
                     ),
             )
