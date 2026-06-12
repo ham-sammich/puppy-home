@@ -20,7 +20,7 @@ use crate::backend::{AgentInfo, CodePuppy, CommandInfo, CompletionItem, ModelInf
 
 mod ask;
 mod chat;
-mod clipboard;
+pub(crate) mod clipboard;
 mod composer;
 mod diff;
 mod editor;

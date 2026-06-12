@@ -74,6 +74,113 @@ impl Workspace {
         self.begin_turn();
     }
 
+    /// Shell-style history recall, Up direction: the first recall stashes the
+    /// in-progress draft, then each call walks one entry older. Mirrors the
+    /// egui composer's ArrowUp branch exactly; `None` = nothing to recall.
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub(crate) fn history_prev(&mut self, draft: &str) -> Option<String> {
+        match self.history_pos {
+            None => {
+                if self.input_history.is_empty() {
+                    return None;
+                }
+                self.history_stash = draft.to_string();
+                self.history_pos = Some(self.input_history.len() - 1);
+            }
+            Some(0) => return None, // already at the oldest
+            Some(p) => self.history_pos = Some(p - 1),
+        }
+        self.history_pos.map(|p| self.input_history[p].clone())
+    }
+
+    /// History recall, Down direction; walking past the newest entry restores
+    /// the stashed draft (egui ArrowDown branch).
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub(crate) fn history_next(&mut self) -> Option<String> {
+        let p = self.history_pos?;
+        if p + 1 < self.input_history.len() {
+            self.history_pos = Some(p + 1);
+            Some(self.input_history[p + 1].clone())
+        } else {
+            self.history_pos = None;
+            Some(std::mem::take(&mut self.history_stash))
+        }
+    }
+
+    /// Keep the completion engine from treating recalled text as fresh typing
+    /// (egui parked `last_query` + hid the palette after a recall).
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub(crate) fn suppress_completions_for(&mut self, text: &str) {
+        self.last_query = text.to_string();
+        self.comp_visible = false;
+    }
+
+    /// Card action: steer with explicit text + delivery mode. Returns whether
+    /// it was actually sent (a finished turn can't be steered).
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn steer_text(&mut self, text: &str, queue: bool) -> bool {
+        if text.is_empty() || !self.running {
+            return false;
+        }
+        let Some(backend) = &self.backend else {
+            return false;
+        };
+        backend.steer(text, if queue { "queue" } else { "now" });
+        let tag = if queue {
+            "\u{1f4e8} steer (queued)"
+        } else {
+            "\u{1f3af} steer"
+        };
+        self.transcript.push(Entry::User(format!("{tag}: {text}")));
+        if queue {
+            // Optimistic; the next status poll reports the sidecar's count.
+            self.queued_steers += 1;
+        }
+        true
+    }
+
+    /// Card action: pause the running turn at the next safe boundary.
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn pause_turn(&mut self) {
+        if self.running
+            && !self.paused
+            && let Some(backend) = &self.backend
+        {
+            backend.pause();
+            self.paused = true;
+        }
+    }
+
+    /// Card action: resume a turn held at the pause gate.
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn resume_turn(&mut self) {
+        if self.running
+            && self.paused
+            && let Some(backend) = &self.backend
+        {
+            backend.resume();
+            self.paused = false;
+        }
+    }
+
+    /// Card action: cancel the running turn.
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn stop_turn(&mut self) {
+        if self.running
+            && let Some(backend) = &self.backend
+        {
+            backend.cancel();
+        }
+    }
+
+    /// Card action: switch the active model live (sidecar re-announces).
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn set_model_live(&mut self, name: &str) {
+        if let Some(backend) = &self.backend {
+            backend.set_model(name);
+        }
+    }
+
     pub(crate) fn submit(&mut self) {
         let text = self.input.trim().to_string();
         if text.is_empty() || !self.ready || self.running {

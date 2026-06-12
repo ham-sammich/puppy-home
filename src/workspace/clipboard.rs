@@ -22,10 +22,10 @@ pub(crate) fn read_clipboard_image() -> Option<ClipboardImage> {
     })
 }
 
-/// Encode RGBA8 pixels to a base64 PNG (the wire form sent to the sidecar,
-/// where it becomes a pydantic-ai `BinaryContent`). Returns `None` if the
-/// buffer length doesn't match `width * height * 4`.
-pub(crate) fn encode_png_base64(width: usize, height: usize, rgba: &[u8]) -> Option<String> {
+/// Encode RGBA8 pixels to PNG bytes. Returns `None` if the buffer length
+/// doesn't match `width * height * 4`. (Split out of the base64 step so the
+/// GPUI composer can hold raw PNG bytes for the thumbnail.)
+pub(crate) fn encode_png(width: usize, height: usize, rgba: &[u8]) -> Option<Vec<u8>> {
     if width == 0 || height == 0 || rgba.len() != width.checked_mul(height)?.checked_mul(4)? {
         return None;
     }
@@ -37,8 +37,14 @@ pub(crate) fn encode_png_base64(width: usize, height: usize, rgba: &[u8]) -> Opt
         let mut writer = encoder.write_header().ok()?;
         writer.write_image_data(rgba).ok()?;
     }
+    Some(png_bytes)
+}
+
+/// Encode RGBA8 pixels to a base64 PNG (the wire form sent to the sidecar,
+/// where it becomes a pydantic-ai `BinaryContent`).
+pub(crate) fn encode_png_base64(width: usize, height: usize, rgba: &[u8]) -> Option<String> {
     use base64::Engine as _;
-    Some(base64::engine::general_purpose::STANDARD.encode(&png_bytes))
+    Some(base64::engine::general_purpose::STANDARD.encode(encode_png(width, height, rgba)?))
 }
 
 #[cfg(test)]
