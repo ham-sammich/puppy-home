@@ -137,6 +137,10 @@ pub struct RootView {
     window_active: bool,
     last_interaction: Instant,
     presence_idle: bool,
+    /// Probe runs never write session.json (don't clobber the user's state).
+    session_no_save: bool,
+    /// Last saved workspace-list signature (change-gated drain saves).
+    session_sig: String,
 }
 
 impl RootView {
@@ -146,14 +150,31 @@ impl RootView {
         let mut supervisor = Supervisor::new(waker.clone());
         let mut last_error = None;
 
+        // Shared prefs + workspaces: same session.json the egui shell writes.
+        let saved = session::load();
+
+        // Probe runs (PUPPY_GPUI_OPEN) are isolated: they neither restore the
+        // saved workspaces nor write session.json (probe_no_save below).
+        let probing = std::env::var_os("PUPPY_GPUI_OPEN").is_some();
         if let Some(root) = std::env::var_os("PUPPY_GPUI_OPEN") {
             if let Err(e) = supervisor.open(root.into()) {
                 last_error = Some(e);
             }
+        } else {
+            // B10 session restore — exact egui semantics (app/mod.rs):
+            // folders that moved/vanished since last run are skipped quietly.
+            for entry in saved.workspaces.clone() {
+                let path = std::path::PathBuf::from(&entry.path);
+                if !path.is_dir() {
+                    continue; // folder moved/deleted since last run
+                }
+                if let Ok(id) = supervisor.open(path)
+                    && let Some(ws) = supervisor.get_mut(id)
+                {
+                    ws.set_restore(entry.agent, entry.model, entry.autosave);
+                }
+            }
         }
-
-        // Shared prefs: same session.json fields as the egui branch.
-        let saved = session::load();
 
         Self::spawn_drain_loop(cx, wake_rx);
         RootView {
@@ -197,6 +218,8 @@ impl RootView {
             window_active: true,
             last_interaction: Instant::now(),
             presence_idle: false,
+            session_no_save: probing,
+            session_sig: String::new(),
         }
     }
 
@@ -283,6 +306,7 @@ impl RootView {
             loop {
                 let Ok(busy) = this.update(cx, |root, cx| {
                     root.supervisor.drain();
+                    root.save_session_if_changed();
                     root.pump_den();
                     root.maybe_probe_den(cx);
                     root.maybe_send_probe_prompt();
@@ -337,14 +361,48 @@ impl RootView {
             .unwrap_or_else(|| format!("workspace {}", id.0))
     }
 
-    /// Read-modify-write the shared session.json (preserves the egui
-    /// branch's fields — the two apps share one config).
-    fn save_prefs(&self) {
+    /// Read-modify-write the shared session.json: UI prefs + the open-
+    /// workspace list, preserving egui-only fields (theme, dock layout).
+    /// A user flipping shells via the feature flag must never lose state.
+    pub(crate) fn save_prefs(&mut self) {
+        if self.session_no_save {
+            return;
+        }
         let mut s = session::load();
         s.dashboard_view = self.dash_mode;
         s.reduce_motion = self.reduce_motion;
         s.composer_style = self.composer_style;
+        s.workspaces = self
+            .supervisor
+            .iter()
+            .map(|w| session::WorkspaceEntry {
+                path: w.root.to_string_lossy().into_owned(),
+                agent: (!w.agent.is_empty()).then(|| w.agent.clone()),
+                model: (!w.model.is_empty()).then(|| w.model.clone()),
+                autosave: (!w.autosave.is_empty()).then(|| w.autosave.clone()),
+            })
+            .collect();
         session::save(&s);
+    }
+
+    /// Change-gated session save, run from the drain loop: persists when a
+    /// workspace's path/agent/model/autosave set changes (sidecar announces
+    /// agent/model after ready, so launch-time entries fill in shortly).
+    fn save_session_if_changed(&mut self) {
+        if self.session_no_save {
+            return;
+        }
+        let sig: String = format!(
+            "{:?}",
+            self.supervisor
+                .iter()
+                .map(|w| (&w.root, &w.agent, &w.model, &w.autosave))
+                .collect::<Vec<_>>()
+        );
+        if sig != self.session_sig {
+            self.session_sig = sig;
+            self.save_prefs(); // does NOT touch the sig — one bookkeeper
+        }
     }
 
     /// The puppy's name as reported by any sidecar ("Puppy" until one is).
