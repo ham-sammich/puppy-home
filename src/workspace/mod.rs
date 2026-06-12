@@ -208,6 +208,9 @@ pub struct Workspace {
     /// Active "create branch here" dialog (commit hash/short + typed name).
     git_branch_dialog: Option<git_graph::BranchDialog>,
     commit_msg: String,
+    /// Height of the commit-message box (changed only by dragging its strip;
+    /// never derived from layout, so it can't creep -- see render_git).
+    commit_box_h: f32,
     git_action_msg: Option<(bool, String)>,
     /// Active credentials modal when a remote push/pull/fetch needs HTTPS auth.
     git_creds: Option<crate::workspace::state::GitCredsPrompt>,
@@ -332,6 +335,7 @@ impl Workspace {
             git_show_graph: true,
             git_branch_dialog: None,
             commit_msg: String::new(),
+            commit_box_h: 74.0,
             git_action_msg: None,
             git_creds: None,
             commit_view: None,

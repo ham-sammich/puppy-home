@@ -295,13 +295,16 @@ impl Workspace {
         }
         ui.separator();
 
-        // Commit message area — drag its bottom edge to give the box more room
-        // (so it never clips on a short window).
-        egui::Panel::top(egui::Id::new(("git-commit", id)))
-            .resizable(true)
-            .min_size(52.0)
-            .default_size(74.0)
-            .show_inside(ui, |ui| {
+        // Commit message area — drag the strip under it to give the box more
+        // room. Its height is OUR state, changed only by an actual drag: an
+        // egui resizable panel's persisted height can creep a pixel per
+        // repaint under fractional DPI scaling (Windows at 125%/150%), which
+        // made this box slowly grow on its own; integer-scaled macOS never
+        // showed it.
+        let commit_h = self.commit_box_h.clamp(52.0, 320.0);
+        ui.allocate_ui(egui::vec2(ui.available_width(), commit_h), |ui| {
+            ui.set_min_size(egui::vec2(ui.available_width(), commit_h));
+            {
                 ui.add_space(4.0);
                 // Button row pinned to the bottom; the message box fills above it.
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
@@ -342,7 +345,23 @@ impl Workspace {
                             .hint_text("Commit message…"),
                     );
                 });
-            });
+            }
+        });
+        // The drag strip that resizes the commit box (replaces the old
+        // resizable-panel edge; only a real drag ever changes the height).
+        let (strip, strip_resp) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 6.0), egui::Sense::drag());
+        if strip_resp.hovered() || strip_resp.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+        }
+        if strip_resp.dragged() {
+            self.commit_box_h = (self.commit_box_h + strip_resp.drag_delta().y).clamp(52.0, 320.0);
+        }
+        ui.painter().hline(
+            strip.x_range(),
+            strip.center().y,
+            ui.visuals().widgets.noninteractive.bg_stroke,
+        );
 
         // Staged + changed files — drag its bottom edge to resize the list.
         egui::Panel::top(egui::Id::new(("git-stage", id)))
