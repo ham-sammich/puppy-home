@@ -379,7 +379,7 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       view shares the card, so it inherits the fix. List view keeps its
       fixed table column by design (already ellipsized, no bleed) and
       gains a full-id hover tooltip. Verify vs the longest real id at
-      grid/focus/narrow widths = human QA (visual). `<hash2>`
+      grid/focus/narrow widths = human QA (visual). `2253af5`
 
 - [x] FEATURE "puppush" built in (user's ~/.code_puppy/puppush script,
       generalized to all OAuth providers): push local code-puppy auth +
@@ -403,7 +403,7 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       REMOTE side targets legacy ~/.code_puppy only (XDG-configured
       remotes not handled — noted). Unit tests: manifest classification,
       XDG mirror, command shape, summary. Live push vs the human's now
-      working remote = human QA. `<hash2>`
+      working remote = human QA. `2253af5`
 
       SYNC QUEUE (phase-end batch): sidecar/sidecar.py (picker
       intercepts + cwd event + open flags), backend/mod.rs (Wire/UiEvent
