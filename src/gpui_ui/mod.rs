@@ -561,8 +561,12 @@ impl RootView {
             return;
         };
         let mut wants_sessions = false;
+        let mut wants_agent = false;
+        let mut wants_model = false;
         if let Some(ws) = self.supervisor.get_mut(id) {
             wants_sessions = ws.wants_sessions();
+            wants_agent = ws.wants_agent_picker();
+            wants_model = ws.wants_model_picker();
             const SCAN_TAIL: usize = 130; // render tail + slack
             let entries = ws.entries();
             let start = entries.len().saturating_sub(SCAN_TAIL);
@@ -577,6 +581,16 @@ impl RootView {
         }
         if wants_sessions {
             self.dispatch(DashAction::OpenSessions(id), cx);
+        }
+        // Bare /agent and /model typed in chat behave like the CLI: the
+        // switcher opens (the composer's own popovers, B13.4).
+        if wants_agent {
+            self.chat_pop = Some(ChatPop::Agent(id));
+            cx.notify();
+        }
+        if wants_model {
+            self.chat_pop = Some(ChatPop::Model(id));
+            cx.notify();
         }
     }
 

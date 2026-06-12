@@ -119,6 +119,8 @@ pub struct Workspace {
     sessions: Vec<crate::backend::SessionInfo>,
     sessions_current: String,
     show_sessions: bool,
+    show_agent_picker: bool,
+    show_model_picker: bool,
     selected_session: Option<String>,
     session_preview: Option<(String, Vec<crate::backend::SessionEntry>)>,
     preview_cache: CommonMarkCache,
@@ -301,6 +303,8 @@ impl Workspace {
             sessions: Vec::new(),
             sessions_current: String::new(),
             show_sessions: false,
+            show_agent_picker: false,
+            show_model_picker: false,
             selected_session: None,
             session_preview: None,
             preview_cache: CommonMarkCache::default(),
@@ -599,6 +603,16 @@ impl Workspace {
     /// One-shot: the sidecar asked to open the sessions browser (`/resume`).
     pub(crate) fn wants_sessions(&mut self) -> bool {
         std::mem::take(&mut self.show_sessions)
+    }
+
+    /// One-shot: bare `/agent` — the sidecar asked for the agent switcher.
+    pub(crate) fn wants_agent_picker(&mut self) -> bool {
+        std::mem::take(&mut self.show_agent_picker)
+    }
+
+    /// One-shot: bare `/model` — the sidecar asked for the model switcher.
+    pub(crate) fn wants_model_picker(&mut self) -> bool {
+        std::mem::take(&mut self.show_model_picker)
     }
 
     /// Start a fresh chat: the egui `+ New chat` reuses the /clear machinery

@@ -304,9 +304,9 @@ pub enum UiEvent {
     /// The catalog of available slash commands.
     Commands(Vec<CommandInfo>),
     /// The catalog of available agents.
-    Agents(Vec<AgentInfo>),
+    Agents { items: Vec<AgentInfo>, open: bool },
     /// The catalog of available models.
-    Models(Vec<ModelInfo>),
+    Models { items: Vec<ModelInfo>, open: bool },
     /// Completion candidates for a `request_completion` (correlated by `id`).
     Completions { id: u64, items: Vec<CompletionItem> },
     /// An interactive question — answer via `ask_response` / `ask_cancel`.
@@ -436,10 +436,16 @@ enum Wire {
     Agents {
         #[serde(default)]
         items: Vec<AgentInfo>,
+        /// Bare `/agent`: the sidecar asks the GUI to open its switcher.
+        #[serde(default)]
+        open: bool,
     },
     Models {
         #[serde(default)]
         items: Vec<ModelInfo>,
+        /// Bare `/model`: the sidecar asks the GUI to open its switcher.
+        #[serde(default)]
+        open: bool,
     },
     Completions {
         #[serde(default)]
@@ -613,8 +619,8 @@ impl From<Wire> for UiEvent {
                 payload,
             }),
             Wire::Commands { items } => UiEvent::Commands(items),
-            Wire::Agents { items } => UiEvent::Agents(items),
-            Wire::Models { items } => UiEvent::Models(items),
+            Wire::Agents { items, open } => UiEvent::Agents { items, open },
+            Wire::Models { items, open } => UiEvent::Models { items, open },
             Wire::Completions { id, items } => UiEvent::Completions { id, items },
             Wire::Ask { id, questions } => UiEvent::Ask { id, questions },
             Wire::Result { id, output } => UiEvent::Result { id, output },

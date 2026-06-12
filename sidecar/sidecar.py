@@ -37,8 +37,8 @@ Protocol (newline-delimited JSON, UTF-8):
 
   sidecar -> Rust (stdout), one object per line:
     {"event": "ready",    "agent": "...", "model": "...", "cp_version": "...", "cwd": "..."}
-    {"event": "agents",   "items": [{"name","display_name","description","current"}]}
-    {"event": "models",   "items": [{"name","description","current"}]}
+    {"event": "agents",   "items": [{"name","display_name","description","current"}], "open": bool}
+    {"event": "models",   "items": [{"name","description","current"}], "open": bool}
     {"event": "ask",      "id": "...", "questions": [{"header","question","multi_select","options":[{"label","description"}]}]}
     {"event": "commands", "items": [{"name","usage","description","category","aliases"}]}
     {"event": "message",  "source": "bus"|"legacy", "kind": "...",
@@ -425,8 +425,12 @@ class Bridge:
             "owner_name": owner_name,
         })
 
-    def emit_agents(self) -> None:
-        """Send the catalog of available agents (with the current one flagged)."""
+    def emit_agents(self, open_picker: bool = False) -> None:
+        """Send the catalog of available agents (with the current one flagged).
+
+        ``open_picker`` asks the GUI to open its agent switcher — used when
+        a bare ``/agent`` arrives, where the CLI would open its TUI menu.
+        """
         try:
             from code_puppy.agents.agent_manager import (
                 get_agent_descriptions,
@@ -447,10 +451,13 @@ class Bridge:
             }
             for name, display in sorted(available.items(), key=lambda kv: kv[1].lower())
         ]
-        send({"event": "agents", "items": items})
+        send({"event": "agents", "items": items, "open": bool(open_picker)})
 
-    def emit_models(self) -> None:
-        """Send the catalog of available models (with the current one flagged)."""
+    def emit_models(self, open_picker: bool = False) -> None:
+        """Send the catalog of available models (with the current one flagged).
+
+        ``open_picker``: see ``emit_agents`` — the bare ``/model`` analog.
+        """
         try:
             from code_puppy.config import get_global_model_name
             from code_puppy.model_factory import ModelFactory
@@ -466,7 +473,7 @@ class Bridge:
             if isinstance(entry, dict):
                 desc = str(entry.get("description") or entry.get("type") or "")
             items.append({"name": name, "description": desc, "current": name == current})
-        send({"event": "models", "items": items})
+        send({"event": "models", "items": items, "open": bool(open_picker)})
 
     def set_model(self, name: str) -> None:
         """Switch the active model and reload the agent, then re-announce."""
@@ -1778,6 +1785,21 @@ class Bridge:
         in that case we run it as a normal model turn.
         """
         def work() -> None:
+            # Bare /agent and /model open prompt_toolkit menus in the CLI —
+            # headless that picker thread just blocks (5-minute timeout, the
+            # GUI sees nothing). Surface the GUI's own switcher instead,
+            # exactly like /resume surfaces the session browser.
+            toks = text.strip().split()
+            first = toks[0].lower() if toks else ""
+            if len(toks) == 1:
+                if first in ("/agent", "/a", "/agents"):
+                    self.emit_agents(open_picker=True)
+                    send({"event": "command_done", "id": msg_id, "handled": True})
+                    return
+                if first in ("/model", "/m"):
+                    self.emit_models(open_picker=True)
+                    send({"event": "command_done", "id": msg_id, "handled": True})
+                    return
             try:
                 from code_puppy.command_line.command_handler import handle_command
                 result = handle_command(text)
