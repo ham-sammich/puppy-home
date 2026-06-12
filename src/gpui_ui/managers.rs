@@ -110,6 +110,9 @@ pub enum MgrAction {
     AgentToolsNone,
     AgentFormat,
     AgentSubmit,
+    /// Spawn a fresh home-dir session driven by code_puppy's built-in
+    /// `agent-creator` agent (QW7) — conversational agent building.
+    AgentCreatorOpen,
     // models (QW4)
     ModelSetActive(String),
     ModelsEditorOpen,

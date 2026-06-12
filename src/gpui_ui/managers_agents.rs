@@ -22,6 +22,38 @@ impl RootView {
     pub(crate) fn dispatch_agents(&mut self, action: MgrAction, cx: &mut gpui::Context<Self>) {
         let accent = self.tokens.accent;
         match action {
+            // QW7: a fresh $HOME session running the built-in agent-creator
+            // (id verified in code_puppy's agent_creator_agent.py). The
+            // set_agent op rides the spawn pipe — the sidecar applies it
+            // right after init and re-announces via Ready. Always a NEW
+            // workspace: supervisor.open never dedupes, so no existing
+            // chat gets its agent hijacked.
+            MgrAction::AgentCreatorOpen => {
+                let Some(home) = std::env::var_os("HOME")
+                    .or_else(|| std::env::var_os("USERPROFILE"))
+                    .map(std::path::PathBuf::from)
+                else {
+                    self.last_error = Some("No home directory found".into());
+                    return;
+                };
+                match self.supervisor.open(home) {
+                    Ok(id) => {
+                        if let Some(ws) = self.supervisor.get_mut(id) {
+                            ws.set_agent_live("agent-creator");
+                        }
+                        self.manager_open = None;
+                        self.ensure_chat_input(id, cx);
+                        self.screen = crate::gpui_ui::Screen::Chat(id);
+                        self.pending_focus = Some(id);
+                        self.toast(
+                            "Agent Creator session \u{2014} describe the agent you want built"
+                                .into(),
+                            accent,
+                        );
+                    }
+                    Err(e) => self.last_error = Some(e),
+                }
+            }
             MgrAction::AgentSelect(name) => {
                 self.mgr_selected = Some(name.clone());
                 self.agent_delete_confirm = None;

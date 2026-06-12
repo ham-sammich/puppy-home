@@ -308,14 +308,26 @@ pub fn overlay(args: &MgrArgs) -> AnyElement {
             MgrKind::Agents => {
                 // egui gates "Create agent" until the catalog has loaded.
                 let have_catalog = args.ws.is_some_and(|ws| ws.agent_configs.is_some());
-                if have_catalog {
+                let create: AnyElement = if have_catalog {
                     widgets::primary_btn(&t, "\u{ff0b} Create agent")
                         .id("mgr-add")
                         .on_click(act(&args.root, MgrAction::AgentWizardOpen(false)))
                         .into_any_element()
                 } else {
                     disabled_btn(&t, "\u{ff0b} Create agent").into_any_element()
-                }
+                };
+                // QW7: conversational route — a fresh session driven by
+                // code_puppy's built-in agent-creator agent.
+                div()
+                    .flex()
+                    .gap_1p5()
+                    .child(
+                        widgets::btn(&t, "\u{1fa84} Create with Agent Creator")
+                            .id("mgr-agent-creator")
+                            .on_click(act(&args.root, MgrAction::AgentCreatorOpen)),
+                    )
+                    .child(create)
+                    .into_any_element()
             }
             MgrKind::Models => widgets::primary_btn(&t, "\u{270e} Edit extra_models.json")
                 .id("mgr-add")
