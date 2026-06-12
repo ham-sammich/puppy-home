@@ -145,8 +145,14 @@ pub struct Workspace {
     pub queued_steers: u64,
     /// Cumulative provider-reported tokens across all turns this session.
     pub total_tokens: u64,
-    /// Cumulative $ cost; `None` until Code Puppy exposes a cost ledger.
+    /// Context-window utilization 0–100 (sidecar /context estimate); `None`
+    /// when unknowable. Drives the card's context-progress bar.
+    pub ctx_pct: Option<f64>,
+    /// Cumulative $ cost (estimated from bundled models.dev pricing);
+    /// `None` means unknown — render "—", never $0.00.
     pub cost: Option<f64>,
+    /// `cost` carries an "estimated" caveat (≈ marker in the UI).
+    pub cost_estimated: bool,
     /// Recent tok/s samples (one per status poll) for this card's sparkline.
     sparks: state::SparkRing,
     /// MCP server catalog (global Code Puppy config, fetched via this
@@ -317,7 +323,9 @@ impl Workspace {
             last_prompt: String::new(),
             queued_steers: 0,
             total_tokens: 0,
+            ctx_pct: None,
             cost: None,
+            cost_estimated: false,
             sparks: state::SparkRing::new(state::SPARK_SAMPLES),
             mcp_servers: None,
             mcp_generation: 0,

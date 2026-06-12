@@ -339,10 +339,15 @@ class Bridge:
         # Control-surface bookkeeping surfaced in `status` payloads (drives the
         # redesign's agent cards): the last user prompt + cumulative REAL
         # provider-reported token usage (accumulated per turn from
-        # result.usage()). Code Puppy has no $-cost ledger, so dollars stay
-        # None until the library grows one — see emit_status.
+        # result.usage()). The input/output split feeds the cost estimate —
+        # see _cost_estimate for the honest pricing story.
         self.last_prompt = ""
         self.total_tokens = 0
+        self.input_tokens = 0
+        self.output_tokens = 0
+        # (model_name, (input_$/M, output_$/M) | None) — pricing lookups hit
+        # the bundled snapshot on disk, so cache per active model.
+        self._pricing_cache = ("", None)
         self._stop = threading.Event()
 
     # --- initialization ----------------------------------------------------
@@ -536,6 +541,7 @@ class Bridge:
         except Exception:
             pass
 
+        cost, cost_estimated = self._cost_estimate()
         send({
             "event": "status",
             "stats": stats,
@@ -545,11 +551,99 @@ class Bridge:
             "queued": queued,
             "last_prompt": self.last_prompt,
             "total_tokens": self.total_tokens,
-            # Honest gap: Code Puppy exposes no offline per-model pricing or
-            # cost ledger (models.dev pricing needs a network fetch), so we
-            # don't fabricate dollars. null = "unknown", not "free".
-            "cost": None,
+            "ctx_pct": self._ctx_pct(),
+            # Estimated from the library's bundled models.dev snapshot when
+            # the active model is priced there; null = unknown, not free
+            # (e.g. subscription models have no per-token price at all).
+            "cost": cost,
+            "cost_estimated": cost_estimated,
         })
+
+    def _ctx_pct(self):
+        """Context-window utilization (0-100) or None when unknowable.
+
+        Delegates to Code Puppy's own /context plugin estimator
+        (``context_indicator.usage.get_current_usage``): raw chars/2.5
+        heuristic + overhead breakdown over the model's context length,
+        deliberately immune to the token_ratio_learner monkeypatch so the
+        number is stable across model switches. It returns None on any
+        missing piece — we forward that honesty as null.
+        """
+        try:
+            from code_puppy.plugins.context_indicator.usage import get_current_usage
+            u = get_current_usage()
+            if u is None:
+                return None
+            return round(max(0.0, min(100.0, float(u.percent))), 1)
+        except Exception:
+            return None
+
+    def _cost_estimate(self):
+        """(cumulative $ estimate | None, estimated_flag).
+
+        Code Puppy still has no cost ledger, but it bundles a dated
+        models.dev snapshot (``models_dev_api.json``, the same file its
+        model browser falls back to offline). When the active model's API
+        id is priced there, we multiply the session's provider-reported
+        input/output tokens by the $/1M rates. That is an ESTIMATE —
+        the snapshot ages with the library release and cache discounts
+        are not modeled — so the flag travels with the number. Models
+        absent from the snapshot (e.g. subscription `claude_code` ids)
+        stay null: no fabricated dollars.
+        """
+        pricing = self._model_pricing()
+        if pricing is None or (self.input_tokens == 0 and self.output_tokens == 0):
+            return None, True
+        in_per_m, out_per_m = pricing
+        cost = (self.input_tokens * in_per_m + self.output_tokens * out_per_m) / 1e6
+        return round(cost, 4), True
+
+    def _model_pricing(self):
+        """($/1M input, $/1M output) for the active model, else None.
+
+        Resolves the configured model to its API id via ModelFactory, then
+        searches the bundled snapshot: exact provider match first (config
+        ``type`` == models.dev provider id), otherwise the cheapest input
+        rate across providers serving that id — resellers list the same
+        model marked UP, so min() recovers the canonical vendor price.
+        """
+        try:
+            from code_puppy.config import get_global_model_name
+            model_name = get_global_model_name() or ""
+        except Exception:
+            return None
+        if model_name == self._pricing_cache[0]:
+            return self._pricing_cache[1]
+        pricing = None
+        try:
+            import code_puppy as _cp
+            from code_puppy.model_factory import ModelFactory
+            cfg = (ModelFactory.load_config() or {}).get(model_name) or {}
+            api_id = str(cfg.get("name") or "")
+            provider = str(cfg.get("type") or "")
+            if api_id:
+                snap_path = os.path.join(
+                    os.path.dirname(_cp.__file__), "models_dev_api.json")
+                with open(snap_path, "r", encoding="utf-8") as fh:
+                    snapshot = json.load(fh)
+                exact, cheapest = None, None
+                for prov_id, prov in snapshot.items():
+                    m = (prov.get("models") or {}).get(api_id)
+                    cost = (m or {}).get("cost") or {}
+                    if "input" not in cost or "output" not in cost:
+                        continue
+                    rate = (float(cost["input"]), float(cost["output"]))
+                    if prov_id == provider:
+                        exact = rate
+                        break
+                    if cheapest is None or rate[0] < cheapest[0]:
+                        cheapest = rate
+                pricing = exact or cheapest
+        except Exception:
+            log("pricing lookup failed:\n" + traceback.format_exc())
+            pricing = None
+        self._pricing_cache = (model_name, pricing)
+        return pricing
 
     # --- MCP servers (Code Puppy's MCPManager) ------------------------------
 
@@ -1661,14 +1755,16 @@ class Bridge:
             usage = usage_fn() if callable(usage_fn) else None
             if usage is None:
                 return
+            inp = getattr(usage, "input_tokens", None)
+            if inp is None:
+                inp = getattr(usage, "request_tokens", 0)
+            out = getattr(usage, "output_tokens", None)
+            if out is None:
+                out = getattr(usage, "response_tokens", 0)
+            self.input_tokens += int(inp or 0)
+            self.output_tokens += int(out or 0)
             total = getattr(usage, "total_tokens", None)
             if total is None:
-                inp = getattr(usage, "input_tokens", None)
-                if inp is None:
-                    inp = getattr(usage, "request_tokens", 0)
-                out = getattr(usage, "output_tokens", None)
-                if out is None:
-                    out = getattr(usage, "response_tokens", 0)
                 total = (inp or 0) + (out or 0)
             self.total_tokens += int(total or 0)
         except Exception:
