@@ -42,7 +42,7 @@ pub use state::{InstanceStatus, SPARK_SAMPLES, SparkRing};
 
 use ask::AskState;
 use diff::DiffRecord;
-use state::{EditorItem, Entry, FileBuffer, GitView, Pending};
+use state::{EditorItem, Entry, FileBuffer, GitView, Pending, PendingKind};
 
 /// Stable, never-reused identity for a workspace.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -377,16 +377,31 @@ impl Workspace {
     }
 
     /// Whether the running turn is held at the pause gate. Mirrors the private
-    /// flag for views outside this module (the redesign's dashboard cards).
-    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// flag for views outside this module. (The dashboard reads the derived
+    /// `InstanceStatus::Paused` instead; this stays for the chat redesign.)
+    #[allow(dead_code)]
     pub fn is_paused(&self) -> bool {
         self.paused
     }
 
     /// Recent tok/s samples, oldest → newest (this card's sparkline data).
-    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn spark_history(&self) -> &[f32] {
         self.sparks.samples()
+    }
+
+    /// The model catalog the sidecar announced (the card's model popover).
+    pub fn model_catalog(&self) -> &[ModelInfo] {
+        &self.models
+    }
+
+    /// The question text of an outstanding interactive request, if any (shown
+    /// on waiting cards + the attention banner).
+    pub fn pending_question(&self) -> Option<&str> {
+        self.pending.as_ref().map(|p| match &p.kind {
+            PendingKind::Input { prompt, .. } => prompt.as_str(),
+            PendingKind::Confirm { title, .. } => title.as_str(),
+            PendingKind::Select { prompt, .. } => prompt.as_str(),
+        })
     }
 
     /// Session diff totals: (+lines, −lines) across recorded diff records

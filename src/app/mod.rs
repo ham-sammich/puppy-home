@@ -12,7 +12,7 @@ use crate::dock_layout;
 use crate::session::Theme;
 use crate::shell::{Shell, ShellAction, Tab};
 use crate::supervisor::Supervisor;
-use crate::theme::{TerminalTheme, ThemePalette};
+use crate::theme::{Accents, TerminalTheme, ThemePalette};
 use crate::workspace::WorkspaceId;
 
 pub struct PuppyApp {
@@ -43,6 +43,11 @@ pub struct PuppyApp {
     skills: crate::views::skills_manager::SkillsManagerView,
     /// State for the Agent Manager tab (one instance).
     agents: crate::views::agent_manager::AgentManagerView,
+    /// State for the Dashboard tab (view mode, inline inputs, toasts).
+    dashboard: crate::views::dashboard::DashboardView,
+    /// Resolved brand/status colors for the active theme (recomputed on theme
+    /// change, never per frame).
+    accents: Accents,
     /// State for the Puppy Pack tab (one instance; holds the live relay link).
     pack: crate::views::pack_panel::PackView,
     /// Last activity summary broadcast to the pack (skip resends of the same).
@@ -95,6 +100,7 @@ impl PuppyApp {
         });
         let saved = crate::session::load();
         let theme = saved.theme;
+        let dashboard_mode = saved.dashboard_view;
         let themes = crate::theme::load_themes();
         let terminal_theme = crate::theme::load_terminal();
         // Seed the editor buffer with the active theme (or a fresh dark base).
@@ -164,9 +170,10 @@ impl PuppyApp {
         // Seed the signature so we don't immediately rewrite the same session
         // (agent/model fill in once each sidecar is ready, which then persists).
         let last_session_sig = dock_layout::persist_sig(
-            &dock_layout::current_session(&sup, theme.clone(), Some(&dock)),
+            &dock_layout::current_session(&sup, theme.clone(), dashboard_mode, Some(&dock)),
             Some(&dock),
         );
+        let accents = Accents::from_palette(&crate::theme::palette_for(&theme, &themes));
 
         PuppyApp {
             sup,
@@ -193,6 +200,8 @@ impl PuppyApp {
             persist_check_at: std::time::Instant::now(),
             skills: crate::views::skills_manager::SkillsManagerView::default(),
             agents: crate::views::agent_manager::AgentManagerView::default(),
+            dashboard: crate::views::dashboard::DashboardView::with_mode(dashboard_mode),
+            accents,
             remote: None,
             remote_pending: None,
         }
@@ -212,8 +221,12 @@ impl PuppyApp {
 
     /// The unthrottled write-if-changed pass (used by the throttle + on exit).
     fn persist_session_now(&mut self) {
-        let session =
-            dock_layout::current_session(&self.sup, self.theme.clone(), self.dock.as_ref());
+        let session = dock_layout::current_session(
+            &self.sup,
+            self.theme.clone(),
+            self.dashboard.mode,
+            self.dock.as_ref(),
+        );
         let sig = dock_layout::persist_sig(&session, self.dock.as_ref());
         if sig != self.last_session_sig {
             self.last_session_sig = sig;
@@ -324,6 +337,37 @@ impl PuppyApp {
                             dock.find_tab_from(|t| matches!(t, Tab::Chat(x) if *x == id))
                     {
                         let _ = dock.set_active_tab(path);
+                    }
+                }
+                ShellAction::Pause(id) => {
+                    if let Some(ws) = self.sup.get_mut(id) {
+                        ws.pause_turn();
+                    }
+                }
+                ShellAction::Resume(id) => {
+                    if let Some(ws) = self.sup.get_mut(id) {
+                        ws.resume_turn();
+                    }
+                }
+                ShellAction::Stop(id) => {
+                    if let Some(ws) = self.sup.get_mut(id) {
+                        ws.stop_turn();
+                    }
+                }
+                ShellAction::Restart(id) => self.sup.restart(id),
+                ShellAction::Steer { id, text, queue } => {
+                    if let Some(ws) = self.sup.get_mut(id) {
+                        ws.steer_text(&text, queue);
+                    }
+                }
+                ShellAction::SendPrompt { id, text } => {
+                    if let Some(ws) = self.sup.get_mut(id) {
+                        ws.send_prompt_text(&text);
+                    }
+                }
+                ShellAction::SetModel { id, model } => {
+                    if let Some(ws) = self.sup.get_mut(id) {
+                        ws.set_model_live(&model);
                     }
                 }
             }
@@ -578,6 +622,8 @@ impl eframe::App for PuppyApp {
                 self.theme_palette = p.clone();
             }
             apply_theme(ui.ctx(), &self.theme, &self.themes);
+            self.accents =
+                Accents::from_palette(&crate::theme::palette_for(&self.theme, &self.themes));
         }
         if open_editor {
             self.theme_editor_open = true;
@@ -597,6 +643,7 @@ impl eframe::App for PuppyApp {
                 // Live preview: apply the working palette directly (it may not be
                 // saved to the library yet).
                 ui.ctx().set_visuals(self.theme_palette.to_visuals());
+                self.accents = Accents::from_palette(&self.theme_palette);
                 if !matches!(self.theme, Theme::Custom(_)) {
                     self.theme = Theme::Custom(self.theme_palette.name.clone());
                 }
@@ -618,6 +665,8 @@ impl eframe::App for PuppyApp {
                 skills: &mut self.skills,
                 agents: &mut self.agents,
                 pack: &mut self.pack,
+                dashboard: &mut self.dashboard,
+                accents: &self.accents,
                 actions: &mut actions,
             };
             DockArea::new(&mut dock)

@@ -12,14 +12,22 @@ use std::collections::HashMap;
 
 use egui_dock::{DockState, Node};
 
-use crate::session::{SavedTab, Session, Theme, WorkspaceEntry, normalize_layout_rects};
+use crate::session::{
+    DashboardViewMode, SavedTab, Session, Theme, WorkspaceEntry, normalize_layout_rects,
+};
 use crate::shell::Tab;
 use crate::supervisor::Supervisor;
 use crate::workspace::WorkspaceId;
 
 /// Snapshot the open workspaces + dock layout as a persistable session.
-pub fn current_session(sup: &Supervisor, theme: Theme, dock: Option<&DockState<Tab>>) -> Session {
+pub fn current_session(
+    sup: &Supervisor,
+    theme: Theme,
+    dashboard_view: DashboardViewMode,
+    dock: Option<&DockState<Tab>>,
+) -> Session {
     Session {
+        dashboard_view,
         workspaces: sup
             .iter()
             .map(|w| WorkspaceEntry {

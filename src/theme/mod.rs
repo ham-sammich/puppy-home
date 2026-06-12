@@ -110,9 +110,11 @@ fn d_status_error() -> String {
 /// The redesign's accent/status tokens resolved to `Color32` once — views hold
 /// one of these instead of parsing hex per frame. Field names follow
 /// EGUI_GUIDE.md's `Accents` recipe.
-#[allow(dead_code)] // consumed by the redesign UI branches
 pub struct Accents {
     pub accent: egui::Color32,
+    /// Gradient / hover partner of `accent` (the workspace-chat redesign
+    /// consumes it; the dashboard doesn't need it yet).
+    #[allow(dead_code)]
     pub accent_2: egui::Color32,
     pub accent_ink: egui::Color32,
     pub run: egui::Color32,
@@ -125,7 +127,6 @@ pub struct Accents {
 impl Accents {
     /// Resolve from a palette. Malformed hex falls back to mid-gray, matching
     /// the rest of the palette's lenient parsing.
-    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn from_palette(p: &ThemePalette) -> Self {
         Accents {
             accent: p.col(&p.accent),
@@ -282,18 +283,24 @@ impl ThemePalette {
     }
 }
 
-/// Resolve the egui visuals for a selection, looking custom themes up by name in
-/// `library`. An unknown custom name falls back to Dark.
-pub fn visuals_for(theme: &Theme, library: &[ThemePalette]) -> egui::Visuals {
+/// Resolve the active palette for a theme selection, looking custom themes up
+/// by name in `library`. An unknown custom name falls back to Dark. The single
+/// source feeding both `visuals_for` and the views' resolved [`Accents`].
+pub fn palette_for(theme: &Theme, library: &[ThemePalette]) -> ThemePalette {
     match theme {
-        Theme::Dark => ThemePalette::dark().to_visuals(),
-        Theme::Light => ThemePalette::light().to_visuals(),
+        Theme::Dark => ThemePalette::dark(),
+        Theme::Light => ThemePalette::light(),
         Theme::Custom(name) => library
             .iter()
             .find(|p| &p.name == name)
-            .map(ThemePalette::to_visuals)
-            .unwrap_or_else(|| ThemePalette::dark().to_visuals()),
+            .cloned()
+            .unwrap_or_else(ThemePalette::dark),
     }
+}
+
+/// Resolve the egui visuals for a selection (see [`palette_for`]).
+pub fn visuals_for(theme: &Theme, library: &[ThemePalette]) -> egui::Visuals {
+    palette_for(theme, library).to_visuals()
 }
 
 /// Per-OS config path for a puppy-home file: `<config>/puppy-home/<file>`.

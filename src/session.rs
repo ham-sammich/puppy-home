@@ -21,6 +21,22 @@ pub struct Session {
     /// run or pre-layout sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<DockState<SavedTab>>,
+    /// The dashboard's fleet view (Grid / List / Focus), remembered per machine.
+    #[serde(default)]
+    pub dashboard_view: DashboardViewMode,
+}
+
+/// How the dashboard lays out the fleet. Persisted in `session.json`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DashboardViewMode {
+    /// Responsive card grid (`minmax(420px, 1fr)`).
+    #[default]
+    Grid,
+    /// Dense table.
+    List,
+    /// Single column, max 880px.
+    Focus,
 }
 
 /// A persistable mirror of `shell::Tab` using stable keys instead of runtime
@@ -188,6 +204,7 @@ mod tests {
             ],
             theme: Theme::Light,
             layout: None,
+            dashboard_view: DashboardViewMode::Focus,
         };
         save(&session);
 
@@ -202,6 +219,7 @@ mod tests {
         );
         assert_eq!(loaded.workspaces[1].agent, None);
         assert_eq!(loaded.theme, Theme::Light);
+        assert_eq!(loaded.dashboard_view, DashboardViewMode::Focus);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -211,6 +229,7 @@ mod tests {
         let s: Session = serde_json::from_str("{}").unwrap();
         assert!(s.workspaces.is_empty());
         assert_eq!(s.theme, Theme::Dark);
+        assert_eq!(s.dashboard_view, DashboardViewMode::Grid);
     }
 
     #[test]
@@ -226,6 +245,7 @@ mod tests {
             workspaces: vec![],
             theme: Theme::Custom("Neon".into()),
             layout: None,
+            dashboard_view: DashboardViewMode::default(),
         };
         let j = serde_json::to_string(&s).unwrap();
         assert!(j.contains("\"theme\":\"custom:Neon\""));
@@ -241,6 +261,7 @@ mod tests {
             workspaces: vec![],
             theme: Theme::Dark,
             layout: Some(dock),
+            dashboard_view: DashboardViewMode::default(),
         };
         let j = serde_json::to_string(&s).unwrap();
         let back: Session = serde_json::from_str(&j).unwrap();
@@ -266,6 +287,7 @@ mod tests {
             workspaces: vec![],
             theme: Theme::Light,
             layout: None,
+            dashboard_view: DashboardViewMode::default(),
         };
         let j = serde_json::to_string(&s).unwrap();
         assert!(j.contains("\"theme\":\"light\""));

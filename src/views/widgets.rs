@@ -11,8 +11,6 @@
 //! * decorative loops are gated on `live` so an idle view schedules nothing;
 //! * nothing here sizes itself from `available_*` (callers pass sizes).
 
-#![allow(dead_code)] // TODO(task 1.2): the dashboard rebuild consumes the kit
-
 use std::time::{Duration, Instant};
 
 use eframe::egui::{

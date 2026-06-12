@@ -63,22 +63,45 @@ impl Workspace {
         self.record_history(&text);
         if text.starts_with('/') {
             self.dispatch_command(&text);
-        } else if let Some(backend) = &self.backend {
+        } else if self.backend.is_some() {
             let images: Vec<String> = self
                 .pending_images
                 .iter()
                 .map(|p| p.png_base64.clone())
                 .collect();
-            self.transcript.push(Entry::User(text.clone()));
-            if !images.is_empty() {
-                self.transcript.push(Entry::Note(format!(
-                    "Sent {} image(s) with this message.",
-                    images.len()
-                )));
-            }
-            backend.send_prompt(&text, &images);
             self.pending_images.clear();
-            self.begin_turn();
+            self.send_user_prompt(text, images);
+        }
+    }
+
+    /// The one prompt-sending path (composer submit + dashboard "New prompt"):
+    /// records the turn in the transcript and starts turn tracking.
+    fn send_user_prompt(&mut self, text: String, images: Vec<String>) {
+        let Some(backend) = &self.backend else { return };
+        self.transcript.push(Entry::User(text.clone()));
+        if !images.is_empty() {
+            self.transcript.push(Entry::Note(format!(
+                "Sent {} image(s) with this message.",
+                images.len()
+            )));
+        }
+        backend.send_prompt(&text, &images);
+        // Optimistic: the card shows the prompt immediately; the next status
+        // poll confirms it from the sidecar.
+        self.last_prompt = text;
+        self.begin_turn();
+    }
+
+    /// Card action: send a fresh prompt (or slash command) with no images.
+    pub fn send_prompt_text(&mut self, text: &str) {
+        let text = text.trim().to_string();
+        if text.is_empty() || !self.ready || self.running || self.backend.is_none() {
+            return;
+        }
+        if text.starts_with('/') {
+            self.dispatch_command(&text);
+        } else {
+            self.send_user_prompt(text, Vec::new());
         }
     }
 
@@ -90,20 +113,70 @@ impl Workspace {
             return;
         }
         self.record_history(&text);
-        let mode = if self.steer_queue_mode {
-            "queue"
-        } else {
-            "now"
-        };
-        if let Some(backend) = &self.backend {
-            backend.steer(&text, mode);
+        let queue = self.steer_queue_mode;
+        if self.steer_text(&text, queue) {
             self.input.clear();
-            let tag = if self.steer_queue_mode {
-                "📨 steer (queued)"
-            } else {
-                "🎯 steer"
-            };
-            self.transcript.push(Entry::User(format!("{tag}: {text}")));
+        }
+    }
+
+    /// Card action: steer with explicit text + delivery mode. Returns whether
+    /// it was actually sent (a finished turn can't be steered).
+    pub fn steer_text(&mut self, text: &str, queue: bool) -> bool {
+        if text.is_empty() || !self.running {
+            return false;
+        }
+        let Some(backend) = &self.backend else {
+            return false;
+        };
+        backend.steer(text, if queue { "queue" } else { "now" });
+        let tag = if queue {
+            "📨 steer (queued)"
+        } else {
+            "🎯 steer"
+        };
+        self.transcript.push(Entry::User(format!("{tag}: {text}")));
+        if queue {
+            // Optimistic; the next status poll reports the sidecar's count.
+            self.queued_steers += 1;
+        }
+        true
+    }
+
+    /// Card action: pause the running turn at the next safe boundary.
+    pub fn pause_turn(&mut self) {
+        if self.running
+            && !self.paused
+            && let Some(backend) = &self.backend
+        {
+            backend.pause();
+            self.paused = true;
+        }
+    }
+
+    /// Card action: resume a turn held at the pause gate.
+    pub fn resume_turn(&mut self) {
+        if self.running
+            && self.paused
+            && let Some(backend) = &self.backend
+        {
+            backend.resume();
+            self.paused = false;
+        }
+    }
+
+    /// Card action: cancel the running turn.
+    pub fn stop_turn(&mut self) {
+        if self.running
+            && let Some(backend) = &self.backend
+        {
+            backend.cancel();
+        }
+    }
+
+    /// Card action: switch the active model live (sidecar re-announces).
+    pub fn set_model_live(&mut self, name: &str) {
+        if let Some(backend) = &self.backend {
+            backend.set_model(name);
         }
     }
 

@@ -103,9 +103,16 @@ impl Supervisor {
     }
 
     /// Fleet-wide tok/s samples, oldest → newest (the Command Center spark).
-    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn aggregate_sparks(&self) -> &[f32] {
         self.agg_sparks.samples()
+    }
+
+    /// Relaunch a dead workspace's sidecar (the dashboard card's Restart).
+    pub fn restart(&mut self, id: WorkspaceId) {
+        let waker = self.waker.clone();
+        if let Some(ws) = self.workspaces.get_mut(&id) {
+            ws.restart(waker);
+        }
     }
 
     pub fn get(&self, id: WorkspaceId) -> Option<&Workspace> {

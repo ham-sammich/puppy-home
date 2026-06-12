@@ -28,10 +28,8 @@ const JETBRAINS_MONO: &[u8] = include_bytes!("../assets/JetBrainsMono-Regular.tt
 const JETBRAINS_MONO_BOLD: &[u8] = include_bytes!("../assets/JetBrainsMono-Bold.ttf");
 
 /// Named family for Space Grotesk Bold (headings / emphasized labels).
-#[allow(dead_code)] // consumed by the redesign UI branches
 pub const FAMILY_GROTESK_BOLD: &str = "grotesk-bold";
 /// Named family for JetBrains Mono Bold (emphasized stats).
-#[allow(dead_code)] // consumed by the redesign UI branches
 pub const FAMILY_JBMONO_BOLD: &str = "jbmono-bold";
 
 /// Load a system font file into the definitions; returns whether it was found.

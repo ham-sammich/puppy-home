@@ -36,6 +36,10 @@ impl InstanceStatus {
         }
     }
 
+    /// Hard-coded status color. The redesigned dashboard derives colors from
+    /// the theme's `Accents` instead (`views::dashboard::card_state`); this
+    /// stays for theme-less consumers (tab strips, future views).
+    #[allow(dead_code)]
     pub fn color(self) -> egui::Color32 {
         match self {
             InstanceStatus::Starting => egui::Color32::from_rgb(150, 150, 150),

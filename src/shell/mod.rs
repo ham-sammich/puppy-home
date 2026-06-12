@@ -36,6 +36,30 @@ pub enum ShellAction {
     FocusChat(WorkspaceId),
     /// Focus a workspace's chat tab and switch its editor to the Changes view.
     ShowChanges(WorkspaceId),
+    /// Pause the running turn at the next safe boundary (card action).
+    Pause(WorkspaceId),
+    /// Resume a turn held at the pause gate (card action).
+    Resume(WorkspaceId),
+    /// Cancel the running turn (card action).
+    Stop(WorkspaceId),
+    /// Relaunch a dead sidecar and restore its session (card "Restart").
+    Restart(WorkspaceId),
+    /// Steer the running turn; `queue` delivers after the current turn.
+    Steer {
+        id: WorkspaceId,
+        text: String,
+        queue: bool,
+    },
+    /// Send a fresh prompt from a card (idle/done states).
+    SendPrompt {
+        id: WorkspaceId,
+        text: String,
+    },
+    /// Live model switch via the card's model pill.
+    SetModel {
+        id: WorkspaceId,
+        model: String,
+    },
 }
 
 /// Transient `TabViewer` holding mutable access to app state for one frame.
@@ -46,6 +70,10 @@ pub struct Shell<'a> {
     pub skills: &'a mut views::skills_manager::SkillsManagerView,
     pub agents: &'a mut views::agent_manager::AgentManagerView,
     pub pack: &'a mut views::pack_panel::PackView,
+    /// Dashboard view state (Grid/List/Focus, inline inputs, toasts).
+    pub dashboard: &'a mut views::dashboard::DashboardView,
+    /// Resolved brand/status colors for the active theme.
+    pub accents: &'a crate::theme::Accents,
     pub actions: &'a mut Vec<ShellAction>,
 }
 
@@ -76,7 +104,14 @@ impl TabViewer for Shell<'_> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match tab {
-            Tab::Dashboard => views::dashboard::render(ui, self.sup, self.browser, self.actions),
+            Tab::Dashboard => views::dashboard::render(
+                ui,
+                self.dashboard,
+                self.sup,
+                self.browser,
+                self.accents,
+                self.actions,
+            ),
             Tab::Chat(id) => match self.sup.get_mut(*id) {
                 Some(ws) => ws.render_chat(ui, self.browser),
                 None => closed_placeholder(ui),
