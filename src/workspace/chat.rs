@@ -177,9 +177,9 @@ impl Workspace {
         };
         backend.steer(text, if queue { "queue" } else { "now" });
         let tag = if queue {
-            "📨 steer (queued)"
+            "\u{1f4e8} steer (queued)"
         } else {
-            "🎯 steer"
+            "\u{1f3af} steer"
         };
         self.transcript.push(Entry::User(format!("{tag}: {text}")));
         if queue {

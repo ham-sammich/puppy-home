@@ -21,7 +21,9 @@ pub struct Session {
     /// run or pre-layout sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<DockState<SavedTab>>,
-    /// The dashboard's fleet view (Grid / List / Focus), remembered per machine.
+    /// The dashboard's fleet view (Grid / List / Focus), remembered per
+    /// machine. Canonical on redesign/shared-backend (drift reconciliation);
+    /// this is an identical copy so session.json stays portable.
     #[serde(default)]
     pub dashboard_view: DashboardViewMode,
     /// The chat composer style (a user preference, applies to all workspaces).
@@ -40,40 +42,10 @@ pub struct Session {
     pub puppy_avatar: String,
 }
 
-/// The avatar pair `(user, puppy)` with defaults applied, loaded ONCE per
-/// run (the egui shell has no picker; changes made in the GPUI shell show
-/// up on the next launch — no per-frame file reads).
-pub fn avatars() -> &'static (String, String) {
-    static AVATARS: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
-    AVATARS.get_or_init(|| {
-        let s = load();
-        (
-            if s.user_avatar.is_empty() {
-                "\u{1f9d1}".to_string()
-            } else {
-                s.user_avatar
-            },
-            if s.puppy_avatar.is_empty() {
-                "\u{1f436}".to_string()
-            } else {
-                s.puppy_avatar
-            },
-        )
-    })
-}
-
-/// App-level UI preferences snapshotted into a [`Session`] on save (keeps
-/// `current_session`'s signature from growing a parameter per preference).
-#[derive(Clone)]
-pub struct UiPrefs {
-    pub theme: Theme,
-    pub dashboard_view: DashboardViewMode,
-    pub composer_style: ComposerStyle,
-    pub reduce_motion: bool,
-}
-
 /// Which composer skin the chat dock renders. One shared input state
 /// underneath; this only picks the layout. Persisted per machine.
+/// Canonical on redesign/shared-backend; identical copy here
+/// (incl. serde casing) so session.json stays portable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ComposerStyle {
@@ -116,6 +88,7 @@ impl ComposerStyle {
 }
 
 /// How the dashboard lays out the fleet. Persisted in `session.json`.
+/// Canonical on redesign/shared-backend; identical copy here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DashboardViewMode {
@@ -127,6 +100,47 @@ pub enum DashboardViewMode {
     /// Single column, max 880px.
     Focus,
 }
+
+// ---------------------------------------------------------------------------
+// EGUI-SHELL-ONLY ADDITIONS. Everything between this banner and the
+// "end egui-shell-only" marker is consumed only by this branch's UI and
+// is NOT part of the shared session schema. New shared fields/enums go
+// above, in the canonical region mirrored from shared-backend.
+// ---------------------------------------------------------------------------
+
+/// The avatar pair `(user, puppy)` with defaults applied, loaded ONCE per
+/// run (the egui shell has no picker; changes made in the GPUI shell show
+/// up on the next launch — no per-frame file reads).
+pub fn avatars() -> &'static (String, String) {
+    static AVATARS: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
+    AVATARS.get_or_init(|| {
+        let s = load();
+        (
+            if s.user_avatar.is_empty() {
+                "\u{1f9d1}".to_string()
+            } else {
+                s.user_avatar
+            },
+            if s.puppy_avatar.is_empty() {
+                "\u{1f436}".to_string()
+            } else {
+                s.puppy_avatar
+            },
+        )
+    })
+}
+
+/// App-level UI preferences snapshotted into a [`Session`] on save (keeps
+/// `current_session`'s signature from growing a parameter per preference).
+#[derive(Clone)]
+pub struct UiPrefs {
+    pub theme: Theme,
+    pub dashboard_view: DashboardViewMode,
+    pub composer_style: ComposerStyle,
+    pub reduce_motion: bool,
+}
+
+// --------------------------- end egui-shell-only --------------------------
 
 /// A persistable mirror of `shell::Tab` using stable keys instead of runtime
 /// ids, so the dock layout survives a restart. Browser tabs are intentionally
