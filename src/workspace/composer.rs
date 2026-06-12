@@ -101,32 +101,20 @@ impl Workspace {
             && !self.input_history.is_empty()
         {
             let m = egui::Modifiers::NONE;
+            // Shared shell-style recall (workspace/chat.rs) — one history
+            // implementation across both frontends.
             let mut recalled = false;
             if ui.input_mut(|i| i.consume_key(m, egui::Key::ArrowUp)) {
-                match self.history_pos {
-                    None => {
-                        self.history_stash = self.input.clone();
-                        self.history_pos = Some(self.input_history.len() - 1);
-                    }
-                    Some(0) => {}
-                    Some(p) => self.history_pos = Some(p - 1),
-                }
-                if let Some(p) = self.history_pos {
-                    self.input = self.input_history[p].clone();
+                let draft = self.input.clone();
+                if let Some(text) = self.history_prev(&draft) {
+                    self.input = text;
                     recalled = true;
                 }
-            } else if ui.input_mut(|i| i.consume_key(m, egui::Key::ArrowDown))
-                && let Some(p) = self.history_pos
-            {
-                if p + 1 < self.input_history.len() {
-                    self.history_pos = Some(p + 1);
-                    self.input = self.input_history[p + 1].clone();
-                } else {
-                    // Walked past the newest entry: restore the stashed draft.
-                    self.history_pos = None;
-                    self.input = std::mem::take(&mut self.history_stash);
+            } else if ui.input_mut(|i| i.consume_key(m, egui::Key::ArrowDown)) {
+                if let Some(text) = self.history_next() {
+                    self.input = text;
+                    recalled = true;
                 }
-                recalled = true;
             }
             if recalled {
                 // Park the caret at the end of the recalled line and keep the
@@ -138,8 +126,8 @@ impl Workspace {
                         .set_char_range(Some(egui::text_selection::CCursorRange::one(end)));
                     state.store(ui.ctx(), input_id);
                 }
-                self.last_query = self.input.clone();
-                self.comp_visible = false;
+                let recalled_text = self.input.clone();
+                self.suppress_completions_for(&recalled_text);
             }
         }
 
