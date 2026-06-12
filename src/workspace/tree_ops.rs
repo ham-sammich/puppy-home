@@ -71,7 +71,7 @@ impl Workspace {
     }
 
     /// Remove a file/folder from disk and close any editor tabs/buffers for it.
-    fn delete_path(&mut self, path: &Path, is_dir: bool) -> Result<(), String> {
+    pub(crate) fn delete_path(&mut self, path: &Path, is_dir: bool) -> Result<(), String> {
         if is_dir {
             self.fs.remove_dir_all(path).map_err(|e| e.to_string())?;
         } else {
@@ -216,7 +216,7 @@ impl Workspace {
         }
     }
 
-    fn perform_rename(&mut self, path: &Path, new_name: &str) -> Result<(), String> {
+    pub(crate) fn perform_rename(&mut self, path: &Path, new_name: &str) -> Result<(), String> {
         let dest = sibling_path(path.parent(), new_name)?;
         if self.fs.exists(&dest) {
             return Err(format!(
@@ -239,7 +239,12 @@ impl Workspace {
         Ok(())
     }
 
-    fn perform_new(&mut self, parent: &Path, is_dir: bool, name: &str) -> Result<(), String> {
+    pub(crate) fn perform_new(
+        &mut self,
+        parent: &Path,
+        is_dir: bool,
+        name: &str,
+    ) -> Result<(), String> {
         let dest = sibling_path(Some(parent), name)?;
         if self.fs.exists(&dest) {
             return Err(format!("\u{201c}{}\u{201d} already exists", name.trim()));
