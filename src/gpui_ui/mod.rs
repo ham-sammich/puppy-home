@@ -26,7 +26,11 @@ pub mod managers_mcp;
 pub mod managers_skills;
 pub mod managers_ui;
 pub mod markdown;
+pub mod remote;
+pub mod remote_ui;
 pub mod terminal;
+pub mod theme_editor_ui;
+pub mod theme_ui;
 pub mod tokens;
 pub mod waker;
 pub mod widgets;
@@ -43,8 +47,9 @@ use gpui::{
     WindowBounds, WindowOptions, div, prelude::*, px, size,
 };
 
-use crate::session::{self, ComposerStyle, DashboardViewMode};
+use crate::session::{self, ComposerStyle, DashboardViewMode, Theme};
 use crate::supervisor::Supervisor;
+use crate::theme::{TerminalTheme, ThemePalette};
 use crate::waker::UiWaker;
 use crate::workspace::WorkspaceId;
 pub use actions::{ChatPop, DashAction, TreeOp};
@@ -205,6 +210,22 @@ pub struct RootView {
     pub(crate) skills_wizard: Option<crate::views::skills_wizard::Wizard>,
     pub(crate) agent_wizard: Option<crate::views::agent_wizard::Wizard>,
     pub(crate) agent_delete_confirm: Option<String>,
+    // -- remote connect state --
+    pub(crate) remote: Option<remote::RemoteState>,
+    pub(crate) remote_pending: Option<remote::RemotePending>,
+    /// [0] = SSH target, [1] = remote path.
+    pub(crate) remote_inputs: Vec<Entity<ChatInput>>,
+    // -- theme state --
+    pub(crate) theme: Theme,
+    /// The saved custom-theme library (themes.json).
+    pub(crate) themes: Vec<ThemePalette>,
+    /// The editor's working palette buffer.
+    pub(crate) theme_palette: ThemePalette,
+    /// The editor's working terminal-palette buffer.
+    pub(crate) terminal_theme: TerminalTheme,
+    pub(crate) theme_picker_open: bool,
+    pub(crate) theme_editor_open: bool,
+    pub(crate) theme_inputs: Vec<Entity<ChatInput>>,
 }
 
 /// One pasted image: the wire form + the displayable form.
@@ -222,6 +243,14 @@ impl RootView {
 
         // Shared prefs + workspaces: same session.json the egui shell writes.
         let saved = session::load();
+
+        // Theme: restore the saved selection and publish its tokens before
+        // any input entity exists (they read Tokens::current at creation).
+        let themes = crate::theme::load_themes();
+        let theme = saved.theme.clone();
+        let theme_palette = crate::theme::palette_for(&theme, &themes);
+        let resolved_tokens = Tokens::from_palette(&theme_palette);
+        Tokens::set_current(resolved_tokens);
 
         // Probe runs (PUPPY_GPUI_OPEN) are isolated: they neither restore the
         // saved workspaces nor write session.json (probe_no_save below).
@@ -249,7 +278,7 @@ impl RootView {
         Self::spawn_drain_loop(cx, wake_rx);
         RootView {
             supervisor,
-            tokens: Tokens::dark(),
+            tokens: resolved_tokens,
             last_error,
             probe_prompt: std::env::var("PUPPY_GPUI_PROMPT").ok(),
             dash_mode: saved.dashboard_view,
@@ -326,6 +355,16 @@ impl RootView {
             skills_wizard: None,
             agent_wizard: None,
             agent_delete_confirm: None,
+            remote: None,
+            remote_pending: None,
+            remote_inputs: Vec::new(),
+            theme,
+            themes,
+            theme_palette,
+            terminal_theme: crate::theme::load_terminal(),
+            theme_picker_open: false,
+            theme_editor_open: false,
+            theme_inputs: Vec::new(),
         }
     }
 
@@ -599,6 +638,28 @@ impl RootView {
         eprintln!("[probe] opened manager overlay: {kind:?}");
     }
 
+    /// Probe: `PUPPY_GPUI_THEME=dark|light|<custom name>` picks a theme at
+    /// startup; `PUPPY_GPUI_REMOTE=1` opens the connect dialog
+    /// (render-survival validation for the Phase E surfaces).
+    fn maybe_probe_theme_remote(&mut self, cx: &mut Context<Self>) {
+        if let Ok(spec) = std::env::var("PUPPY_GPUI_THEME") {
+            unsafe { std::env::remove_var("PUPPY_GPUI_THEME") };
+            let theme = match spec.as_str() {
+                "dark" => Theme::Dark,
+                "light" => Theme::Light,
+                name => Theme::Custom(name.to_string()),
+            };
+            self.dispatch(DashAction::Theme(theme_ui::ThemeAction::Pick(theme)), cx);
+            self.dispatch(DashAction::Theme(theme_ui::ThemeAction::EditorOpen), cx);
+            eprintln!("[probe] picked theme {spec:?} + opened the editor");
+        }
+        if std::env::var_os("PUPPY_GPUI_REMOTE").is_some() {
+            unsafe { std::env::remove_var("PUPPY_GPUI_REMOTE") };
+            self.dispatch(DashAction::Remote(remote::RemoteAction::Open), cx);
+            eprintln!("[probe] opened the remote-connect dialog");
+        }
+    }
+
     /// Probe: jump to the first ready workspace's chat once, if asked to.
     fn maybe_probe_chat_screen(&mut self, cx: &mut Context<Self>) {
         if !self.probe_chat_screen {
@@ -761,7 +822,9 @@ impl RootView {
                     root.maybe_probe_chat_screen(cx);
                     root.maybe_probe_terminal(cx);
                     root.maybe_probe_manager(cx);
+                    root.maybe_probe_theme_remote(cx);
                     root.mgr_upkeep();
+                    root.remote_upkeep();
                     root.ensure_answer_input_if_needed(cx);
                     root.prune_toasts();
                     cx.notify();
@@ -823,6 +886,7 @@ impl RootView {
         s.dashboard_view = self.dash_mode;
         s.reduce_motion = self.reduce_motion;
         s.composer_style = self.composer_style;
+        s.theme = self.theme.clone();
         s.workspaces = self
             .supervisor
             .iter()
@@ -980,6 +1044,16 @@ impl RootView {
                     .id("open-folder")
                     .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx))),
             )
+            .child(
+                widgets::btn(t, "\u{1f517} Connect Remote\u{2026}")
+                    .id("tb-remote")
+                    .tooltip(widgets::text_tip(
+                        "Run a Code Puppy on another host over SSH".into(),
+                    ))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.dispatch(DashAction::Remote(remote::RemoteAction::Open), cx)
+                    })),
+            )
             .child(div().flex_1())
             .child(
                 div()
@@ -1056,6 +1130,17 @@ impl RootView {
                     cx.listener(|this, _, _, cx| this.dispatch(DashAction::ToggleMotion, cx)),
                 ),
             )
+            .child(theme_ui::picker(
+                t,
+                &entity,
+                &self.theme,
+                &self
+                    .themes
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect::<Vec<_>>(),
+                self.theme_picker_open,
+            ))
             .child(dashboard::segmented(t, self.dash_mode, &entity))
     }
 }
@@ -1245,6 +1330,39 @@ impl Render for RootView {
                     agent_wizard: self.agent_wizard.as_ref(),
                     agent_delete_confirm: self.agent_delete_confirm.as_deref(),
                 })
+            }))
+            .children(self.remote.as_ref().map(|st| {
+                remote_ui::overlay(
+                    t,
+                    &cx.entity(),
+                    st,
+                    &self.remote_inputs,
+                    &self
+                        .remote_inputs
+                        .first()
+                        .map(|i| i.read(cx).text().to_string())
+                        .unwrap_or_default(),
+                    &self
+                        .remote_inputs
+                        .get(1)
+                        .map(|i| i.read(cx).text().to_string())
+                        .unwrap_or_default(),
+                )
+            }))
+            .children(self.theme_editor_open.then(|| {
+                theme_editor_ui::editor_overlay(
+                    t,
+                    &cx.entity(),
+                    &self.theme_inputs,
+                    &self.theme_palette,
+                    &self.terminal_theme,
+                    &self
+                        .themes
+                        .iter()
+                        .map(|p| p.name.clone())
+                        .collect::<Vec<_>>(),
+                    &self.theme,
+                )
             }))
             .child(widgets::toast_layer(&t, &self.toasts))
     }

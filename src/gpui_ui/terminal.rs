@@ -39,7 +39,11 @@ pub struct TermColors {
 
 impl TermColors {
     pub fn load() -> Self {
-        let theme = crate::theme::load_terminal();
+        Self::from_theme(&crate::theme::load_terminal())
+    }
+
+    /// Resolve from an in-memory terminal theme (the editor's live apply).
+    pub fn from_theme(theme: &crate::theme::TerminalTheme) -> Self {
         let hex = crate::gpui_ui::tokens::hex;
         let mut ansi = [hex("#000000"); 16];
         for (i, slot) in ansi.iter_mut().enumerate() {

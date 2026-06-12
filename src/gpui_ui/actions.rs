@@ -145,6 +145,10 @@ pub enum DashAction {
     Den(den::DenAction),
     /// Manager overlays (MCP / Skills / Agents).
     Mgr(super::managers::MgrAction),
+    /// The remote SSH connect dialog.
+    Remote(super::remote::RemoteAction),
+    /// Theme picker + editor.
+    Theme(super::theme_ui::ThemeAction),
 }
 
 /// What the tree-op input is editing.
@@ -388,6 +392,14 @@ impl RootView {
             }
             DashAction::Mgr(mgr_action) => {
                 self.dispatch_mgr(mgr_action, cx);
+                return;
+            }
+            DashAction::Remote(remote_action) => {
+                self.dispatch_remote(remote_action, cx);
+                return;
+            }
+            DashAction::Theme(theme_action) => {
+                self.dispatch_theme(theme_action, cx);
                 return;
             }
             DashAction::SetChatSteerQueue(q) => self.chat_steer_queue = q,

@@ -211,6 +211,13 @@ impl Focusable for ChatInput {
 }
 
 impl ChatInput {
+    /// Re-resolve this input's colors after a theme switch (the root owns
+    /// the active palette; entities can't read it back, so it's pushed).
+    pub fn set_tokens(&mut self, t: Tokens, cx: &mut Context<Self>) {
+        self.tokens = t;
+        cx.notify();
+    }
+
     pub fn new(placeholder: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
         ChatInput {
             focus_handle: cx.focus_handle(),
@@ -222,7 +229,7 @@ impl ChatInput {
             last_layout: None,
             last_bounds: None,
             is_selecting: false,
-            tokens: Tokens::dark(),
+            tokens: Tokens::current(),
             palette_open: false,
             soft_wrap: true,
             syntax: None,

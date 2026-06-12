@@ -1,11 +1,13 @@
 //! Design tokens for the GPUI frontend, resolved once at startup.
 //!
-//! One source of truth: every value that exists in the shared
-//! [`ThemePalette`](crate::theme::ThemePalette) amber preset is *parsed from
-//! it* (the same hex strings the egui branch renders), so the two redesign
-//! branches can't drift apart. The only token the palette doesn't model is
-//! `bg` — the app backdrop *behind* the panels (egui uses `panel` as its
-//! outermost fill) — which keeps the GPUI_GUIDE's `#121217`.
+//! One source of truth: every value, including `bg`/`dim` (palette fields
+//! `app_bg`/`dim_text` since Phase E), is *parsed from* the shared
+//! [`ThemePalette`](crate::theme::ThemePalette) (the same hex strings the
+//! egui branch renders), so the two redesign branches can't drift apart.
+//! Theme switching re-resolves `RootView.tokens = Tokens::from_palette(..)`;
+//! everything downstream gets the new copy on the next render (snapshot
+//! pattern), and long-lived `ChatInput` entities are re-themed via
+//! `set_tokens`.
 
 use gpui::Rgba;
 
@@ -15,10 +17,9 @@ use crate::theme::{ThemePalette, parse_hex};
 #[allow(dead_code)] // consumed by the upcoming GPUI chat/den tasks
 #[derive(Clone, Copy)]
 pub struct Tokens {
-    /// App backdrop behind all panels (GPUI_GUIDE §2; no palette equivalent).
+    /// App backdrop behind all panels (`ThemePalette.app_bg`).
     pub bg: Rgba,
-    /// Dimmest text (idle labels). Mock `--dim #696977`; no palette field —
-    /// documented constant like `bg`.
+    /// Dimmest text, below `weak` (`ThemePalette.dim_text`).
     pub dim: Rgba,
     pub panel: Rgba,
     /// Card surface (`ThemePalette.window` doubles as the card fill).
@@ -41,16 +42,37 @@ pub struct Tokens {
     pub error: Rgba,
 }
 
+/// The active tokens, readable by entities created after a theme switch
+/// (`ChatInput::new` can't reach the root). Written ONLY by the root's
+/// theme apply; everything render-side still gets tokens passed down.
+static CURRENT: std::sync::Mutex<Option<Tokens>> = std::sync::Mutex::new(None);
+
 impl Tokens {
     /// Resolve from the shared amber dark preset.
     pub fn dark() -> Self {
         Self::from_palette(&ThemePalette::dark())
     }
 
+    /// The active theme's tokens (dark until the root applies one).
+    pub fn current() -> Self {
+        CURRENT
+            .lock()
+            .ok()
+            .and_then(|g| *g)
+            .unwrap_or_else(Self::dark)
+    }
+
+    /// Publish the active tokens (root-only, on theme switch/edit).
+    pub fn set_current(t: Tokens) {
+        if let Ok(mut g) = CURRENT.lock() {
+            *g = Some(t);
+        }
+    }
+
     pub fn from_palette(p: &ThemePalette) -> Self {
         Tokens {
-            bg: gpui::rgb(0x121217),
-            dim: gpui::rgb(0x696977),
+            bg: hex(&p.app_bg),
+            dim: hex(&p.dim_text),
             panel: hex(&p.panel),
             card: hex(&p.window),
             line_soft: hex(&p.stroke),
@@ -90,8 +112,12 @@ mod tests {
         assert_eq!(t.accent, gpui::rgb(0xe7ab4d));
         assert_eq!(t.card, gpui::rgb(0x1e1e26));
         assert_eq!(t.panel, gpui::rgb(0x1a1a20));
-        // The one deliberate non-palette token.
+        // bg/dim come from the palette's app_bg/dim_text defaults now.
         assert_eq!(t.bg, gpui::rgb(0x121217));
+        assert_eq!(t.dim, gpui::rgb(0x696977));
+        // The light preset resolves its own backdrop (no dark constant).
+        let l = Tokens::from_palette(&ThemePalette::light());
+        assert_eq!(l.bg, gpui::rgb(0xe9e9ee));
     }
 
     #[test]

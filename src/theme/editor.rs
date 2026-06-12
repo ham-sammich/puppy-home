@@ -16,8 +16,8 @@ pub struct EditorOutcome {
     pub select: Option<String>,
 }
 
-/// Friendly labels for the 16 base ANSI slots.
-const ANSI_NAMES: [&str; 16] = [
+/// Friendly labels for the 16 base ANSI slots (shared with the GPUI editor).
+pub const ANSI_NAMES: [&str; 16] = [
     "0 black",
     "1 red",
     "2 green",
@@ -176,6 +176,10 @@ fn ui_palette_section(
     any |= color_row(ui, "Status: wait", &mut palette.status_wait);
     any |= color_row(ui, "Status: paused", &mut palette.status_paused);
     any |= color_row(ui, "Status: error", &mut palette.status_error);
+    // GPUI-shell surfaces (egui's outermost fill is `panel`; these still
+    // belong to the shared theme file, so both editors expose them).
+    any |= color_row(ui, "App backdrop", &mut palette.app_bg);
+    any |= color_row(ui, "Dim text", &mut palette.dim_text);
     if any {
         out.changed = true;
     }
@@ -245,7 +249,8 @@ fn terminal_section(ui: &mut egui::Ui, term: &mut TerminalTheme) {
 }
 
 /// Insert or replace a theme in the library, keyed by name.
-fn upsert(library: &mut Vec<ThemePalette>, theme: ThemePalette) {
+/// (pub: the GPUI editor drives the same library ops — sync note.)
+pub fn upsert(library: &mut Vec<ThemePalette>, theme: ThemePalette) {
     if let Some(slot) = library.iter_mut().find(|t| t.name == theme.name) {
         *slot = theme;
     } else {
@@ -254,7 +259,7 @@ fn upsert(library: &mut Vec<ThemePalette>, theme: ThemePalette) {
 }
 
 /// A name not already taken in the library (`base`, `base 2`, `base 3`, …).
-fn unique_name(base: &str, library: &[ThemePalette]) -> String {
+pub fn unique_name(base: &str, library: &[ThemePalette]) -> String {
     if !library.iter().any(|t| t.name == base) {
         return base.to_string();
     }
