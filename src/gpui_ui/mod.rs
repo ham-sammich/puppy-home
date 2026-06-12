@@ -147,6 +147,15 @@ pub struct RootView {
     palette_sel: usize,
     /// Steer delivery mode for composer-dock steering (false = now).
     chat_steer_queue: bool,
+    /// Workspaces with the sidecar-logs panel open.
+    logs_open: HashSet<WorkspaceId>,
+    /// The sessions browser overlay, when open for a workspace.
+    sessions_open: Option<WorkspaceId>,
+    /// Selected session in the browser `(name, source)`.
+    session_selected: Option<(String, String)>,
+    sessions_filter_input: Option<Entity<ChatInput>>,
+    /// Thinking folds that are closed (turn-end auto-collapse + manual).
+    collapsed_thinking: HashSet<(u64, usize)>,
 }
 
 /// One pasted image: the wire form + the displayable form.
@@ -235,6 +244,50 @@ impl RootView {
             pending_images: HashMap::new(),
             palette_sel: 0,
             chat_steer_queue: false,
+            logs_open: HashSet::new(),
+            sessions_open: None,
+            session_selected: None,
+            sessions_filter_input: None,
+            collapsed_thinking: HashSet::new(),
+        }
+    }
+
+    /// Filter box for the sessions browser (created on first open).
+    pub(crate) fn ensure_sessions_filter_input(&mut self, cx: &mut Context<Self>) {
+        if self.sessions_filter_input.is_some() {
+            return;
+        }
+        let entity = cx.new(|cx| ChatInput::new("\u{1f50e} filter sessions\u{2026}", cx));
+        // Edited just needs a repaint (the filter is read at render time).
+        let sub = cx.subscribe(&entity, |_, _, _: &InputEvent, cx| cx.notify());
+        self.sessions_filter_input = Some(entity);
+        self.chat_subs.push(sub);
+    }
+
+    /// Drain-tick chat upkeep: consume turn-end thinking-collapse signals
+    /// (egui's one-shot Cell) and sidecar requests to open the sessions
+    /// browser (`/resume`). Bounded: scans only the active chat's tail.
+    fn chat_upkeep(&mut self, cx: &mut Context<Self>) {
+        let Screen::Chat(id) = self.screen else {
+            return;
+        };
+        let mut wants_sessions = false;
+        if let Some(ws) = self.supervisor.get_mut(id) {
+            wants_sessions = ws.wants_sessions();
+            const SCAN_TAIL: usize = 130; // render tail + slack
+            let entries = ws.entries();
+            let start = entries.len().saturating_sub(SCAN_TAIL);
+            for (i, entry) in entries.iter().enumerate().skip(start) {
+                if let crate::workspace::Entry::Thinking { collapse, .. } = entry
+                    && collapse.get()
+                {
+                    collapse.set(false);
+                    self.collapsed_thinking.insert((id.0, i));
+                }
+            }
+        }
+        if wants_sessions {
+            self.dispatch(DashAction::OpenSessions(id), cx);
         }
     }
 
@@ -423,6 +476,7 @@ impl RootView {
                     root.supervisor.drain();
                     root.save_session_if_changed();
                     root.sync_active_palette(cx);
+                    root.chat_upkeep(cx);
                     root.pump_den();
                     root.maybe_probe_den(cx);
                     root.maybe_send_probe_prompt();
@@ -777,6 +831,23 @@ impl Render for RootView {
                         .unwrap_or_default(),
                     palette_sel: self.palette_sel,
                     steer_queue: self.chat_steer_queue,
+                    logs_open: self.logs_open.contains(&id),
+                    collapsed_thinking: &self.collapsed_thinking,
+                    sessions: (self.sessions_open == Some(id)).then(|| {
+                        chat::sessions::SessionsArgs {
+                            t,
+                            ws,
+                            root: entity.clone(),
+                            filter_input: self.sessions_filter_input.as_ref(),
+                            filter: self
+                                .sessions_filter_input
+                                .as_ref()
+                                .map(|i| i.read(cx).text().to_string())
+                                .unwrap_or_default(),
+                            selected: self.session_selected.as_ref(),
+                            puppy: puppy.clone(),
+                        }
+                    }),
                 })
             }
             Screen::Dashboard => self.dashboard_body(cx),

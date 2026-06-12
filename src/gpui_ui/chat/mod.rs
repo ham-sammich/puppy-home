@@ -4,6 +4,7 @@
 
 pub mod ask;
 pub mod composer;
+pub mod sessions;
 pub mod transcript;
 
 use std::collections::HashSet;
@@ -39,6 +40,12 @@ pub struct ChatArgs<'a> {
     pub palette_sel: usize,
     /// Dock steer toggle (false = now, true = queue).
     pub steer_queue: bool,
+    /// Logs panel visibility.
+    pub logs_open: bool,
+    /// Thinking folds the user/auto-collapse has closed.
+    pub collapsed_thinking: &'a HashSet<(u64, usize)>,
+    /// Sessions browser overlay state (open when Some).
+    pub sessions: Option<sessions::SessionsArgs<'a>>,
 }
 
 /// The whole chat screen body (below the tab strip).
@@ -51,6 +58,7 @@ pub fn chat_screen(args: &ChatArgs) -> AnyElement {
         puppy: args.puppy.clone(),
         show_all: args.show_all,
         expanded: args.expanded,
+        collapsed_thinking: args.collapsed_thinking,
         reduce_motion: args.reduce_motion,
     });
     let dock = composer::composer_dock(&composer::ComposerArgs {
@@ -76,6 +84,7 @@ pub fn chat_screen(args: &ChatArgs) -> AnyElement {
     });
 
     div()
+        .relative()
         .flex_1()
         .min_h_0()
         .flex()
@@ -91,9 +100,129 @@ pub fn chat_screen(args: &ChatArgs) -> AnyElement {
                 .border_color(t.line_soft)
                 .bg(t.card)
                 .overflow_hidden()
+                .child(ws_toolbar(args))
                 .child(body)
+                .children(args.logs_open.then(|| logs_panel(args)))
                 .child(answer)
                 .child(dock),
+        )
+        .children(args.sessions.as_ref().map(sessions::sessions_overlay))
+        .into_any_element()
+}
+
+/// Slim workspace toolbar: + New chat / Sessions / spacer / logs toggle
+/// (the mock's workspace-toolbar position; Explorer keeps its rail toggle).
+fn ws_toolbar(args: &ChatArgs) -> AnyElement {
+    let t = args.t;
+    let ws = args.ws;
+    let id = ws.id;
+    let can_new = ws.is_ready() && !ws.is_running_turn() && ws.entries().is_empty() == false;
+    let new_chat = {
+        let root = args.root.clone();
+        div()
+            .id(("ws-new-chat", id.0))
+            .px_2()
+            .py_0p5()
+            .rounded(px(7.))
+            .text_size(px(11.5))
+            .text_color(if can_new { t.text } else { t.dim })
+            .when(can_new, |d| d.cursor_pointer().hover(|d| d.bg(t.well)))
+            .child("\u{ff0b} New chat")
+            .when(can_new, |d| {
+                d.on_click(move |_, _, cx| {
+                    root.update(cx, |r, cx| r.dispatch(DashAction::NewChat(id), cx));
+                })
+            })
+    };
+    let sessions_btn = {
+        let root = args.root.clone();
+        div()
+            .id(("ws-sessions", id.0))
+            .px_2()
+            .py_0p5()
+            .rounded(px(7.))
+            .text_size(px(11.5))
+            .text_color(t.text)
+            .cursor_pointer()
+            .hover(|d| d.bg(t.well))
+            .child("\u{1f5c2} Sessions")
+            .on_click(move |_, _, cx| {
+                root.update(cx, |r, cx| r.dispatch(DashAction::OpenSessions(id), cx));
+            })
+    };
+    let logs_btn = {
+        let root = args.root.clone();
+        let on = args.logs_open;
+        div()
+            .id(("ws-logs", id.0))
+            .px_2()
+            .py_0p5()
+            .rounded(px(7.))
+            .text_size(px(11.5))
+            .text_color(if on { t.accent } else { t.weak })
+            .cursor_pointer()
+            .hover(|d| d.bg(t.well))
+            .child("logs")
+            .on_click(move |_, _, cx| {
+                root.update(cx, |r, cx| r.dispatch(DashAction::ToggleLogs(id), cx));
+            })
+    };
+    div()
+        .flex()
+        .items_center()
+        .gap_1()
+        .px_2()
+        .py_1()
+        .border_b_1()
+        .border_color(t.line_soft)
+        .child(new_chat)
+        .child(sessions_btn)
+        .child(div().flex_1())
+        .child(logs_btn)
+        .into_any_element()
+}
+
+/// Sidecar log lines (stderr/events), bottom-pinned, bounded tail.
+fn logs_panel(args: &ChatArgs) -> AnyElement {
+    const LOG_TAIL: usize = 200;
+    let t = args.t;
+    let lines = args.ws.log_lines();
+    let start = lines.len().saturating_sub(LOG_TAIL);
+    div()
+        .h(px(140.))
+        .flex_none()
+        .border_t_1()
+        .border_color(t.line_soft)
+        .bg(t.well)
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .px_2()
+                .py_0p5()
+                .text_size(px(9.5))
+                .text_color(t.weak)
+                .child(format!("SIDECAR LOGS ({} lines)", lines.len())),
+        )
+        .child(
+            div()
+                .id(("ws-logs-scroll", args.ws.id.0))
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .flex()
+                .flex_col_reverse()
+                .px_2()
+                .pb_1()
+                .font_family("JetBrains Mono")
+                .text_size(px(10.))
+                .text_color(t.weak)
+                .children(
+                    lines[start..]
+                        .iter()
+                        .rev()
+                        .map(|l| div().whitespace_nowrap().child(l.clone())),
+                ),
         )
         .into_any_element()
 }

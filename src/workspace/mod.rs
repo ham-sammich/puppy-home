@@ -39,6 +39,7 @@ mod tree_ops;
 mod view;
 
 pub(crate) use ask::AskState;
+pub(crate) use render::short_session;
 pub(crate) use state::{Entry, Pending, PendingKind};
 pub use state::{InstanceStatus, SPARK_SAMPLES, SparkRing};
 
@@ -455,6 +456,71 @@ impl Workspace {
     /// File-change records this session (the chat's Changes list).
     pub(crate) fn diff_records(&self) -> &[diff::DiffRecord] {
         &self.diffs
+    }
+
+    /// Sidecar log lines (the chat's logs panel).
+    pub(crate) fn log_lines(&self) -> &[String] {
+        &self.logs
+    }
+
+    /// Saved-session catalog (answer to `list_sessions`).
+    pub(crate) fn sessions_catalog(&self) -> &[crate::backend::SessionInfo] {
+        &self.sessions
+    }
+
+    /// The session this workspace is currently attached to.
+    pub(crate) fn sessions_current_name(&self) -> &str {
+        &self.sessions_current
+    }
+
+    /// The most recent session preview (name + entries), if loaded.
+    pub(crate) fn session_preview_data(
+        &self,
+    ) -> Option<&(String, Vec<crate::backend::SessionEntry>)> {
+        self.session_preview.as_ref()
+    }
+
+    /// Ask the sidecar for the saved-session catalog.
+    pub(crate) fn request_sessions(&self) {
+        if let Some(backend) = &self.backend {
+            backend.list_sessions();
+        }
+    }
+
+    /// Request a read-only preview of one session (clears the stale one).
+    pub(crate) fn request_session_preview(&mut self, name: &str, source: &str) {
+        self.session_preview = None;
+        if let Some(backend) = &self.backend {
+            backend.preview_session(name, source);
+        }
+    }
+
+    /// Resume a saved session here (egui gate: not while a turn runs).
+    pub(crate) fn resume_session(&mut self, name: &str, source: &str) -> bool {
+        if self.running {
+            return false;
+        }
+        if let Some(backend) = &self.backend {
+            backend.load_session(name, source);
+            return true;
+        }
+        false
+    }
+
+    /// One-shot: the sidecar asked to open the sessions browser (`/resume`).
+    pub(crate) fn wants_sessions(&mut self) -> bool {
+        std::mem::take(&mut self.show_sessions)
+    }
+
+    /// Start a fresh chat: the egui `+ New chat` reuses the /clear machinery
+    /// (wipes the transcript, resets the sidecar conversation). Gated like
+    /// the egui button: ready, idle, and something to clear.
+    pub(crate) fn new_chat(&mut self) -> bool {
+        if !self.ready || self.running || self.transcript.is_empty() {
+            return false;
+        }
+        self.dispatch_command("/clear");
+        true
     }
 
     /// Filesystem handle for this workspace (the chat's file explorer).

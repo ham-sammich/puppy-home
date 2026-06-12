@@ -81,6 +81,17 @@ pub enum DashAction {
     PickerPick(WorkspaceId, PathBuf),
     /// Drop a pending pasted image before sending.
     RemoveImage(WorkspaceId, usize),
+    /// `+ New chat`: /clear machinery (transcript wipe + fresh session).
+    NewChat(WorkspaceId),
+    ToggleLogs(WorkspaceId),
+    OpenSessions(WorkspaceId),
+    CloseSessions,
+    SessionsRefresh(WorkspaceId),
+    /// Select a session in the browser `(name, source)` -> preview it.
+    SessionSelect(WorkspaceId, String, String),
+    SessionResume(WorkspaceId, String, String),
+    /// Toggle a thinking fold (auto-collapse one-shot still wins first).
+    ToggleThinking(WorkspaceId, usize),
     /// Den interactions (join/leave/feed/kanban/plans/...).
     Den(den::DenAction),
 }
@@ -369,6 +380,79 @@ impl RootView {
                     && idx < imgs.len()
                 {
                     imgs.remove(idx);
+                }
+            }
+            DashAction::NewChat(id) => {
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    if ws.new_chat() {
+                        let name = ws.name.clone();
+                        // Fresh chat: stale per-entry UI state dies with it.
+                        self.expanded_entries.retain(|(wid, _)| *wid != id.0);
+                        self.collapsed_thinking.retain(|(wid, _)| *wid != id.0);
+                        self.show_all_chat.remove(&id);
+                        self.toast(format!("New chat in {name}"), accent);
+                    }
+                }
+            }
+            DashAction::ToggleLogs(id) => {
+                if !self.logs_open.remove(&id) {
+                    self.logs_open.insert(id);
+                }
+            }
+            DashAction::OpenSessions(id) => {
+                self.ensure_sessions_filter_input(cx);
+                self.sessions_open = Some(id);
+                self.session_selected = None;
+                if let Some(ws) = self.supervisor.get(id) {
+                    ws.request_sessions();
+                }
+            }
+            DashAction::CloseSessions => {
+                self.sessions_open = None;
+                self.session_selected = None;
+            }
+            DashAction::SessionsRefresh(id) => {
+                if let Some(ws) = self.supervisor.get(id) {
+                    ws.request_sessions();
+                }
+            }
+            DashAction::SessionSelect(id, name, source) => {
+                let fresh = self
+                    .session_selected
+                    .as_ref()
+                    .map(|(n, _)| n != &name)
+                    .unwrap_or(true);
+                if fresh && let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.request_session_preview(&name, &source);
+                }
+                self.session_selected = Some((name, source));
+            }
+            DashAction::SessionResume(id, name, source) => {
+                let resumed = self
+                    .supervisor
+                    .get_mut(id)
+                    .map(|ws| ws.resume_session(&name, &source))
+                    .unwrap_or(false);
+                if resumed {
+                    self.sessions_open = None;
+                    self.session_selected = None;
+                    self.expanded_entries.retain(|(wid, _)| *wid != id.0);
+                    self.collapsed_thinking.retain(|(wid, _)| *wid != id.0);
+                    self.toast(
+                        format!("Resuming {}", crate::workspace::short_session(&name)),
+                        accent,
+                    );
+                } else {
+                    self.toast(
+                        "Stop the running turn before loading a session".into(),
+                        accent,
+                    );
+                }
+            }
+            DashAction::ToggleThinking(id, idx) => {
+                let key = (id.0, idx);
+                if !self.collapsed_thinking.remove(&key) {
+                    self.collapsed_thinking.insert(key);
                 }
             }
             DashAction::AnswerEnter => {

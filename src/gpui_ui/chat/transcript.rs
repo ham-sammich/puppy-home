@@ -28,8 +28,11 @@ pub struct TranscriptArgs<'a> {
     pub root: Entity<RootView>,
     pub puppy: String,
     pub show_all: bool,
-    /// `(workspace id, entry index)` pairs whose diff/thinking body is open.
+    /// `(workspace id, entry index)` pairs whose diff body is open.
     pub expanded: &'a std::collections::HashSet<(u64, usize)>,
+    /// Thinking folds that are CLOSED (default open while streaming; the
+    /// turn-end one-shot auto-collapses via the drain loop — egui parity).
+    pub collapsed_thinking: &'a std::collections::HashSet<(u64, usize)>,
     pub reduce_motion: bool,
 }
 
@@ -138,7 +141,10 @@ fn render_entry(args: &TranscriptArgs, idx: usize, entry: &Entry) -> AnyElement 
             .into_any_element(),
         Entry::Message(msg) => render_message(args, idx, msg),
         Entry::Thinking { text, .. } => {
-            let open = args.expanded.contains(&(args.ws.id.0, idx));
+            // Open by default while streaming; the drain loop consumes the
+            // turn-end collapse signal into `collapsed_thinking`; manual
+            // toggles win thereafter.
+            let open = !args.collapsed_thinking.contains(&(args.ws.id.0, idx));
             let root = args.root.clone();
             let id = args.ws.id;
             div()
@@ -162,7 +168,7 @@ fn render_entry(args: &TranscriptArgs, idx: usize, entry: &Entry) -> AnyElement 
                         ))
                         .on_click(move |_, _, cx| {
                             root.update(cx, |r, cx| {
-                                r.dispatch(DashAction::ToggleDiff(id, idx), cx)
+                                r.dispatch(DashAction::ToggleThinking(id, idx), cx)
                             });
                         }),
                 )

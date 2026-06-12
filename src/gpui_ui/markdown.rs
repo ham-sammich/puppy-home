@@ -6,7 +6,9 @@
 //! too heavy for a transcript. This ~200-line subset covers what Code Puppy
 //! actually emits; upgrade later if real-world transcripts demand more.
 
-use gpui::{AnyElement, FontWeight, IntoElement, ParentElement as _, Styled as _, div, px};
+use gpui::{
+    AnyElement, FontWeight, IntoElement, ParentElement as _, Styled as _, div, prelude::*, px,
+};
 
 use super::tokens::Tokens;
 use super::widgets::alpha;
@@ -18,6 +20,13 @@ pub enum Block {
     Paragraph(String),
     Bullets(Vec<String>),
     Fence(String, String), // (language tag, code)
+    /// `> quoted` lines, merged.
+    Quote(String),
+    /// `---` / `***` horizontal rule.
+    Rule,
+    /// `| a | b |` rows; the `|---|` separator row is consumed. First row
+    /// is rendered as the header.
+    Table(Vec<Vec<String>>),
 }
 
 /// Split markdown text into block-level chunks (line-oriented, forgiving).
@@ -39,6 +48,9 @@ pub fn parse(text: &str) -> Vec<Block> {
         }
     };
 
+    let mut quote: Vec<String> = Vec::new();
+    let mut table: Vec<Vec<String>> = Vec::new();
+
     for line in text.lines() {
         // Inside a fence: collect until the closing ```.
         if let Some((lang, code)) = &mut fence {
@@ -51,6 +63,48 @@ pub fn parse(text: &str) -> Vec<Block> {
             continue;
         }
         let trimmed = line.trim_start();
+
+        // Table rows: `| a | b |` (the |---| separator row is consumed).
+        if trimmed.starts_with('|') {
+            flush_para(&mut para, &mut blocks);
+            flush_bullets(&mut bullets, &mut blocks);
+            let cells: Vec<String> = trimmed
+                .trim_matches('|')
+                .split('|')
+                .map(|c| c.trim().to_string())
+                .collect();
+            let separator = !cells.is_empty()
+                && cells
+                    .iter()
+                    .all(|c| !c.is_empty() && c.chars().all(|ch| ch == '-' || ch == ':'));
+            if !separator {
+                table.push(cells);
+            }
+            continue;
+        } else if !table.is_empty() {
+            blocks.push(Block::Table(std::mem::take(&mut table)));
+        }
+
+        // Blockquote lines merge into one quote block.
+        if let Some(rest) = trimmed.strip_prefix('>') {
+            flush_para(&mut para, &mut blocks);
+            flush_bullets(&mut bullets, &mut blocks);
+            quote.push(rest.trim_start().to_string());
+            continue;
+        } else if !quote.is_empty() {
+            blocks.push(Block::Quote(std::mem::take(&mut quote).join(" ")));
+        }
+
+        // Horizontal rule.
+        if trimmed.len() >= 3
+            && (trimmed.chars().all(|c| c == '-') || trimmed.chars().all(|c| c == '*'))
+        {
+            flush_para(&mut para, &mut blocks);
+            flush_bullets(&mut bullets, &mut blocks);
+            blocks.push(Block::Rule);
+            continue;
+        }
+
         if let Some(rest) = trimmed.strip_prefix("```") {
             flush_para(&mut para, &mut blocks);
             flush_bullets(&mut bullets, &mut blocks);
@@ -78,40 +132,76 @@ pub fn parse(text: &str) -> Vec<Block> {
     if let Some((lang, code)) = fence {
         blocks.push(Block::Fence(lang, code.join("\n"))); // unclosed fence
     }
+    if !table.is_empty() {
+        blocks.push(Block::Table(table));
+    }
+    if !quote.is_empty() {
+        blocks.push(Block::Quote(quote.join(" ")));
+    }
     flush_para(&mut para, &mut blocks);
     flush_bullets(&mut bullets, &mut blocks);
     blocks
 }
 
-/// Inline segments: plain text / `code` / **bold**.
+/// Inline segments: plain text / `code` / **bold** / [label](url).
 #[derive(Debug, PartialEq, Eq)]
 pub enum Span {
     Text(String),
     Code(String),
     Bold(String),
+    Link(String, String), // (label, url)
 }
 
-/// Split a paragraph into inline spans (backticks first, then `**`).
+/// Split a paragraph into inline spans (backticks first, then links, then
+/// `**` inside the remaining text).
 pub fn spans(text: &str) -> Vec<Span> {
     let mut out = Vec::new();
     for (i, chunk) in text.split('`').enumerate() {
         if i % 2 == 1 && !chunk.is_empty() {
             out.push(Span::Code(chunk.to_string()));
         } else {
-            // Bold inside non-code chunks.
-            for (j, sub) in chunk.split("**").enumerate() {
-                if sub.is_empty() {
-                    continue;
-                }
-                if j % 2 == 1 {
-                    out.push(Span::Bold(sub.to_string()));
-                } else {
-                    out.push(Span::Text(sub.to_string()));
-                }
-            }
+            link_spans(chunk, &mut out);
         }
     }
     out
+}
+
+/// Extract `[label](url)` links; everything else flows to bold/text.
+fn link_spans(chunk: &str, out: &mut Vec<Span>) {
+    let mut rest = chunk;
+    while let Some(open) = rest.find('[') {
+        let Some(close) = rest[open..].find("](").map(|i| open + i) else {
+            break;
+        };
+        let Some(end) = rest[close + 2..].find(')').map(|i| close + 2 + i) else {
+            break;
+        };
+        let label = &rest[open + 1..close];
+        let url = &rest[close + 2..end];
+        if label.is_empty() || url.is_empty() || url.contains(char::is_whitespace) {
+            // Not a link — emit through '[' as text and keep scanning.
+            bold_spans(&rest[..open + 1], out);
+            rest = &rest[open + 1..];
+            continue;
+        }
+        bold_spans(&rest[..open], out);
+        out.push(Span::Link(label.to_string(), url.to_string()));
+        rest = &rest[end + 1..];
+    }
+    bold_spans(rest, out);
+}
+
+fn bold_spans(text: &str, out: &mut Vec<Span>) {
+    for (j, sub) in text.split("**").enumerate() {
+        if sub.is_empty() {
+            continue;
+        }
+        if j % 2 == 1 {
+            out.push(Span::Bold(sub.to_string()));
+        } else {
+            out.push(Span::Text(sub.to_string()));
+        }
+    }
 }
 
 /// Render markdown text into a column of GPUI elements.
@@ -150,6 +240,49 @@ fn render_block(t: &Tokens, block: Block) -> AnyElement {
                     .child(div().min_w_0().flex_1().child(render_inline(t, &item)))
             }))
             .into_any_element(),
+        Block::Quote(body) => div()
+            .pl_2p5()
+            .border_l_2()
+            .border_color(alpha(t.accent, 0.45))
+            .child(
+                div()
+                    .text_color(t.weak)
+                    .italic()
+                    .child(render_inline(t, &body)),
+            )
+            .into_any_element(),
+        Block::Rule => div().h(px(1.)).my_1().bg(t.line_soft).into_any_element(),
+        Block::Table(rows) => {
+            let cols = rows.first().map(|r| r.len()).unwrap_or(0).max(1);
+            div()
+                .flex()
+                .flex_col()
+                .rounded(px(8.))
+                .border_1()
+                .border_color(t.line_soft)
+                .overflow_hidden()
+                .children(rows.into_iter().enumerate().map(|(ri, row)| {
+                    let header = ri == 0;
+                    div()
+                        .flex()
+                        .when(header, |d| d.bg(t.panel))
+                        .when(ri > 0, |d| d.border_t_1().border_color(t.line_soft))
+                        .children((0..cols).map(|ci| {
+                            let cell = row.get(ci).cloned().unwrap_or_default();
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .px_2()
+                                .py_0p5()
+                                .text_size(px(12.))
+                                .when(header, |d| {
+                                    d.font_weight(FontWeight::SEMIBOLD).text_color(t.strong)
+                                })
+                                .child(render_inline(t, &cell))
+                        }))
+                }))
+                .into_any_element()
+        }
         Block::Fence(lang, code) => div()
             .flex()
             .flex_col()
@@ -194,8 +327,17 @@ fn render_inline(t: &Tokens, text: &str) -> AnyElement {
         .gap_x_1()
         .text_size(px(13.))
         .text_color(t.text)
-        .children(spans(text).into_iter().map(|s| {
+        .children(spans(text).into_iter().enumerate().map(|(i, s)| {
             match s {
+                Span::Link(label, url) => div()
+                    .id(("md-link", i as u64))
+                    .text_color(t.accent)
+                    .underline()
+                    .cursor_pointer()
+                    .hover(|d| d.text_color(t.accent_2))
+                    .child(label)
+                    .on_click(move |_, _, cx| cx.open_url(&url))
+                    .into_any_element(),
                 Span::Text(x) => div().child(x).into_any_element(),
                 Span::Bold(x) => div()
                     .font_weight(FontWeight::SEMIBOLD)
@@ -257,5 +399,63 @@ mod tests {
     #[test]
     fn plain_text_is_one_paragraph() {
         assert_eq!(parse("hello"), vec![Block::Paragraph("hello".into())]);
+    }
+
+    #[test]
+    fn links_parse_and_reject_garbage() {
+        let s = spans("see [the docs](https://example.com/x) and **win**");
+        assert_eq!(
+            s,
+            vec![
+                Span::Text("see ".into()),
+                Span::Link("the docs".into(), "https://example.com/x".into()),
+                Span::Text(" and ".into()),
+                Span::Bold("win".into()),
+            ]
+        );
+        // Bracketed non-links survive as text.
+        let s = spans("array[0] and [not a link] here");
+        assert!(s.iter().all(|sp| !matches!(sp, Span::Link(..))));
+        // URLs with spaces are not links.
+        let s = spans("[x](not a url)");
+        assert!(s.iter().all(|sp| !matches!(sp, Span::Link(..))));
+    }
+
+    #[test]
+    fn tables_consume_separator_and_keep_rows() {
+        let md = "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |";
+        let blocks = parse(md);
+        assert_eq!(
+            blocks,
+            vec![Block::Table(vec![
+                vec!["a".into(), "b".into()],
+                vec!["1".into(), "2".into()],
+                vec!["3".into(), "4".into()],
+            ])]
+        );
+    }
+
+    #[test]
+    fn quotes_and_rules() {
+        let md = "> wise words\n> more words\n\n---\n\ntail";
+        let blocks = parse(md);
+        assert_eq!(
+            blocks,
+            vec![
+                Block::Quote("wise words more words".into()),
+                Block::Rule,
+                Block::Paragraph("tail".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn bullet_dash_is_not_a_rule() {
+        // "- item" must stay a bullet; "--" too short for a rule.
+        let blocks = parse("- one\n- two");
+        assert_eq!(
+            blocks,
+            vec![Block::Bullets(vec!["one".into(), "two".into()])]
+        );
     }
 }
