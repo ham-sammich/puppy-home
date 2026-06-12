@@ -14,6 +14,7 @@ pub trait UiWaker: Send + Sync {
 }
 
 /// The egui frontend's waker: a wake is a `request_repaint`.
+#[cfg_attr(not(feature = "egui-shell"), allow(dead_code))]
 pub struct EguiWaker(pub eframe::egui::Context);
 
 impl UiWaker for EguiWaker {
@@ -23,6 +24,7 @@ impl UiWaker for EguiWaker {
 }
 
 /// Wrap an `egui::Context` as a shareable waker (for egui-side call sites).
+#[cfg_attr(not(feature = "egui-shell"), allow(dead_code))]
 pub fn egui_waker(ctx: &eframe::egui::Context) -> Arc<dyn UiWaker> {
     Arc::new(EguiWaker(ctx.clone()))
 }

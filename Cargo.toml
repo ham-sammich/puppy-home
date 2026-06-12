@@ -16,8 +16,31 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-cli
 [workspace]
 members = ["plugins/browser", "relay"]
 
+[features]
+# The legacy egui frontend. OFF by default on this branch: `main` launches the
+# GPUI shell. Build with `--features egui-shell` to run the old eframe app
+# (kept compiling so reusable logic can be extracted incrementally; the
+# egui-coupled modules are allow(dead_code) when this feature is off).
+egui-shell = []
+
 [dependencies]
+# GPUI (Zed's UI framework) — THE frontend on this branch.
+# PINNED: rev 00789bf6ee744de8ddcfad93ade1d28cf4070a24 = tag v0.199.10,
+# the most recent *stable* (non -pre) Zed release at pin time (2026-06-12).
+# FROZEN for the whole redesign/gpui branch — do NOT bump mid-build.
+# `runtime_shaders`: compile Metal shaders at runtime; this machine has only
+# the Xcode CLT (no `xcrun metal`), which the default prebuilt path requires.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "00789bf6ee744de8ddcfad93ade1d28cf4070a24", features = ["runtime_shaders"] }
+# Async select/pin helpers for the GPUI drain loop (gpui already pulls this in
+# transitively; declaring it just makes our use explicit).
+futures = "0.3"
+# gpui's AssetSource trait speaks anyhow::Result; transitively present anyway.
+anyhow = "1"
+
 # Native windowed GUI (egui in immediate mode, cross-platform, pure Rust).
+# TEMPORARY on this branch: kept so the egui-coupled modules (workspace UI,
+# views, theme::to_visuals, terminal grid) still COMPILE while their reusable
+# logic is extracted incrementally. The default binary never runs eframe.
 eframe = "0.34.3"
 egui_commonmark = "0.23"
 egui_dock = { version = "0.19.1", features = ["serde"] }
