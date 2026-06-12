@@ -303,6 +303,94 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
 - Attention-banner question truncates to one line (hover shows nothing —
   add tooltip when convenient).
 
+## B13 — first user test-drive (bugs fixed this run)
+
+- [x] B13.1 remote-connect crash: remote_upkeep flipped Screen::Chat
+      without ensure_chat_input -> render expect aborted the app. Fixed +
+      class fix (render screen-sanity pass degrades instead of panicking;
+      sibling unwrap audit: remote_pending take-first, terminal ctrl-chord
+      guard). `9660d89`
+- [x] B13.2 black-on-black/contrast: syntect highlight theme now follows
+      the palette's dark flag (light themes got dark-theme pastels on
+      light wells); theme switch re-highlights open code surfaces;
+      tooltips (own render root, outside the text-color cascade) resolve
+      Tokens::current() at show time instead of a stale dark constant.
+      No bg-as-fg token uses found; root cascade rules out GPUI's
+      default-black text. `6d1aaf9`
+      NOTE: user said "some areas" without specifics — if it reproduces
+      in DARK theme somewhere, these fixes may not cover it; need repro.
+- [x] B13.3 model chip cut off: pill + wrapper min-w-0/flex-shrink so it
+      ellipsizes inside tight header rows; full id on hover. `57dad96`
+- [x] B13.4 bare /agent (+/model) now opens the GUI switcher popovers —
+      sidecar intercepts before the CLI's prompt_toolkit menu (which
+      blocks headless), re-emits the catalog with open:true; Workspace
+      one-shots mirror wants_sessions. `bed06dd`
+- [x] B13.5 /cd: sidecar announces cwd changes ({event:'cwd'}); workspace
+      follows (root/title/tree/git rebind + transcript note). `6a70e81`
+- [x] B13.6 Grid/List/Focus segmented control moved from the global
+      toolbar into the dashboard body (right-aligned above the fleet).
+      `075ae57`
+
+      SYNC QUEUE (phase-end batch): sidecar/sidecar.py (picker
+      intercepts + cwd event + open flags), backend/mod.rs (Wire/UiEvent
+      Agents/Models open + Cwd), workspace/events.rs + mod.rs
+      (show_agent_picker/show_model_picker one-shots, set_root).
+      egui-side consumption of the new one-shots is egui UI work, not
+      queued here.
+
+      DOCUMENTED GAPS: remote workspaces keep their root-bound ssh git
+      runner after a remote /cd (tree/title follow; git rebind needs a
+      remote git factory); terminal-cd tracking deferred (OSC7 needs
+      shell-side integration, PTY-child cwd polling is per-OS FFI —
+      libproc on macOS / PEB reads on Windows); remaining CLI TTY menus
+      (/tutorial onboarding, uc/mcp-bind) still no-op headless.
+
+## FEATURE BACKLOG — from the user's test-drive notes (no implementation
+   yet; sequencing happens outside this ledger)
+
+Version + updates
+- [ ] Show Code Puppy version; check for updates; run updates.
+
+Dashboard
+- [ ] Whistle button: create a new code-puppy instance at the home dir.
+- [ ] "New Chat" next to Open Folder (same home-dir spawn).
+- [ ] Auth status (Claude/GPT/Copilot/any model with surfaceable auth)
+      + re-auth methods.
+
+Den
+- [ ] "Join Den" should also CREATE a den (run `cargo run -p puppy-relay`
+      for the user); multi-den hosting/joining; self-host instructions.
+
+Agents
+- [ ] "Create Agent with Agent Creator" button — spawns a session using
+      code-puppy's agent-creator agent inside the agent builder.
+
+Managers
+- [ ] Manage code-puppy config.
+- [ ] Manage Models (a manager like skills/agents/mcps).
+
+Identity / setup
+- [ ] User PFP + Puppy PFP (emoji defaults).
+- [ ] Initial setup guide: install code-puppy if absent, run setup,
+      tutorial, puppy name; theme select (dark/light/system/custom,
+      possibly importing code-puppy's themes); models setup + auth;
+      composer style choice.
+
+Git
+- [ ] Create PRs (can use /generate-pr-description); view PRs if possible.
+
+Composer
+- [ ] Pop button (/pop command).
+- [ ] Context size/usage/status + context-related commands.
+
+More views
+- [ ] Goals/Judges: goal panel, judges' reviews panel, manage judges +
+      guided judge builder (like mcp/skills/agents wizards).
+- [ ] Kennel management/view (/kennel).
+- [ ] Ollama management (/ollama-setup).
+- [ ] Code-puppy plugins management (/plugins).
+- [ ] Wiggum view (/wiggum + related commands).
+
 ---
 
 *Cross-checked against the egui branch's `src/views/` + `src/workspace/`
