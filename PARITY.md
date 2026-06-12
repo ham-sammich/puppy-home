@@ -82,12 +82,20 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       tree (else Code-Puppy diffs), lazy per-click diff load, colored
       rows + op/path/+A-D header; wired from dashboard card + explorer.
       (9246dae)
-- [ ] C4. Git view: staging list, commit box, push/pull/fetch + action
-      feedback. Ref: `workspace/git_view.rs`, `git.rs`.
-- [ ] C5. Git graph (all-branches commit DAG + branch dialog). Ref:
-      `workspace/git_graph.rs` (pure layout) + `git_graph_view.rs` (paint).
-- [ ] C6. Git credential prompts (HTTPS auth modal on push/pull/fetch).
-      Ref: `workspace/git_creds.rs`.
+- [x] C4. Git view: branch header (ahead/behind), Refresh/Fetch/Pull/
+      Push, staging lists w/ per-file +/- and all-buttons, commit box at
+      a CONSTANT height (31a6dcb principle), diff preview, history list/
+      graph toggle, blame toggle in the editor bar. (a657e7f)
+- [x] C5. Git graph: shared compute_graph + per-row canvas painter
+      (bezier-band edges, rounded-quad nodes, 8 lanes colors, 200-commit
+      bound); click = commit patch tab; right-click action panel
+      (checkout/merge/new-branch/cherry-pick/revert/reset-hard).
+      NOT ported: delete-branch + soft-reset menu items (ledger).
+      (a657e7f)
+- [x] C6. Git creds: auth-failure modal over the shared submit/retry
+      flow (username + token, error line, Retry/Cancel). Password shows
+      plaintext while typed — no masking in our input yet (ledger).
+      (a657e7f)
 
 ## Phase D — terminal
 
@@ -183,6 +191,9 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
   select, content past 8 visual rows clips (no internal scroll).
 - @file completions/picker insert text tokens, not chip objects (egui
   behaves the same; "chips" upgrade would be both-branch work).
+- Git creds password field is plaintext while typed (egui masks).
+- Graph menu: delete-branch + soft-reset not ported.
+- Commit box height fixed (96px), not drag-resizable like egui.
 - Kanban card hover-state element ids can collide on equal dir-name
   lengths (cosmetic only; relay ids authoritative).
 - Den teammate read-along (Open on teammates' agents) disabled on BOTH
