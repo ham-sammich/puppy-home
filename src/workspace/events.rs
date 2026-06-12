@@ -105,6 +105,13 @@ impl Workspace {
                 self.collapse_thinking();
                 self.set_status(InstanceStatus::Idle);
                 self.transcript.push(Entry::Agent(output));
+                // One last metrics snapshot: provider usage lands at turn end,
+                // AFTER the final in-flight poll was answered, and polling
+                // stops with `running` — without this the dashboard shows a
+                // stale token total until the next turn starts polling.
+                if let Some(backend) = &self.backend {
+                    backend.request_status();
+                }
             }
             UiEvent::CommandDone { handled, .. } => {
                 self.running = false;

@@ -54,6 +54,15 @@ impl Workspace {
         self.history_stash.clear();
     }
 
+    /// Frontend-agnostic prompt entry: stage `text` as if typed and submit it
+    /// as a user turn (transcript, history, `running`, status polling — the
+    /// whole state machine). The GPUI frontend drives turns through this.
+    #[allow(dead_code)] // no caller on the shared base; the UI branches drive it
+    pub(crate) fn send_user_prompt(&mut self, text: &str) {
+        self.input = text.to_string();
+        self.submit();
+    }
+
     pub(crate) fn submit(&mut self) {
         let text = self.input.trim().to_string();
         if text.is_empty() || !self.ready || self.running {
