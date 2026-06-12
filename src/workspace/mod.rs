@@ -21,7 +21,7 @@ use crate::backend::{AgentInfo, CodePuppy, CommandInfo, CompletionItem, ModelInf
 mod ask;
 mod chat;
 mod chat_body;
-mod clipboard;
+pub(crate) mod clipboard;
 mod composer;
 mod diff;
 mod dock;
