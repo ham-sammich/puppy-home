@@ -9,6 +9,8 @@
 //! install from a local build, open the plugins folder, or rescan.
 
 mod embed;
+#[cfg(target_os = "macos")]
+pub mod embed_mac;
 mod host;
 
 use std::collections::{BTreeMap, HashSet};
@@ -46,7 +48,7 @@ pub fn ensure_cdp_helper() -> Option<std::path::PathBuf> {
 }
 
 /// Identifies one open browser tab.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BrowserId(pub u64);
 
 #[allow(dead_code)] // consumed by the redesign UI branches
@@ -57,6 +59,16 @@ pub enum PluginStatus {
     Incompatible { version: String, needs: String },
     ExeMissing { exe: String },
     Ready,
+}
+
+/// How the GPUI shell presents a browser tab's webview window.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EmbedMode {
+    /// Borderless overlay glued inside the Browser screen (the default).
+    #[default]
+    Embedded,
+    /// Popped out as a real decorated floating window (\u{2197}).
+    Floating,
 }
 
 #[allow(dead_code)] // consumed by the redesign UI branches
@@ -88,6 +100,9 @@ struct BrowserTab {
     /// (GPUI shell path; reset on every (re)launch). egui embeds instead
     /// and never floats.
     floated: bool,
+    /// GPUI shell presentation mode (egui ignores this — it always
+    /// embeds). Default: embedded in the Browser screen; \u{2197} pops out.
+    gpui_mode: EmbedMode,
     /// Last physical rect (x, y, w, h) the child window was placed at — so we
     /// only call `SetWindowPos` when it actually changes (avoids choppiness).
     placed_rect: Option<(i32, i32, i32, i32)>,
@@ -411,22 +426,107 @@ impl BrowserManager {
 
     #[allow(dead_code)] // consumed by the redesign UI branches
     /// The "Launch browser" button: current URL or the example fallback.
-    /// Floating-window pump for hosts that can't embed (the GPUI shell
-    /// drain loop calls this; egui embeds per-frame instead and must NOT).
-    /// Embeddable platforms start the plugin window HIDDEN, so until either
-    /// `embed` or `float` arrives there is no window at all — this sends
-    /// `float` exactly once per launched process, as soon as it reports
-    /// ready (E8 macOS fix: "launch opens nothing").
-    pub fn float_pump(&mut self) {
-        for tab in self.tabs.values_mut() {
-            if tab.floated {
-                continue;
+    /// GPUI presentation mode of a tab (egui never consults this).
+    pub fn tab_mode(&self, id: BrowserId) -> EmbedMode {
+        self.tabs
+            .get(&id)
+            .map(|t| t.gpui_mode)
+            .unwrap_or(EmbedMode::Embedded)
+    }
+
+    pub fn set_tab_mode(&mut self, id: BrowserId, mode: EmbedMode) {
+        if let Some(tab) = self.tabs.get_mut(&id) {
+            tab.gpui_mode = mode;
+            // Mode flips re-drive the window state on the next upkeep.
+            tab.floated = false;
+            tab.visible = false;
+        }
+    }
+
+    /// Has the plugin reported its window exists?
+    pub fn tab_ready(&self, id: BrowserId) -> bool {
+        self.tabs
+            .get(&id)
+            .and_then(|t| t.host.as_ref())
+            .is_some_and(|h| h.is_ready())
+    }
+
+    /// GPUI embedded mode: glue the plugin overlay to `rect` (global
+    /// top-left PHYSICAL px) just above host window `parent`. Sent every
+    /// render while the Browser screen is up — same per-frame re-assert
+    /// the egui pump does (z-order can reshuffle on any click).
+    pub fn embed_tab(&mut self, id: BrowserId, rect: (i32, i32, i32, i32), parent: i64) {
+        if let Some(tab) = self.tabs.get_mut(&id)
+            && let Some(h) = tab.host.as_mut()
+        {
+            let (x, y, w, h_) = rect;
+            if w > 0 && h_ > 0 {
+                h.embed(x, y, w, h_, parent);
+                tab.visible = true;
+                tab.floated = false;
             }
-            if let Some(h) = tab.host.as_mut()
-                && h.is_ready()
-            {
-                h.float();
-                tab.floated = true;
+        }
+    }
+
+    /// GPUI: order the overlay out (screen switch / minimize). No-op for a
+    /// popped-out floating window — that one is MEANT to persist.
+    pub fn hide_tab(&mut self, id: BrowserId) {
+        if let Some(tab) = self.tabs.get_mut(&id)
+            && tab.gpui_mode == EmbedMode::Embedded
+            && tab.visible
+            && let Some(h) = tab.host.as_mut()
+        {
+            h.hide();
+            tab.visible = false;
+        }
+    }
+
+    /// GPUI floating mode: show as a real decorated window (sent once per
+    /// mode-flip/launch; the plugin call is idempotent anyway). On Windows
+    /// a previously reparented child must be released first (untested by
+    /// construction — no Windows box here).
+    pub fn float_tab(&mut self, id: BrowserId) {
+        if let Some(tab) = self.tabs.get_mut(&id)
+            && !tab.floated
+            && let Some(h) = tab.host.as_mut()
+            && h.is_ready()
+        {
+            #[cfg(windows)]
+            if tab.embedded {
+                if let Some(child) = h.child_hwnd() {
+                    embed::unparent(child);
+                }
+                tab.embedded = false;
+            }
+            h.float();
+            tab.floated = true;
+            tab.visible = true;
+        }
+    }
+
+    /// GPUI embedded mode on Windows (by construction): reparent the
+    /// plugin window into the host HWND once, then place it at the canvas
+    /// rect (client px) and show it. Mirrors the egui Windows pump.
+    #[cfg(windows)]
+    pub fn embed_tab_win(&mut self, id: BrowserId, parent: i64, rect: (i32, i32, i32, i32)) {
+        if let Some(tab) = self.tabs.get_mut(&id)
+            && let Some(child) = tab.host.as_ref().and_then(|h| h.child_hwnd())
+        {
+            if !tab.embedded {
+                embed::reparent(parent, child);
+                tab.embedded = true;
+                tab.floated = false;
+            }
+            let (x, y, w, h) = rect;
+            if w > 0 && h > 0 {
+                if tab.placed_rect != Some(rect) {
+                    embed::place(child, x, y, w, h);
+                    tab.placed_rect = Some(rect);
+                }
+                if !tab.visible {
+                    embed::show(child);
+                    tab.visible = true;
+                }
             }
         }
     }

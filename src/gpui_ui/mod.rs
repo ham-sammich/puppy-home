@@ -100,6 +100,10 @@ pub fn run() {
         });
 }
 
+/// Shared slot carrying the Browser screen's embed-region bounds
+/// (window coords, logical px) from the layout canvas to render upkeep.
+pub(crate) type EmbedSlot = std::sync::Arc<std::sync::Mutex<Option<(f32, f32, f32, f32)>>>;
+
 pub struct RootView {
     supervisor: Supervisor,
     tokens: Tokens,
@@ -111,6 +115,18 @@ pub struct RootView {
     pub(crate) probe_remote_log: bool,
     /// Armed transcript dump: (workspace, sent-at, wait-secs).
     probe_prompt_dump: Option<(WorkspaceId, Instant, u64)>,
+    /// Browser-embed region bounds (window coords, logical px), recorded
+    /// by the Browser screen's canvas each layout — read at render start
+    /// (one-frame lag, same pattern as the terminal resize slot).
+    browser_embed_slot: EmbedSlot,
+    /// Cached native view pointer (macOS NSView from raw-window-handle);
+    /// lets the drain loop hide the overlay on minimize without a Window.
+    browser_ns_view: Option<usize>,
+    /// Whether the browser wake ticker (minimize-hide while idle) runs.
+    browser_ticker: bool,
+    /// Browser-cycle probe state (stage index, t0).
+    browser_cycle_stage: u8,
+    browser_cycle_at: Option<Instant>,
     // -- dashboard state --
     dash_mode: DashboardViewMode,
     reduce_motion: bool,
@@ -136,6 +152,8 @@ pub struct RootView {
     /// `PUPPY_GPUI_SCREEN=chat`: auto-open the first ready workspace's chat
     /// (probe instrumentation, like PUPPY_GPUI_PROMPT).
     probe_chat_screen: bool,
+    /// Shared slot carrying the Browser screen's embed-region bounds
+    /// (window coords, logical px) from the layout canvas to render upkeep.
     /// Shared single-line answer input (ask Other rows + input prompts).
     answer_input: Option<Entity<ChatInput>>,
     /// Which (workspace, ask-question) the answer input currently feeds.
@@ -311,6 +329,11 @@ impl RootView {
             probe_prompt: std::env::var("PUPPY_GPUI_PROMPT").ok(),
             probe_remote_log: false,
             probe_prompt_dump: None,
+            browser_embed_slot: EmbedSlot::default(),
+            browser_ns_view: None,
+            browser_ticker: false,
+            browser_cycle_stage: 0,
+            browser_cycle_at: None,
             dash_mode: saved.dashboard_view,
             reduce_motion: saved.reduce_motion,
             toasts: Vec::new(),
@@ -908,11 +931,12 @@ impl RootView {
                     root.maybe_probe_manager(cx);
                     root.maybe_probe_theme_remote(cx);
                     root.mgr_upkeep();
-                    // The GPUI shell can't embed the browser plugin window;
-                    // float it as a real decorated window once it's ready
-                    // (the plugin starts HIDDEN on embeddable platforms —
-                    // without this nothing ever appears; E8 macOS bug).
-                    root.browser.float_pump();
+                    // Browser overlay discipline outside the render path:
+                    // hide it when the host window minimizes (renders stop,
+                    // so render-upkeep can't do it; the wake ticker keeps
+                    // this loop breathing while idle).
+                    root.browser_minimize_check();
+                    root.maybe_probe_browser_cycle(cx);
                     root.remote_upkeep(cx);
                     root.pack_sync_upkeep();
                     root.ensure_answer_input_if_needed(cx);
@@ -1085,6 +1109,157 @@ impl RootView {
                     }
                 });
             }
+        }
+    }
+
+    /// Per-render browser presentation upkeep (E8 redux #2 — real
+    /// embedding). Default mode glues the plugin's borderless overlay to
+    /// the Browser screen's viewport region: NSView (via raw-window-handle
+    /// `RawWindowHandle::AppKit`) \u{2192} Cocoa converts the canvas-recorded
+    /// element rect to global top-left physical px \u{2192} `embed` IPC, re-sent
+    /// every render exactly like the egui per-frame pump (z-order
+    /// re-assert); `request_animation_frame` keeps renders flowing while
+    /// the screen is up. Floating mode (\u{2197}) is the d6f8017 float path.
+    fn browser_embed_upkeep(&mut self, window: &mut Window) {
+        #[cfg(target_os = "macos")]
+        {
+            use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+            let Some(id) = self.browser_tab else { return };
+            if !self.browser.tab_running(id) {
+                return;
+            }
+            if self.browser_ns_view.is_none()
+                && let Ok(h) = window.window_handle()
+                && let RawWindowHandle::AppKit(ak) = h.as_raw()
+            {
+                self.browser_ns_view = Some(ak.ns_view.as_ptr() as usize);
+            }
+            let Some(view) = self.browser_ns_view else {
+                return;
+            };
+            let view = view as *mut std::ffi::c_void;
+            use crate::browser::{EmbedMode, embed_mac};
+            match self.browser.tab_mode(id) {
+                EmbedMode::Floating => self.browser.float_tab(id),
+                EmbedMode::Embedded => {
+                    let on_browser = self.screen == Screen::Browser;
+                    if on_browser && self.browser.tab_ready(id) && !embed_mac::is_miniaturized(view)
+                    {
+                        let rect = *self.browser_embed_slot.lock().unwrap();
+                        if let (Some(rect), Some(parent)) = (rect, embed_mac::window_number(view))
+                            && let Some(px_rect) = embed_mac::view_rect_to_screen_px(view, rect)
+                        {
+                            self.browser.embed_tab(id, px_rect, parent);
+                        }
+                        window.request_animation_frame();
+                    } else {
+                        self.browser.hide_tab(id);
+                    }
+                }
+            }
+        }
+        #[cfg(windows)]
+        {
+            // By construction (untestable on this box): reparent into the
+            // GPUI HWND once, then place at the canvas rect in client px.
+            use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+            let Some(id) = self.browser_tab else { return };
+            if !self.browser.tab_running(id) {
+                return;
+            }
+            if self.browser_ns_view.is_none()
+                && let Ok(h) = window.window_handle()
+                && let RawWindowHandle::Win32(w32) = h.as_raw()
+            {
+                self.browser_ns_view = Some(w32.hwnd.get() as usize);
+            }
+            let Some(parent) = self.browser_ns_view else {
+                return;
+            };
+            use crate::browser::EmbedMode;
+            match self.browser.tab_mode(id) {
+                EmbedMode::Floating => self.browser.float_tab(id),
+                EmbedMode::Embedded => {
+                    if self.screen == Screen::Browser {
+                        let rect = *self.browser_embed_slot.lock().unwrap();
+                        let scale = window.scale_factor();
+                        if let Some((x, y, w, h)) = rect {
+                            let to = |v: f32| (v * scale).round() as i32;
+                            self.browser.embed_tab_win(
+                                id,
+                                parent as i64,
+                                (to(x), to(y), to(w), to(h)),
+                            );
+                        }
+                        window.request_animation_frame();
+                    } else {
+                        self.browser.hide_tab(id);
+                    }
+                }
+            }
+        }
+        #[cfg(not(any(target_os = "macos", windows)))]
+        {
+            let _ = window;
+            // Linux: no embedding; float once so the window is visible
+            // (parity with the egui shell's separate-window behavior).
+            if let Some(id) = self.browser_tab
+                && self.browser.tab_running(id)
+            {
+                self.browser.float_tab(id);
+            }
+        }
+    }
+
+    /// Probe: `PUPPY_GPUI_BROWSER_CYCLE=1` — staged embed-discipline E2E
+    /// (needs the browser launched): +6s switch to Dashboard (overlay must
+    /// hide), +12s back to Browser (re-embed), +18s pop out (decorated
+    /// float), +24s pop back in. External tooling snapshots window state
+    /// between stages.
+    fn maybe_probe_browser_cycle(&mut self, cx: &mut Context<Self>) {
+        if std::env::var_os("PUPPY_GPUI_BROWSER_CYCLE").is_none() {
+            return;
+        }
+        let Some(id) = self.browser_tab else { return };
+        if !self.browser.tab_running(id) {
+            return;
+        }
+        if self.browser_cycle_at.is_none() {
+            self.browser_cycle_at = Some(Instant::now());
+        }
+        let elapsed = self.browser_cycle_at.unwrap().elapsed().as_secs();
+        let stage = self.browser_cycle_stage;
+        let actions: [(u64, &str); 4] = [
+            (6, "dashboard"),
+            (12, "browser"),
+            (18, "popout"),
+            (24, "popin"),
+        ];
+        if let Some(&(at, what)) = actions.get(stage as usize)
+            && elapsed >= at
+        {
+            self.browser_cycle_stage += 1;
+            eprintln!("[probe] browser-cycle stage {stage}: {what}");
+            match what {
+                "dashboard" => self.screen = Screen::Dashboard,
+                "browser" => self.screen = Screen::Browser,
+                "popout" => {
+                    self.dispatch(DashAction::Browser(browser_ui::BrowserAction::PopOut), cx)
+                }
+                "popin" => self.dispatch(DashAction::Browser(browser_ui::BrowserAction::PopIn), cx),
+                _ => {}
+            }
+            cx.notify();
+        }
+    }
+
+    /// Drain-side companion: hide the overlay while minimized (no renders).
+    fn browser_minimize_check(&mut self) {
+        #[cfg(target_os = "macos")]
+        if let (Some(id), Some(view)) = (self.browser_tab, self.browser_ns_view)
+            && crate::browser::embed_mac::is_miniaturized(view as *mut std::ffi::c_void)
+        {
+            self.browser.hide_tab(id);
         }
     }
 
@@ -1310,6 +1485,7 @@ impl Render for RootView {
         // Presence heuristic input: is the window focused right now?
         self.window_active = window.is_window_active();
         self.apply_terminal_resize();
+        self.browser_embed_upkeep(window);
 
         // One-shot: focus the composer when a chat was just opened.
         if let Some(id) = self.pending_focus.take()

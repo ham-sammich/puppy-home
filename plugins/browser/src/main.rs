@@ -136,6 +136,9 @@ fn main() -> wry::Result<()> {
                 }
                 WireCmd::Devtools => webview.open_devtools(),
                 WireCmd::Embed { x, y, w, h, parent } => {
+                    // Re-embedding after a pop-out (`float`) must shed the
+                    // decorations again; idempotent when already borderless.
+                    window.set_decorations(false);
                     window.set_outer_position(tao::dpi::PhysicalPosition::new(x, y));
                     window.set_inner_size(tao::dpi::PhysicalSize::new(
                         w.max(1) as u32,

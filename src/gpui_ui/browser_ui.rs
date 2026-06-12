@@ -18,7 +18,7 @@ use gpui::{
     px,
 };
 
-use crate::browser::{BrowserManager, NavOp, PluginStatus};
+use crate::browser::{BrowserManager, EmbedMode, NavOp, PluginStatus};
 use crate::gpui_ui::input::ChatInput;
 use crate::gpui_ui::managers_ui::{disabled_btn, small};
 use crate::gpui_ui::widgets;
@@ -34,6 +34,11 @@ pub enum BrowserAction {
     Go,
     Launch,
     Stop,
+    /// \u{2197} — pop the embedded webview out into a decorated floating
+    /// window.
+    PopOut,
+    /// \u{2913} — re-embed the floating webview into the Browser screen.
+    PopIn,
     InstallLocal,
     Rescan,
     OpenPluginsDir,
@@ -77,6 +82,19 @@ impl RootView {
                 }
             }
             BrowserAction::Go | BrowserAction::Launch => {
+                // Wake ticker (started once): the drain loop is event-driven,
+                // but overlay discipline (hide-on-minimize) needs it to
+                // breathe even when nothing else generates events.
+                if !self.browser_ticker {
+                    self.browser_ticker = true;
+                    let waker = self.waker.clone();
+                    std::thread::spawn(move || {
+                        loop {
+                            std::thread::sleep(std::time::Duration::from_millis(700));
+                            waker.wake();
+                        }
+                    });
+                }
                 let Some(id) = self.browser_tab else { return };
                 let text = self
                     .browser_url_input
@@ -100,6 +118,16 @@ impl RootView {
             BrowserAction::Stop => {
                 if let Some(id) = self.browser_tab {
                     self.browser.stop_tab(id);
+                }
+            }
+            BrowserAction::PopOut => {
+                if let Some(id) = self.browser_tab {
+                    self.browser.set_tab_mode(id, EmbedMode::Floating);
+                }
+            }
+            BrowserAction::PopIn => {
+                if let Some(id) = self.browser_tab {
+                    self.browser.set_tab_mode(id, EmbedMode::Embedded);
                 }
             }
             BrowserAction::InstallLocal => self.browser.install_local(),
@@ -182,6 +210,25 @@ impl RootView {
                     .text_size(px(11.5))
                     .child(input.clone())
             }))
+            .children(running.then(|| {
+                // Pop-out / pop-in toggle (the embedded overlay vs a real
+                // decorated window).
+                let id = self.browser_tab.unwrap_or_default();
+                match self.browser.tab_mode(id) {
+                    EmbedMode::Embedded => widgets::btn(&t, "\u{2197}")
+                        .id("web-popout")
+                        .tooltip(widgets::text_tip(
+                            "Pop the browser out into its own window".into(),
+                        ))
+                        .on_click(bact(&root, BrowserAction::PopOut)),
+                    EmbedMode::Floating => widgets::btn(&t, "\u{2913}")
+                        .id("web-popin")
+                        .tooltip(widgets::text_tip(
+                            "Bring the browser back into this tab".into(),
+                        ))
+                        .on_click(bact(&root, BrowserAction::PopIn)),
+                }
+            }))
             .child(if running {
                 widgets::btn(&t, "Stop")
                     .id("web-stop")
@@ -196,12 +243,54 @@ impl RootView {
             });
 
         let viewport: AnyElement = if running {
-            center_note(
-                &t,
-                "Browser running in a floating window (look for \"Puppy \
-                 Browser\").\n\
-                 (In-tab embedding isn't available in the GPUI shell yet.)",
-            )
+            let id = self.browser_tab.unwrap_or_default();
+            match self.browser.tab_mode(id) {
+                EmbedMode::Embedded => {
+                    // The overlay window covers this region; the canvas
+                    // records its bounds (window coords, logical px) for
+                    // the render-upkeep embed pump. The note shows through
+                    // until the plugin window lands on top of it.
+                    let slot = self.browser_embed_slot.clone();
+                    div()
+                        .flex_1()
+                        .rounded(px(10.))
+                        .bg(t.well)
+                        .child(
+                            gpui::canvas(
+                                move |bounds, _, _| {
+                                    *slot.lock().unwrap() = Some((
+                                        f32::from(bounds.origin.x),
+                                        f32::from(bounds.origin.y),
+                                        f32::from(bounds.size.width),
+                                        f32::from(bounds.size.height),
+                                    ));
+                                },
+                                |_, _, _, _| {},
+                            )
+                            .size_full(),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(t.weak)
+                                        .child("starting browser\u{2026}"),
+                                ),
+                        )
+                        .into_any_element()
+                }
+                EmbedMode::Floating => center_note(
+                    &t,
+                    "Popped out \u{2014} the page lives in the \"Puppy Browser\" \
+                     window. \u{2913} brings it back into this tab.",
+                ),
+            }
         } else {
             div()
                 .flex_1()

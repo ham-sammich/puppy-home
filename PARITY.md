@@ -372,6 +372,46 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       + push-creds-by-consequence.]
       `5df2868`
 
+- [x] E8 REDUX #2 GPUI IN-TAB BROWSER EMBEDDING (user: "should appear
+      embedded with a pop-out icon"). The E8 "embedding N/A in GPUI"
+      verdict is RETIRED — the investigation found the missing pieces
+      exist at the pin (v0.199.10):
+      HANDLE ACCESS: `impl HasWindowHandle for Window` (window.rs:4668)
+      -> RawWindowHandle::AppKit{ns_view} on macOS (platform/mac/
+      window.rs:1292), Win32{hwnd} on Windows. From the NSView, plain
+      objc gives [view window] -> windowNumber (embed's z-anchor),
+      isMiniaturized, and the full Cocoa rect chain.
+      GEOMETRY: browser/embed_mac.rs converts the canvas-recorded
+      element rect (window coords, logical) via convertRect:toView:nil
+      -> convertRectToScreen: -> primary-screen y-flip ->
+      backingScaleFactor, yielding the global top-left PHYSICAL px tao
+      consumes — deliberately NOT gpui's Window::bounds() (its origin
+      is current-screen-relative; breaks multi-display). Slot pattern =
+      terminal ResizeSlot (canvas records at layout, render-start
+      upkeep consumes, one-frame lag).
+      BEHAVIOR: default EMBEDDED (borderless overlay glued to the
+      Browser screen viewport; embed re-sent per render like the egui
+      per-frame pump + request_animation_frame keeps frames flowing);
+      screen-switch/minimize hides (drain-side isMiniaturized check +
+      700ms wake ticker, since renders stop when miniaturized);
+      \u{2197} pops out to the decorated float (plugin `embed` now sheds
+      decorations so pop-in works — plugin REBUILD+REINSTALL needed);
+      \u{2913} re-embeds. Mode is per-launch (default embedded; no
+      persistence — YAGNI).
+      LIVE VALIDATED (CGWindowList + screenshots): embedded rect glued
+      inside the host at exact paddings; dashboard switch -> overlay
+      offscreen; return -> re-embedded same rect; pop-out -> decorated
+      'Puppy Browser' window; pop-in -> borderless in-tab again; quit
+      -> plugin exits. Window drag/resize tracking is the same
+      per-frame recompute the egui shell uses (not separately
+      drag-tested — headless box).
+      WINDOWS: by construction, untested — reparent-once into the GPUI
+      HWND + place at client rect (embed_tab_win mirrors the egui
+      pump); pop-out adds embed.rs `unparent` (SetParent NULL +
+      WS_POPUP restore). Flagged for Windows validation pass.
+      PUPPY_GPUI_BROWSER_CYCLE=1 staged probe drives the whole cycle
+      headlessly. `<hash6>`
+
 - [x] E8 REDUX browser "does nothing" on macOS in the GPUI shell (user:
       "opens one but there's no browser"). ROOT CAUSE: on embeddable
       platforms (macOS + Windows) the plugin window starts BORDERLESS +
