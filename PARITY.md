@@ -139,7 +139,7 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
         poll cadences (2s gap/5s mcp/10s slow) and generation-driven
         optimistic-toggle clearing ported 1:1.
       - env/headers edit as KEY=VALUE lines, not add/remove pair rows.
-      SYNC QUEUE (phase-end batch to shared-backend + egui): pub(crate)
+      SYNC QUEUE — SYNCED (shared-backend b5b6516 / egui d1a0c16): pub(crate)
       visibility opens on `views/{mcp_wizard,skills_wizard,agent_wizard}`
       state machines + `views/{agent,skills}_manager` helpers (egui
       behavior unchanged — fields/methods only widened so the GPUI
@@ -175,7 +175,8 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       color-picker button has no GPUI counterpart at this pin (hex fields
       are canonical in both editors). Probe: PUPPY_GPUI_THEME=light
       (live-validated).
-      SYNC QUEUE (additions, phase-end batch): theme/mod.rs `app_bg` +
+      SYNC QUEUE — SYNCED (shared-backend b5b6516 / egui d1a0c16; egui's
+      convergent palette_for kept, identical semantics): theme/mod.rs `app_bg` +
       `dim_text` palette fields + `palette_for` (visuals_for now wraps
       it); theme/editor.rs pub `upsert`/`unique_name`/`ANSI_NAMES` + the
       two new color rows; theme `save_terminal` re-export;
@@ -217,7 +218,9 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       memory rows (Windows API; zeros = hidden elsewhere, egui-same),
       uptime + the demand-not-cap footnote. Probe: PUPPY_GPUI_PERF=1
       (live-validated).
-      SYNC QUEUE (additions, phase-end batch): pack.rs DenState
+      SYNC QUEUE — SYNCED (shared-backend b5b6516 / egui d1a0c16; the
+      Phase-D terminal.rs surface + workspace terminal accessors went in
+      the same batch): pack.rs DenState
       activity/claims folds + `breadcrumb_body` + `PACK_HELPER` +
       `write/remove_pack_breadcrumb` (egui app/pack_sync.rs + PackView
       should converge onto them); browser/mod.rs frontend-agnostic API
