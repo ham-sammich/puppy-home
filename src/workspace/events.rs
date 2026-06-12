@@ -148,6 +148,7 @@ impl Workspace {
             } => {
                 self.run_stats = stats;
                 self.token_rate = token_rate;
+                self.sparks.push(token_rate as f32);
                 self.sub_agents = sub_agents;
                 self.queued_steers = queued;
                 self.last_prompt = last_prompt;

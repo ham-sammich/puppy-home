@@ -38,7 +38,7 @@ mod state;
 mod tree_ops;
 mod view;
 
-pub use state::InstanceStatus;
+pub use state::{InstanceStatus, SPARK_SAMPLES, SparkRing};
 
 use ask::AskState;
 use diff::DiffRecord;
@@ -139,6 +139,8 @@ pub struct Workspace {
     pub total_tokens: u64,
     /// Cumulative $ cost; `None` until Code Puppy exposes a cost ledger.
     pub cost: Option<f64>,
+    /// Recent tok/s samples (one per status poll) for this card's sparkline.
+    sparks: state::SparkRing,
     /// MCP server catalog (global Code Puppy config, fetched via this
     /// workspace's sidecar). `None` until the first `mcp_servers` event.
     pub mcp_servers: Option<Vec<crate::backend::McpServerInfo>>,
@@ -308,6 +310,7 @@ impl Workspace {
             queued_steers: 0,
             total_tokens: 0,
             cost: None,
+            sparks: state::SparkRing::new(state::SPARK_SAMPLES),
             mcp_servers: None,
             mcp_generation: 0,
             skills: None,
@@ -378,6 +381,12 @@ impl Workspace {
     #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn is_paused(&self) -> bool {
         self.paused
+    }
+
+    /// Recent tok/s samples, oldest → newest (this card's sparkline data).
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn spark_history(&self) -> &[f32] {
+        self.sparks.samples()
     }
 
     /// Resolve a (possibly relative) diff path against the workspace root.

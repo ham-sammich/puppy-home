@@ -4,18 +4,27 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+use std::time::{Duration, Instant};
 
 use crate::backend::{CodePuppy, UiEvent};
 use crate::git::{LocalGit, WorkspaceGit};
 use crate::waker::UiWaker;
 use crate::workspace::fs::{CachedFs, LocalFs, WorkspaceFs};
-use crate::workspace::{InstanceStatus, Workspace, WorkspaceId};
+use crate::workspace::{InstanceStatus, SPARK_SAMPLES, SparkRing, Workspace, WorkspaceId};
+
+/// Minimum spacing between aggregate-throughput samples. `drain` runs every
+/// frame, so this gate is what keeps sampling off the per-frame cost path.
+const AGG_SAMPLE_EVERY: Duration = Duration::from_secs(1);
 
 pub struct Supervisor {
     workspaces: BTreeMap<WorkspaceId, Workspace>,
     next_id: u64,
     /// Wakes the frontend when a backend thread has fresh events.
     waker: Arc<dyn UiWaker>,
+    /// Recent fleet-wide tok/s samples (sum across busy workspaces).
+    agg_sparks: SparkRing,
+    /// When the aggregate was last sampled (`None` = never).
+    agg_sampled_at: Option<Instant>,
 }
 
 impl Supervisor {
@@ -24,6 +33,8 @@ impl Supervisor {
             workspaces: BTreeMap::new(),
             next_id: 1,
             waker,
+            agg_sparks: SparkRing::new(SPARK_SAMPLES),
+            agg_sampled_at: None,
         }
     }
 
@@ -67,6 +78,34 @@ impl Supervisor {
         for ws in self.workspaces.values_mut() {
             ws.pump();
         }
+        self.sample_aggregate(Instant::now());
+    }
+
+    /// Record one fleet-wide tok/s sample (sum across busy workspaces), at
+    /// most once per [`AGG_SAMPLE_EVERY`]. `now` is a parameter so tests can
+    /// drive the cadence without sleeping.
+    fn sample_aggregate(&mut self, now: Instant) {
+        if let Some(last) = self.agg_sampled_at
+            && now.duration_since(last) < AGG_SAMPLE_EVERY
+        {
+            return;
+        }
+        self.agg_sampled_at = Some(now);
+        // Idle/dead workspaces hold their LAST observed rate — summing those
+        // would overstate live throughput, so only busy ones count.
+        let total: f32 = self
+            .workspaces
+            .values()
+            .filter(|w| !matches!(w.status, InstanceStatus::Idle | InstanceStatus::Dead))
+            .map(|w| w.token_rate as f32)
+            .sum();
+        self.agg_sparks.push(total);
+    }
+
+    /// Fleet-wide tok/s samples, oldest → newest (the Command Center spark).
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn aggregate_sparks(&self) -> &[f32] {
+        self.agg_sparks.samples()
     }
 
     pub fn get(&self, id: WorkspaceId) -> Option<&Workspace> {
@@ -102,5 +141,33 @@ impl Supervisor {
             .values()
             .filter(|w| w.status == InstanceStatus::WaitingForInput)
             .count()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::waker::NoopWaker;
+
+    #[test]
+    fn aggregate_sampling_respects_cadence() {
+        let mut sup = Supervisor::new(Arc::new(NoopWaker));
+        let t0 = Instant::now();
+        // First sample always records (nothing to gate against yet).
+        sup.sample_aggregate(t0);
+        assert_eq!(sup.aggregate_sparks().len(), 1);
+        // Inside the gate window: dropped, not queued.
+        sup.sample_aggregate(t0 + Duration::from_millis(300));
+        sup.sample_aggregate(t0 + Duration::from_millis(900));
+        assert_eq!(sup.aggregate_sparks().len(), 1);
+        // Past the gate: records, and the gate re-anchors on THIS sample.
+        sup.sample_aggregate(t0 + Duration::from_millis(1100));
+        assert_eq!(sup.aggregate_sparks().len(), 2);
+        sup.sample_aggregate(t0 + Duration::from_millis(1900));
+        assert_eq!(sup.aggregate_sparks().len(), 2);
+        sup.sample_aggregate(t0 + Duration::from_millis(2200));
+        assert_eq!(sup.aggregate_sparks().len(), 3);
+        // No workspaces open -> the aggregate is a flat zero line.
+        assert!(sup.aggregate_sparks().iter().all(|&v| v == 0.0));
     }
 }

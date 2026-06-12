@@ -50,6 +50,41 @@ impl InstanceStatus {
     }
 }
 
+/// How many tok/s samples a sparkline keeps (the redesign's cards draw short
+/// sparks; at the ~1.2s status-poll cadence this is ~48s of history).
+pub const SPARK_SAMPLES: usize = 40;
+
+/// Fixed-capacity, time-ordered history of tok/s samples for sparkline
+/// painters. Pushing past capacity drops the oldest sample. Backed by a plain
+/// `Vec` kept in order so consumers get one contiguous slice — shifting ~40
+/// floats every ~1.2s is far cheaper than ring-index gymnastics at paint time.
+pub struct SparkRing {
+    buf: Vec<f32>,
+    cap: usize,
+}
+
+impl SparkRing {
+    pub fn new(cap: usize) -> Self {
+        SparkRing {
+            buf: Vec::with_capacity(cap),
+            cap,
+        }
+    }
+
+    /// Append a sample, dropping the oldest once at capacity.
+    pub fn push(&mut self, v: f32) {
+        if self.buf.len() == self.cap {
+            self.buf.remove(0);
+        }
+        self.buf.push(v);
+    }
+
+    /// Samples oldest → newest.
+    pub fn samples(&self) -> &[f32] {
+        &self.buf
+    }
+}
+
 /// One rendered line in the transcript.
 pub(crate) enum Entry {
     User(String),
@@ -263,6 +298,20 @@ mod tests {
     use super::*;
     use crate::backend::BackendMessage;
     use serde_json::json;
+
+    #[test]
+    fn spark_ring_keeps_order_and_drops_oldest() {
+        let mut ring = SparkRing::new(3);
+        assert!(ring.samples().is_empty());
+        ring.push(1.0);
+        ring.push(2.0);
+        ring.push(3.0);
+        assert_eq!(ring.samples(), &[1.0, 2.0, 3.0]);
+        // Past capacity: the oldest falls off, order is preserved.
+        ring.push(4.0);
+        ring.push(5.0);
+        assert_eq!(ring.samples(), &[3.0, 4.0, 5.0]);
+    }
 
     #[test]
     fn tool_label_maps_known_kinds() {
