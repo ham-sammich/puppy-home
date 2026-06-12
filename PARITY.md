@@ -29,24 +29,21 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
 
 ## Phase B — daily-driver core
 
-- [ ] B1. Image paste in the composer: clipboard image -> PNG -> base64 ->
-      `send_user_prompt(text, images)` (2-arg seam already converged) +
-      in-composer thumbnail chips. Ref: `workspace/clipboard.rs`
-      (arboard+png path exists, frontend-agnostic), egui `PendingImage`.
-      GPUI side: check `cx.read_from_clipboard()` image support at the pin;
-      fall back to arboard directly if the pin only exposes text.
-- [ ] B2. `@file` chips + file picker: `@` completion already works via the
-      sidecar; add the picker UI + chip rendering. Ref:
-      `workspace/file_picker.rs`, `views/path_browser.rs`.
-- [ ] B3. Input polish (gpui_ui/input.rs): soft wrap, cursor up/down across
-      lines, cursor blink, double-click word select. Ref: egui gets these
-      free from `TextEdit`; ours is the EntityInputHandler port.
-- [ ] B4. Prompt-history navigation (Up/Down recalls sent prompts when the
-      caret is at line 0 / last line). Backend state exists
-      (`Workspace::input_history` + `record_history`); expose accessors.
-      Ref: `workspace/chat.rs` history fns.
-- [ ] B5. Completion palette keyboard navigation (Up/Down/Enter/Escape) —
-      named 2.3 gap; currently click-only.
+- [x] B1. Image paste: gpui clipboard PNG entries + shared arboard
+      RGBA->PNG fallback; removable thumbnail chips (in-bar for Unified);
+      sent via `send_user_prompt(text, images)`. (c5cf117)
+- [x] B2. `@file`: '@ File' picker popover (Classic/Unified) inserting the
+      egui-identical `@relative/path ` token; `@` typing still drives
+      sidecar completions. Chips render as text tokens, not chip objects
+      (same as egui's behavior — see its QA deviations).
+- [x] B3. Input polish: soft wrap + multi-row cursor geometry, Up/Down
+      across visual lines, Home/End + cmd-arrows, word jump (alt/ctrl,
+      +shift select). PUNTED (cosmetic ledger): cursor blink, goal-column
+      stickiness, double-click word select, internal scroll past 8 rows.
+- [x] B4. Prompt-history navigation: Up/Down at top/bottom edge recalls
+      via shared `history_prev/next` (draft stash, egui semantics).
+- [x] B5. Palette keyboard nav: Up/Down wrap-around, Enter/Tab accept,
+      Esc dismiss; palette-open routes keys away from buffer/history.
 - [ ] B6. Sessions browser + resume: list/preview/load autosaves. Backend
       events already fold (`sessions`, `session_preview`, `load_session`).
       Ref: `workspace/sessions.rs`.
@@ -57,16 +54,14 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
 - [ ] B9. Thinking auto-collapse: honor the one-shot `collapse` Cell when a
       turn completes (currently manual fold only). Ref:
       `workspace/render.rs` Thinking arm.
-- [ ] B10. **Session restore on launch** (ADDED — was missing from the
-      plan): reopen saved workspaces + re-apply agent/model/autosave via
-      `Workspace::set_restore`, and save the open-workspace list on
-      change/exit. The gpui app currently starts empty every run. Ref:
-      `session.rs` `WorkspaceEntry`, egui `app/mod.rs` restore path,
-      `dock_layout::current_session`.
-- [ ] B11. Composer dock turn controls (ADDED): while a turn runs the egui
-      dock shows pause/resume/stop + the now/queue steer toggle next to the
-      status line, in every composer style. Ref: egui `composer.rs` dock
-      row. (GPUI currently only has these on dashboard cards.)
+- [x] B10. Session restore on launch: egui semantics (missing dirs
+      skipped), agent/model/autosave re-applied; saves are read-modify-
+      write (egui layout/theme preserved) + change-gated in the drain
+      loop; probe runs isolated from the user's session.json. Round-trip
+      with an egui-written file proven live. (6ceed92)
+- [x] B11. Composer dock turn controls: Pause/Resume + Stop + now/queue
+      steer toggle in the status line while a turn runs, every skin;
+      Enter mid-turn steers with the chosen mode. (c5cf117)
 - [ ] B12. Markdown upgrade (ADDED): tables + links (open in browser) for
       the in-house renderer, or revisit the dependency decision. Ref:
       gpui_ui/markdown.rs decision note in GPUI_NOTES.md.
@@ -183,6 +178,10 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
 - Emoji: gpui renders color (feature, not bug) — egui branch stays mono;
   note in any side-by-side screenshots.
 - Input cursor does not blink (static caret).
+- Input: no goal-column stickiness on Up/Down, no double-click word
+  select, content past 8 visual rows clips (no internal scroll).
+- @file completions/picker insert text tokens, not chip objects (egui
+  behaves the same; "chips" upgrade would be both-branch work).
 - Kanban card hover-state element ids can collide on equal dir-name
   lengths (cosmetic only; relay ids authoritative).
 - Den teammate read-along (Open on teammates' agents) disabled on BOTH

@@ -294,6 +294,32 @@ are chrome around the ONE ChatInput entity; the gear popover persists
   is ignored.
 - No soft wrap in the input (above).
 
+## Phase B — composer patterns (B10/B1/B11/B5)
+
+- **Soft-wrap input**: `shape_text(wrap_width)` per logical line →
+  `WrappedLine` (multi-row aware `position_for_index`/`index_for_position`
+  do all caret/mouse geometry); element height via
+  `request_measured_layout` (shape in the measure closure, cap at 8 rows).
+  Selection = one quad per visual row (start/end x from caret positions,
+  full width between). Punts: goal-column stickiness, internal scroll
+  beyond the cap, cursor blink.
+- **Key routing precedence** (input actions): palette open → palette
+  events (Nav/Accept/Dismiss); else Up/Down at the top/bottom visual row →
+  History events; else cursor movement. The `palette_open` flag is pushed
+  onto the input entity by the root (on edits AND on drain-loop completion
+  replies — the sidecar answers async).
+- **History recall** lives on `Workspace` (shared `history_prev/next` +
+  `suppress_completions_for`); suppress is called BEFORE `set_text` so the
+  deferred `Edited` event equality-debounces in `update_completions`.
+- **Image paste**: gpui `ClipboardEntry::Image` (PNG straight through) with
+  the shared arboard RGBA→PNG fallback; pending images live on the root
+  per workspace as `(base64, Arc<gpui::Image>)` — wire form + thumbnail
+  form built once at paste time.
+- **Session restore/save**: probe runs (`PUPPY_GPUI_OPEN`) neither restore
+  nor write session.json; real runs restore with egui semantics
+  (missing dirs skipped) and save read-modify-write (egui-only fields
+  preserved), change-gated in the drain loop.
+
 ## Task 2.4 — Needs-you answers + The Den
 
 ### Answer UI (the 2.3 carry-over)
