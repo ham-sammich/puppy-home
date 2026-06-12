@@ -167,6 +167,15 @@ fn ui_palette_section(
     ui.add_space(2.0);
     any |= color_row(ui, "Warn", &mut palette.warn);
     any |= color_row(ui, "Error", &mut palette.error);
+    ui.add_space(2.0);
+    // Redesign tokens: brand accents + per-state agent-card colors.
+    any |= color_row(ui, "Accent 2", &mut palette.accent2);
+    any |= color_row(ui, "Accent ink", &mut palette.accent_ink);
+    any |= color_row(ui, "Status: run", &mut palette.status_run);
+    any |= color_row(ui, "Status: think", &mut palette.status_think);
+    any |= color_row(ui, "Status: wait", &mut palette.status_wait);
+    any |= color_row(ui, "Status: paused", &mut palette.status_paused);
+    any |= color_row(ui, "Status: error", &mut palette.status_error);
     if any {
         out.changed = true;
     }

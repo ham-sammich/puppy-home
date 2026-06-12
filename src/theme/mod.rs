@@ -59,6 +59,85 @@ pub struct ThemePalette {
     pub warn: String,
     /// Error text.
     pub error: String,
+    // --- redesign tokens (serde defaults keep pre-redesign themes.json loading) ---
+    /// Secondary accent (gradients, hover tints on the brand color).
+    #[serde(default = "d_accent2")]
+    pub accent2: String,
+    /// Text/glyphs sitting ON the accent (e.g. the label in an amber chip).
+    #[serde(default = "d_accent_ink")]
+    pub accent_ink: String,
+    /// Status: generating.
+    #[serde(default = "d_status_run")]
+    pub status_run: String,
+    /// Status: thinking / tool call.
+    #[serde(default = "d_status_think")]
+    pub status_think: String,
+    /// Status: waiting for user input.
+    #[serde(default = "d_status_wait")]
+    pub status_wait: String,
+    /// Status: paused at the PauseController gate.
+    #[serde(default = "d_status_paused")]
+    pub status_paused: String,
+    /// Status: errored / dead.
+    #[serde(default = "d_status_error")]
+    pub status_error: String,
+}
+
+// Serde defaults for the redesign tokens — one source of truth shared by the
+// field attributes and both presets.
+fn d_accent2() -> String {
+    "#f0c987".into()
+}
+fn d_accent_ink() -> String {
+    "#1c1402".into()
+}
+fn d_status_run() -> String {
+    "#5fd190".into()
+}
+fn d_status_think() -> String {
+    "#6aa8ff".into()
+}
+fn d_status_wait() -> String {
+    "#dd9ce6".into()
+}
+fn d_status_paused() -> String {
+    "#cfa54e".into()
+}
+fn d_status_error() -> String {
+    "#f28585".into()
+}
+
+/// The redesign's accent/status tokens resolved to `Color32` once — views hold
+/// one of these instead of parsing hex per frame. Field names follow
+/// EGUI_GUIDE.md's `Accents` recipe.
+#[allow(dead_code)] // consumed by the redesign UI branches
+pub struct Accents {
+    pub accent: egui::Color32,
+    pub accent_2: egui::Color32,
+    pub accent_ink: egui::Color32,
+    pub run: egui::Color32,
+    pub think: egui::Color32,
+    pub wait: egui::Color32,
+    pub paused: egui::Color32,
+    pub error: egui::Color32,
+}
+
+impl Accents {
+    /// Resolve from a palette. Malformed hex falls back to mid-gray, matching
+    /// the rest of the palette's lenient parsing.
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn from_palette(p: &ThemePalette) -> Self {
+        Accents {
+            accent: p.col(&p.accent),
+            accent_2: p.col(&p.accent2),
+            accent_ink: p.col(&p.accent_ink),
+            run: p.col(&p.status_run),
+            think: p.col(&p.status_think),
+            wait: p.col(&p.status_wait),
+            paused: p.col(&p.status_paused),
+            error: p.col(&p.status_error),
+        }
+    }
 }
 
 impl Default for ThemePalette {
@@ -137,27 +216,36 @@ impl ThemePalette {
         v
     }
 
-    /// The default dark preset (comfortable, neutral).
+    /// The default dark preset: the redesign's amber brand on the spec's base
+    /// surfaces (EGUI_GUIDE.md §1 maps them onto egui visuals; `window` doubles
+    /// as the card fill).
     pub fn dark() -> Self {
         Self {
             name: "Dark".into(),
             dark_mode: true,
-            text: "#e6e6e6".into(),
-            weak_text: "#9aa0aa".into(),
+            text: "#eaeaf0".into(),
+            weak_text: "#9a9aa8".into(),
             strong_text: "#ffffff".into(),
-            panel: "#1e1e24".into(),
-            window: "#26262e".into(),
-            faint_bg: "#2a2a32".into(),
-            extreme_bg: "#16161a".into(),
-            code_bg: "#2a2a32".into(),
-            accent: "#5a9cff".into(),
-            selection: "#365880".into(),
-            widget_bg: "#33333d".into(),
-            widget_hover: "#404049".into(),
-            widget_active: "#4a4a56".into(),
-            stroke: "#45454f".into(),
+            panel: "#1a1a20".into(),
+            window: "#1e1e26".into(),
+            faint_bg: "#222229".into(),
+            extreme_bg: "#16161c".into(),
+            code_bg: "#222229".into(),
+            accent: "#e7ab4d".into(),
+            selection: "#4d3d20".into(), // amber-tinted, not the old blue
+            widget_bg: "#2a2a33".into(),
+            widget_hover: "#34343f".into(),
+            widget_active: "#3e3e4a".into(),
+            stroke: "#2e2e39".into(),
             warn: "#e8c06a".into(),
-            error: "#f08080".into(),
+            error: "#f28585".into(),
+            accent2: d_accent2(),
+            accent_ink: d_accent_ink(),
+            status_run: d_status_run(),
+            status_think: d_status_think(),
+            status_wait: d_status_wait(),
+            status_paused: d_status_paused(),
+            status_error: d_status_error(),
         }
     }
 
@@ -183,6 +271,13 @@ impl ThemePalette {
             stroke: "#bfbfca".into(),
             warn: "#9a6b00".into(),
             error: "#b3261e".into(),
+            accent2: d_accent2(),
+            accent_ink: d_accent_ink(),
+            status_run: d_status_run(),
+            status_think: d_status_think(),
+            status_wait: d_status_wait(),
+            status_paused: d_status_paused(),
+            status_error: d_status_error(),
         }
     }
 }
@@ -282,6 +377,13 @@ mod tests {
                 &p.stroke,
                 &p.warn,
                 &p.error,
+                &p.accent2,
+                &p.accent_ink,
+                &p.status_run,
+                &p.status_think,
+                &p.status_wait,
+                &p.status_paused,
+                &p.status_error,
             ] {
                 assert!(parse_hex(hex).is_some(), "bad hex {hex:?} in {}", p.name);
             }
@@ -307,6 +409,39 @@ mod tests {
         assert_eq!(v.panel_fill, parse_hex("#100020").unwrap());
         // Unknown name falls back to dark, not a crash.
         let v2 = visuals_for(&Theme::Custom("missing".into()), &lib);
-        assert_eq!(v2.panel_fill, parse_hex("#1e1e24").unwrap());
+        assert_eq!(v2.panel_fill, parse_hex("#1a1a20").unwrap());
+    }
+
+    #[test]
+    fn legacy_theme_json_loads_with_token_defaults() {
+        // A themes.json written before the redesign has none of the token
+        // fields — serde defaults must fill them so old libraries still load.
+        let legacy = r##"{
+            "name": "Old", "dark_mode": true,
+            "text": "#e6e6e6", "weak_text": "#9aa0aa", "strong_text": "#ffffff",
+            "panel": "#1e1e24", "window": "#26262e", "faint_bg": "#2a2a32",
+            "extreme_bg": "#16161a", "code_bg": "#2a2a32", "accent": "#5a9cff",
+            "selection": "#365880", "widget_bg": "#33333d",
+            "widget_hover": "#404049", "widget_active": "#4a4a56",
+            "stroke": "#45454f", "warn": "#e8c06a", "error": "#f08080"
+        }"##;
+        let p: ThemePalette = serde_json::from_str(legacy).expect("legacy loads");
+        assert_eq!(p.accent, "#5a9cff"); // user's choice untouched
+        assert_eq!(p.accent2, "#f0c987");
+        assert_eq!(p.accent_ink, "#1c1402");
+        assert_eq!(p.status_paused, "#cfa54e");
+        // And the resolved accessor parses every default.
+        let a = Accents::from_palette(&p);
+        assert_eq!(a.paused, parse_hex("#cfa54e").unwrap());
+        assert_eq!(a.run, parse_hex("#5fd190").unwrap());
+    }
+
+    #[test]
+    fn dark_preset_is_amber_branded() {
+        // The approved redesign decision: amber is the default dark brand.
+        let p = ThemePalette::dark();
+        assert_eq!(p.accent, "#e7ab4d");
+        assert_eq!(p.panel, "#1a1a20");
+        assert_eq!(p.window, "#1e1e26");
     }
 }

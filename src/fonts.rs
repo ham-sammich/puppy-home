@@ -1,7 +1,10 @@
-//! Broad Unicode + emoji font coverage.
+//! Brand fonts + broad Unicode and emoji coverage.
 //!
-//! egui's bundled fonts cover only Latin plus a small emoji subset, so other
-//! scripts and many emoji render as missing-glyph boxes. We fix coverage with:
+//! The redesign's typefaces lead every family (both bundled, both OFL — see
+//! `assets/OFL-*.txt`): **Space Grotesk** heads Proportional and **JetBrains
+//! Mono** heads Monospace, with bold cuts exposed as named families for
+//! headings. Behind them the pre-existing fallback chain fixes egui's narrow
+//! default coverage:
 //!
 //!   * a bundled **full monochrome Noto Emoji** (every emoji as an outline egui
 //!     can rasterize — egui has no color-emoji support, so these are silhouettes),
@@ -16,6 +19,20 @@ use eframe::egui::{self, FontData, FontDefinitions, FontFamily};
 
 /// Full monochrome emoji coverage, embedded in the binary.
 const NOTO_EMOJI: &[u8] = include_bytes!("../assets/NotoEmoji-Regular.ttf");
+
+/// The redesign's proportional brand font (OFL).
+const SPACE_GROTESK: &[u8] = include_bytes!("../assets/SpaceGrotesk-Regular.ttf");
+const SPACE_GROTESK_BOLD: &[u8] = include_bytes!("../assets/SpaceGrotesk-Bold.ttf");
+/// The redesign's monospace font — every number/path/model/stat (OFL).
+const JETBRAINS_MONO: &[u8] = include_bytes!("../assets/JetBrainsMono-Regular.ttf");
+const JETBRAINS_MONO_BOLD: &[u8] = include_bytes!("../assets/JetBrainsMono-Bold.ttf");
+
+/// Named family for Space Grotesk Bold (headings / emphasized labels).
+#[allow(dead_code)] // consumed by the redesign UI branches
+pub const FAMILY_GROTESK_BOLD: &str = "grotesk-bold";
+/// Named family for JetBrains Mono Bold (emphasized stats).
+#[allow(dead_code)] // consumed by the redesign UI branches
+pub const FAMILY_JBMONO_BOLD: &str = "jbmono-bold";
 
 /// Load a system font file into the definitions; returns whether it was found.
 fn load(fonts: &mut FontDefinitions, key: &str, path: &str) -> bool {
@@ -80,6 +97,18 @@ pub fn configure(ctx: &egui::Context) {
         Arc::new(FontData::from_static(NOTO_EMOJI)),
     );
 
+    // Bundled brand fonts (keys per EGUI_GUIDE.md §2).
+    for (key, bytes) in [
+        ("grotesk", SPACE_GROTESK),
+        ("grotesk-bold", SPACE_GROTESK_BOLD),
+        ("jbmono", JETBRAINS_MONO),
+        ("jbmono-bold", JETBRAINS_MONO_BOLD),
+    ] {
+        fonts
+            .font_data
+            .insert(key.to_owned(), Arc::new(FontData::from_static(bytes)));
+    }
+
     // Load whatever system symbol/CJK fonts exist on this OS as fallbacks.
     let mut fallback_keys: Vec<String> = Vec::new();
     for (i, path) in system_font_candidates().into_iter().enumerate() {
@@ -104,11 +133,37 @@ pub fn configure(ctx: &egui::Context) {
         if primary {
             prop.insert(0, "primary".to_owned());
         }
+        // Brand font leads; OS primary + egui default stay as Latin fallbacks.
+        prop.insert(0, "grotesk".to_owned());
         add_fallbacks(prop);
     }
     if let Some(mono) = fonts.families.get_mut(&FontFamily::Monospace) {
+        mono.insert(0, "jbmono".to_owned());
         add_fallbacks(mono);
     }
+
+    // Bold cuts as named families (egui has no weight axis): each leads its
+    // regular family's full chain so emoji/CJK still resolve in bold runs.
+    let prop_chain = fonts
+        .families
+        .get(&FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
+    let mut grotesk_bold = prop_chain;
+    grotesk_bold.insert(0, "grotesk-bold".to_owned());
+    fonts
+        .families
+        .insert(FontFamily::Name(FAMILY_GROTESK_BOLD.into()), grotesk_bold);
+    let mono_chain = fonts
+        .families
+        .get(&FontFamily::Monospace)
+        .cloned()
+        .unwrap_or_default();
+    let mut jbmono_bold = mono_chain;
+    jbmono_bold.insert(0, "jbmono-bold".to_owned());
+    fonts
+        .families
+        .insert(FontFamily::Name(FAMILY_JBMONO_BOLD.into()), jbmono_bold);
 
     ctx.set_fonts(fonts);
 }
