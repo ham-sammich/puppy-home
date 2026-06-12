@@ -13,6 +13,7 @@
 
 pub mod actions;
 pub mod assets;
+pub mod browser_ui;
 pub mod chat;
 pub mod dashboard;
 pub mod den;
@@ -26,6 +27,7 @@ pub mod managers_mcp;
 pub mod managers_skills;
 pub mod managers_ui;
 pub mod markdown;
+pub mod perf_ui;
 pub mod remote;
 pub mod remote_ui;
 pub mod terminal;
@@ -47,6 +49,7 @@ use gpui::{
     WindowBounds, WindowOptions, div, prelude::*, px, size,
 };
 
+use crate::browser::{BrowserId, BrowserManager};
 use crate::session::{self, ComposerStyle, DashboardViewMode, Theme};
 use crate::supervisor::Supervisor;
 use crate::theme::{TerminalTheme, ThemePalette};
@@ -66,6 +69,8 @@ pub enum Screen {
     Dashboard,
     Chat(WorkspaceId),
     Den,
+    /// The browser-plugin host surface (egui's dockable Browser tab).
+    Browser,
 }
 
 /// Drain cadence while at least one workspace is mid-turn.
@@ -226,6 +231,21 @@ pub struct RootView {
     pub(crate) theme_picker_open: bool,
     pub(crate) theme_editor_open: bool,
     pub(crate) theme_inputs: Vec<Entity<ChatInput>>,
+    // -- browser-plugin host state --
+    pub(crate) browser: BrowserManager,
+    /// The single GPUI browser surface's tab (egui docks N; we host one).
+    pub(crate) browser_tab: Option<BrowserId>,
+    pub(crate) browser_url_input: Option<Entity<ChatInput>>,
+    /// Dashboard plugins-section expanded? (egui default_open = true)
+    pub(crate) plugins_open: bool,
+    // -- perf HUD --
+    pub(crate) perf: perf_ui::GpuiPerf,
+    // -- den pack-sync (activity broadcast + Tier-2 breadcrumb) --
+    pub(crate) pack_activity_at: Option<Instant>,
+    pub(crate) pack_activity_last: String,
+    pub(crate) pack_breadcrumb_sig: String,
+    pub(crate) pack_breadcrumb_at: Option<Instant>,
+    pub(crate) pack_breadcrumb_written: bool,
 }
 
 /// One pasted image: the wire form + the displayable form.
@@ -365,6 +385,16 @@ impl RootView {
             theme_picker_open: false,
             theme_editor_open: false,
             theme_inputs: Vec::new(),
+            browser: BrowserManager::discover(),
+            browser_tab: None,
+            browser_url_input: None,
+            plugins_open: true,
+            perf: perf_ui::GpuiPerf::default(),
+            pack_activity_at: None,
+            pack_activity_last: String::new(),
+            pack_breadcrumb_sig: String::new(),
+            pack_breadcrumb_at: None,
+            pack_breadcrumb_written: false,
         }
     }
 
@@ -658,6 +688,16 @@ impl RootView {
             self.dispatch(DashAction::Remote(remote::RemoteAction::Open), cx);
             eprintln!("[probe] opened the remote-connect dialog");
         }
+        if std::env::var_os("PUPPY_GPUI_BROWSER").is_some() {
+            unsafe { std::env::remove_var("PUPPY_GPUI_BROWSER") };
+            self.dispatch(DashAction::Browser(browser_ui::BrowserAction::Open), cx);
+            eprintln!("[probe] opened the browser surface");
+        }
+        if std::env::var_os("PUPPY_GPUI_PERF").is_some() {
+            unsafe { std::env::remove_var("PUPPY_GPUI_PERF") };
+            self.dispatch(DashAction::PerfToggle, cx);
+            eprintln!("[probe] toggled the perf HUD");
+        }
     }
 
     /// Probe: jump to the first ready workspace's chat once, if asked to.
@@ -825,6 +865,7 @@ impl RootView {
                     root.maybe_probe_theme_remote(cx);
                     root.mgr_upkeep();
                     root.remote_upkeep();
+                    root.pack_sync_upkeep();
                     root.ensure_answer_input_if_needed(cx);
                     root.prune_toasts();
                     cx.notify();
@@ -1054,13 +1095,28 @@ impl RootView {
                         this.dispatch(DashAction::Remote(remote::RemoteAction::Open), cx)
                     })),
             )
+            .child(
+                widgets::btn(t, "\u{1f310} Web")
+                    .id("tb-web")
+                    .tooltip(widgets::text_tip("Browser plugin: launch / install".into()))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.dispatch(DashAction::Browser(browser_ui::BrowserAction::Open), cx)
+                    })),
+            )
             .child(div().flex_1())
             .child(
+                // Dev-toggle obscure (egui hides the HUD in a menu): clicking
+                // the fleet-stats readout toggles the performance HUD.
                 div()
+                    .id("tb-stats")
+                    .cursor_pointer()
                     .text_size(px(11.5))
                     .font_family("JetBrains Mono")
                     .text_color(t.weak)
-                    .child(stats_sub),
+                    .child(stats_sub)
+                    .on_click(
+                        cx.listener(|this, _, _, cx| this.dispatch(DashAction::PerfToggle, cx)),
+                    ),
             )
             .child(
                 widgets::btn(t, "MCP")
@@ -1147,6 +1203,7 @@ impl RootView {
 
 impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let perf_began = self.perf.frame_begin();
         let t = self.tokens;
         let entity = cx.entity();
         let puppy = self.puppy_name();
@@ -1190,6 +1247,8 @@ impl Render for RootView {
             active_chat,
             self.den.as_ref().map(|d| (d.room.clone(), d.alive)),
             self.screen == Screen::Den,
+            self.browser_tab
+                .map(|id| (self.browser.tab_title(id), self.screen == Screen::Browser)),
             &entity,
         );
 
@@ -1283,9 +1342,10 @@ impl Render for RootView {
                 })
             }
             Screen::Dashboard => self.dashboard_body(cx),
+            Screen::Browser => self.browser_body(cx),
         };
 
-        div()
+        let out = div()
             .relative()
             .size_full()
             .flex()
@@ -1364,7 +1424,14 @@ impl Render for RootView {
                     &self.theme,
                 )
             }))
-            .child(widgets::toast_layer(&t, &self.toasts))
+            .children(
+                self.perf
+                    .visible
+                    .then(|| perf_ui::hud(&t, &entity, &self.perf)),
+            )
+            .child(widgets::toast_layer(&t, &self.toasts));
+        self.perf.frame_end(perf_began);
+        out
     }
 }
 
@@ -1411,6 +1478,12 @@ impl RootView {
                             .flex_col()
                             .gap_3()
                             .child(dashboard::pack_header(&t, &puppy, &stats, agg))
+                            .child(browser_ui::plugins_section(
+                                &t,
+                                &entity,
+                                &self.browser,
+                                self.plugins_open,
+                            ))
                             .child(dashboard::attention_banner(
                                 &t,
                                 &waiting,

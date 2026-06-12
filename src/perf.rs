@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
-/// Rolling sample window (frames).
-const WINDOW: usize = 240;
+/// Rolling sample window (frames). (pub(crate): shared with the GPUI HUD.)
+pub(crate) const WINDOW: usize = 240;
 
 pub struct PerfStats {
     pub visible: bool,
@@ -126,14 +126,14 @@ impl PerfStats {
     }
 }
 
-fn push(buf: &mut VecDeque<f32>, v: f32) {
+pub(crate) fn push(buf: &mut VecDeque<f32>, v: f32) {
     if buf.len() >= WINDOW {
         buf.pop_front();
     }
     buf.push_back(v);
 }
 
-fn mean(buf: &VecDeque<f32>) -> f32 {
+pub(crate) fn mean(buf: &VecDeque<f32>) -> f32 {
     if buf.is_empty() {
         0.0
     } else {
@@ -141,7 +141,7 @@ fn mean(buf: &VecDeque<f32>) -> f32 {
     }
 }
 
-fn peak(buf: &VecDeque<f32>) -> f32 {
+pub(crate) fn peak(buf: &VecDeque<f32>) -> f32 {
     buf.iter().copied().fold(0.0, f32::max)
 }
 
@@ -155,7 +155,7 @@ fn cost_color(ui: &egui::Ui, ms: f32, budget: f32) -> egui::Color32 {
     }
 }
 
-fn fmt_bytes(b: u64) -> String {
+pub(crate) fn fmt_bytes(b: u64) -> String {
     const MB: f64 = 1024.0 * 1024.0;
     let mb = b as f64 / MB;
     if mb >= 1024.0 {
@@ -167,7 +167,7 @@ fn fmt_bytes(b: u64) -> String {
 
 /// (working set, private/pagefile) in bytes; zeros when unavailable.
 #[cfg(windows)]
-fn process_memory() -> (u64, u64) {
+pub(crate) fn process_memory() -> (u64, u64) {
     use windows::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
     use windows::Win32::System::Threading::GetCurrentProcess;
     unsafe {
@@ -187,7 +187,7 @@ fn process_memory() -> (u64, u64) {
 }
 
 #[cfg(not(windows))]
-fn process_memory() -> (u64, u64) {
+pub(crate) fn process_memory() -> (u64, u64) {
     (0, 0)
 }
 

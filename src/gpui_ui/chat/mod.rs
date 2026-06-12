@@ -751,9 +751,11 @@ pub fn tab_strip(
     active_chat: Option<crate::workspace::WorkspaceId>,
     den: Option<(String, bool)>,
     den_active: bool,
+    // (tab title, active?) when the browser surface has been opened.
+    browser: Option<(String, bool)>,
     root: &Entity<RootView>,
 ) -> AnyElement {
-    let on_dash = active_chat.is_none() && !den_active;
+    let on_dash = active_chat.is_none() && !den_active && !browser.as_ref().is_some_and(|b| b.1);
     let dash_tab = {
         let root = root.clone();
         div()
@@ -872,6 +874,32 @@ pub fn tab_strip(
                 .on_click(move |_, _, cx| {
                     root_show.update(cx, |r, cx| {
                         r.dispatch(DashAction::Den(crate::gpui_ui::den::DenAction::Show), cx)
+                    });
+                })
+        }))
+        .children(browser.map(|(title, active)| {
+            let root = root.clone();
+            div()
+                .id("tab-browser")
+                .px_2p5()
+                .py_1()
+                .rounded(px(8.))
+                .text_size(px(12.))
+                .cursor_pointer()
+                .when(active, |d| {
+                    d.bg(t.card)
+                        .text_color(t.text)
+                        .border_1()
+                        .border_color(t.line_soft)
+                })
+                .when(!active, |d| d.text_color(t.weak))
+                .child(format!("\u{1f310} {title}"))
+                .on_click(move |_, _, cx| {
+                    root.update(cx, |r, cx| {
+                        r.dispatch(
+                            DashAction::Browser(crate::gpui_ui::browser_ui::BrowserAction::Open),
+                            cx,
+                        )
                     });
                 })
         }))

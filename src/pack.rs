@@ -13,8 +13,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use puppy_relay::protocol::{
-    ClientMsg, FeedEntry, MemberInfo, PROTO_VERSION, PlanInfo, Presence, RoomAgentInfo, ServerMsg,
-    TaskColumn, TaskInfo,
+    ClaimInfo, ClientMsg, FeedEntry, FeedKind, MemberInfo, PROTO_VERSION, PlanInfo, Presence,
+    RoomAgentInfo, ServerMsg, TaskColumn, TaskInfo,
 };
 
 use crate::waker::UiWaker;
@@ -42,6 +42,11 @@ pub struct DenState {
     pub feed: VecDeque<FeedEntry>,
     pub tasks: Vec<TaskInfo>,
     pub plans: Vec<PlanInfo>,
+    /// user -> (kind, detail) of their latest activity ping (the legacy
+    /// status broadcast teammates see; feeds the Tier-2 breadcrumb).
+    pub activity: HashMap<String, (String, String)>,
+    /// The room's active file claims (broadcast by the relay).
+    pub claims: Vec<ClaimInfo>,
 }
 
 impl DenState {
@@ -94,8 +99,126 @@ impl DenState {
             }
             ServerMsg::Tasks { items } => self.tasks = items.clone(),
             ServerMsg::Plans { items } => self.plans = items.clone(),
+            ServerMsg::Activity {
+                from, kind, detail, ..
+            } => {
+                self.activity
+                    .insert(from.clone(), (kind.clone(), detail.clone()));
+            }
+            ServerMsg::Claims { items } => self.claims = items.clone(),
             _ => {}
         }
+    }
+
+    /// The `.puppy/pack.json` breadcrumb body each sidecar reads to inject
+    /// "[pack context] ..." into prompts (Tier 2). Shape matches the egui
+    /// shell's `PackView::breadcrumb` exactly (members w/ latest activity,
+    /// active claims, the last 10 chat lines). The caller stamps `updated`
+    /// at write time so this stays change-comparable.
+    pub fn breadcrumb_body(
+        &self,
+        room: &str,
+        relay: &str,
+        user: &str,
+        puppy: &str,
+    ) -> serde_json::Value {
+        let members: Vec<serde_json::Value> = self
+            .members
+            .iter()
+            .map(|m| {
+                let activity = self
+                    .activity
+                    .get(&m.user)
+                    .map(|(kind, detail)| {
+                        if kind == "status" {
+                            detail.clone()
+                        } else {
+                            format!("{kind}: {detail}")
+                        }
+                    })
+                    .unwrap_or_default();
+                serde_json::json!({ "user": m.user, "puppy": m.puppy, "activity": activity })
+            })
+            .collect();
+        // Chat lines, decorated the way the egui feed shows them.
+        let chat: Vec<serde_json::Value> = self
+            .feed
+            .iter()
+            .filter_map(|entry| match entry.kind {
+                FeedKind::Human => {
+                    Some(serde_json::json!({ "from": entry.user, "text": entry.text }))
+                }
+                FeedKind::Puppy => {
+                    let from = if entry.to_puppy.is_empty() {
+                        format!("\u{1f436} {}", entry.puppy)
+                    } else {
+                        format!("\u{1f436} {} \u{2192} {}", entry.puppy, entry.to_puppy)
+                    };
+                    Some(serde_json::json!({ "from": from, "text": entry.text }))
+                }
+                FeedKind::System => None,
+            })
+            .collect();
+        let recent: Vec<serde_json::Value> = chat.iter().rev().take(10).rev().cloned().collect();
+        let claims: Vec<serde_json::Value> = self
+            .claims
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "path": c.path, "user": c.user, "puppy": c.puppy, "note": c.note,
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "room": room,
+            "relay": relay,
+            "user": user.trim(),
+            "puppy": puppy.trim(),
+            "members": members,
+            "claims": claims,
+            "chat": recent,
+        })
+    }
+}
+
+/// The agent-side coordination CLI (claim/release/claims/post/status),
+/// shipped into each workspace's `.puppy/` so agents can run it with plain
+/// python (one copy of the bytes; the egui shell's `app/pack_sync.rs`
+/// include converges here at sync time).
+pub const PACK_HELPER: &str = include_str!("../sidecar/pack_helper.py");
+
+/// Drop the Tier-2 breadcrumb (`pack.json` + `pack_helper.py`) into each
+/// LOCAL workspace root's `.puppy/`. The body gets `updated` stamped and a
+/// per-root `helper` path (so the breadcrumb can point at ITS helper).
+pub fn write_pack_breadcrumb(roots: &[std::path::PathBuf], body: &serde_json::Value) {
+    let mut obj = body.clone();
+    if let Some(map) = obj.as_object_mut() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        map.insert("updated".into(), serde_json::json!(now));
+    }
+    for root in roots {
+        let dir = root.join(".puppy");
+        let _ = std::fs::create_dir_all(&dir);
+        let helper = dir.join("pack_helper.py");
+        let _ = std::fs::write(&helper, PACK_HELPER);
+        let mut per_root = obj.clone();
+        if let Some(map) = per_root.as_object_mut() {
+            map.insert("helper".into(), serde_json::json!(helper.to_string_lossy()));
+        }
+        let text = serde_json::to_string_pretty(&per_root).unwrap_or_default();
+        let _ = std::fs::write(dir.join("pack.json"), &text);
+    }
+}
+
+/// Remove the breadcrumb files from each root (called on leave).
+pub fn remove_pack_breadcrumb(roots: &[std::path::PathBuf]) {
+    for root in roots {
+        let dir = root.join(".puppy");
+        let _ = std::fs::remove_file(dir.join("pack.json"));
+        let _ = std::fs::remove_file(dir.join("pack_helper.py"));
     }
 }
 
@@ -344,5 +467,57 @@ mod tests {
             }
             _ => panic!("expected the chat back as a feed entry"),
         }
+    }
+
+    #[test]
+    fn breadcrumb_body_matches_the_egui_shape() {
+        let mut st = DenState::default();
+        st.apply(&ServerMsg::MemberJoined {
+            user: "alice".into(),
+            puppy: "Rex".into(),
+            color: "#abc".into(),
+        });
+        st.apply(&ServerMsg::Activity {
+            from: "alice".into(),
+            kind: "status".into(),
+            detail: "proj: running (edit_file)".into(),
+            ts: 1,
+        });
+        st.apply(&ServerMsg::Claims {
+            items: vec![ClaimInfo {
+                path: "src/lib.rs".into(),
+                user: "alice".into(),
+                puppy: "Rex".into(),
+                note: "refactor".into(),
+                ts: 0,
+            }],
+        });
+        let entry = |seq, kind, user: &str, puppy: &str, to: &str, text: &str| FeedEntry {
+            seq,
+            kind,
+            user: user.into(),
+            puppy: puppy.into(),
+            to_puppy: to.into(),
+            review: false,
+            text: text.into(),
+            ts: 0,
+        };
+        st.apply(&ServerMsg::Feed {
+            entry: entry(1, FeedKind::Human, "alice", "", "", "hi"),
+        });
+        st.apply(&ServerMsg::Feed {
+            entry: entry(2, FeedKind::Puppy, "", "Rex", "Biscuit", "woof"),
+        });
+
+        let body = st.breadcrumb_body("den-1", "127.0.0.1:9220", " bob ", "Biscuit");
+        assert_eq!(body["room"], "den-1");
+        assert_eq!(body["user"], "bob"); // trimmed, like egui
+        // "status" activity renders bare (no "status: " prefix).
+        assert_eq!(body["members"][0]["activity"], "proj: running (edit_file)");
+        assert_eq!(body["claims"][0]["path"], "src/lib.rs");
+        assert_eq!(body["chat"][0]["from"], "alice");
+        // Puppy chat lines carry the egui feed decoration.
+        assert_eq!(body["chat"][1]["from"], "\u{1f436} Rex \u{2192} Biscuit");
+        assert_eq!(body["chat"][1]["text"], "woof");
     }
 }

@@ -149,6 +149,10 @@ pub enum DashAction {
     Remote(super::remote::RemoteAction),
     /// Theme picker + editor.
     Theme(super::theme_ui::ThemeAction),
+    /// The browser-plugin host surface (+ dashboard plugins section).
+    Browser(super::browser_ui::BrowserAction),
+    /// The performance HUD (toolbar fleet-stats click).
+    PerfToggle,
 }
 
 /// What the tree-op input is editing.
@@ -400,6 +404,15 @@ impl RootView {
             }
             DashAction::Theme(theme_action) => {
                 self.dispatch_theme(theme_action, cx);
+                return;
+            }
+            DashAction::Browser(browser_action) => {
+                self.dispatch_browser(browser_action, cx);
+                return;
+            }
+            DashAction::PerfToggle => {
+                self.perf.visible = !self.perf.visible;
+                cx.notify();
                 return;
             }
             DashAction::SetChatSteerQueue(q) => self.chat_steer_queue = q,

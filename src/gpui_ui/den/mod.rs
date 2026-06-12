@@ -7,6 +7,7 @@
 pub mod actions;
 pub mod board;
 pub mod feed;
+pub mod pack_sync;
 pub mod roster;
 
 use std::collections::HashMap;

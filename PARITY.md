@@ -182,19 +182,50 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       views/remote_connect.rs `list_remote_blocking` extraction +
       pub(crate) `join_remote`/`parent_remote`/`ListResult` (+ their new
       unit tests).
-- [ ] E7. Den leftovers: legacy Activity status broadcast +
-      `.puppy/pack.json` Tier-2 breadcrumb sync (+ periodic re-stamp,
-      removal on leave). Ref: `app/pack_sync.rs` (`sync_pack_breadcrumb`,
-      `broadcast_pack_activity`).
-- [ ] E8. Browser-plugin host tab: launch the plugin exe + stdin toolbar
-      protocol; native window embedding stays per-OS (Windows reparent /
-      macOS overlay). Ref: `browser/` (`mod.rs`, `host.rs`, `embed.rs`),
-      `plugin.rs`.
-- [ ] E9. Dashboard plugins section (ADDED): the collapsed installed-
-      plugins list at the bottom of the egui dashboard. Ref: egui
-      `dashboard/mod.rs` `plugins_section`.
-- [ ] E10. Perf HUD equivalent: frame/notify counters overlay so the QA
-      idle-discipline steps are verifiable in-app (egui had `perf.rs`).
+- [x] E7. Den leftovers, both behaviors in `gpui_ui/den/pack_sync.rs`
+      (drain-loop driven; cadences inside egui's 2s/2.5s/300s gates):
+      activity broadcast (same "name: state (tool)" \u{b7}-joined string,
+      change-gated) and the Tier-2 breadcrumb (write-on-change + 300s
+      re-stamp + helper drop + removal once the den connection dies).
+      DenState now folds Activity pings + Claims (additive shared
+      change); `breadcrumb_body` lives on DenState with a byte-shape
+      unit test against the egui output (incl. "status" bare-detail and
+      puppy-chat decoration). egui keeps its own PackView copy until the
+      sync batch converges it.
+- [x] E8. Browser-plugin host: toolbar "\u{1f310} Web" -> Screen::Browser
+      (strip shows a Web tab once opened). Install panel at egui parity
+      (status per manifest state, Install-from-local-build, Open plugins
+      folder, Rescan, dir path, errors); running surface = the stdin
+      toolbar (back/forward/reload/DevTools/CDP-copy/URL bar w/ Enter
+      nav-or-launch + normalization reflected back) over the same
+      `BrowserHost` process supervision. Deviations: ONE surface (egui
+      docks N tabs); explicit Stop button (egui kills via dock-tab
+      close); EMBEDDING N/A IN THE GPUI SHELL ON ALL OSes at this pin —
+      the Windows reparent targets the egui HWND and the macOS overlay
+      glues to the eframe viewport; neither attaches to the GPUI window.
+      The webview runs in its own OS window (both paths' pre-embed mode)
+      and the viewport region says so. Probe: PUPPY_GPUI_BROWSER=1
+      (live-validated; plugin-not-installed path).
+- [x] E9. Dashboard plugins section: collapsible "Plugins (n)" under the
+      pack header (egui default-open, same status colors ready/
+      incompatible/exe-missing, dir tooltip, version).
+- [x] E10. Perf HUD: top-right overlay toggled by clicking the toolbar
+      fleet-stats text (dev-obscure, egui's menu-item spirit). Maps:
+      avg/max cost vs the 16.7ms budget (GPUI shell measures the
+      element-tree BUILD in render — gpui layout/paint isn't visible to
+      the shell; labeled honestly), renders/sec (drain-loop demand),
+      memory rows (Windows API; zeros = hidden elsewhere, egui-same),
+      uptime + the demand-not-cap footnote. Probe: PUPPY_GPUI_PERF=1
+      (live-validated).
+      SYNC QUEUE (additions, phase-end batch): pack.rs DenState
+      activity/claims folds + `breadcrumb_body` + `PACK_HELPER` +
+      `write/remove_pack_breadcrumb` (egui app/pack_sync.rs + PackView
+      should converge onto them); browser/mod.rs frontend-agnostic API
+      (PluginStatus/NavOp/stop_tab/nav/navigate_to/launch_tab/
+      install_local/rescan/plugins_dir/open_plugins_folder/tab_running/
+      tab_launch_error/install_error/local_build_available); perf.rs
+      pub(crate) helpers (WINDOW/push/mean/peak/fmt_bytes/
+      process_memory).
 - [?] E11. Dock/split layout (ADDED — DECISION NEEDED): the egui app has
       egui_dock split panes persisted via `Session.layout`/`SavedTab`; the
       gpui app is single-window tabs. Decide: accept tabs as the GPUI

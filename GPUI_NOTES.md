@@ -294,6 +294,32 @@ are chrome around the ONE ChatInput entity; the gear popover persists
   is ignored.
 - No soft wrap in the input (above).
 
+## Phase E run 3 — pack sync, browser host, perf HUD
+
+- **Pack sync rides the drain loop.** `pack_sync_upkeep()` (activity
+  broadcast + Tier-2 breadcrumb) runs per drain tick; every behavior is
+  self-rate-gated (2s activity / 300s re-stamp), so the 250-1000ms drain
+  cadence is safely inside egui's per-frame calls. The breadcrumb body
+  builder moved INTO `DenState` (`breadcrumb_body`) — frontend-agnostic,
+  unit-tested against the egui JSON shape; DenState folds Activity pings
+  + Claims now.
+- **Browser = manager API, not manager render.** `BrowserManager` grew a
+  frontend-agnostic surface (PluginStatus/NavOp/navigate_to/...) so the
+  GPUI shell never touches tabs directly; egui's render methods keep
+  mutating them in place. One `Screen::Browser` surface, lazy tab, URL
+  bar is a ChatInput whose `Submitted` event funnels into the action
+  dispatch. Embedding is N/A in the GPUI shell on every OS at this pin
+  (Windows reparent = egui HWND, macOS overlay = eframe inner_rect); the
+  webview floats in its own OS window and the viewport note owns it.
+- **Perf HUD measures what the shell can see**: element-tree build time
+  in `RootView::render` (`frame_begin`/`frame_end` bracket the build) +
+  renders/sec. GPUI's layout/paint happens after the entity update, so
+  it's invisible from here — the HUD labels say "render build" and the
+  footnote owns the difference. Toggle: click the toolbar fleet-stats
+  text. The drain loop's unconditional `cx.notify()` keeps the numbers
+  ticking at 1-4Hz while idle.
+- **Probes**: `PUPPY_GPUI_BROWSER=1`, `PUPPY_GPUI_PERF=1`.
+
 ## Phase E run 2 — remote connect + theming
 
 - **Tokens re-resolution (the theming spine).** `RootView.tokens =
