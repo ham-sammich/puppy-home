@@ -26,6 +26,25 @@ pub fn run(listener: TcpListener) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Handle a coordination op (claim/release/list/post), returning the encoded
+/// reply line -- or `None` if the message isn't a coordination op.
+fn coordination_reply(hub: &Hub, msg: ClientMsg) -> Option<String> {
+    let reply = match msg {
+        ClientMsg::Claim {
+            room,
+            user,
+            puppy,
+            path,
+            note,
+        } => hub.claim(&room, user.trim(), puppy.trim(), path.trim(), note.trim()),
+        ClientMsg::Release { room, user, path } => hub.release(&room, user.trim(), path.trim()),
+        ClientMsg::ListClaims { room } => hub.list_claims(&room),
+        ClientMsg::Post { room, from, text } => hub.post(&room, from.trim(), &text),
+        _ => return None,
+    };
+    serde_json::to_string(&reply).ok()
+}
+
 fn error_line(message: &str) -> String {
     serde_json::to_string(&ServerMsg::Error {
         message: message.to_string(),
@@ -47,20 +66,31 @@ fn handle_conn(hub: Arc<Hub>, stream: TcpStream) {
     let reader = BufReader::new(stream);
     let mut lines = reader.lines();
 
-    // The first line must be a valid, version-compatible join.
+    // The first line must be a valid join -- or a one-shot coordination op
+    // (claim/release/list/post), which gets its reply and the connection ends.
     let first = lines
         .next()
         .and_then(|l| l.ok())
         .and_then(|l| serde_json::from_str::<ClientMsg>(&l).ok());
-    let Some(ClientMsg::Join {
-        room,
-        user,
-        puppy,
-        proto,
-    }) = first
-    else {
-        send_direct(&mut write_half, &error_line("first message must be a join"));
-        return;
+    let (room, user, puppy, proto) = match first {
+        Some(ClientMsg::Join {
+            room,
+            user,
+            puppy,
+            proto,
+        }) => (room, user, puppy, proto),
+        Some(other) => {
+            if let Some(reply) = coordination_reply(&hub, other) {
+                send_direct(&mut write_half, &reply);
+            } else {
+                send_direct(&mut write_half, &error_line("first message must be a join"));
+            }
+            return;
+        }
+        None => {
+            send_direct(&mut write_half, &error_line("first message must be a join"));
+            return;
+        }
     };
     if proto != 0 && proto != PROTO_VERSION {
         send_direct(
@@ -111,6 +141,12 @@ fn handle_conn(hub: Arc<Hub>, stream: TcpStream) {
             Ok(ClientMsg::Leave) => break,
             Ok(ClientMsg::Join { .. }) => {
                 let _ = tx.send(error_line("already joined"));
+            }
+            Ok(other) => {
+                // Coordination ops also work on a joined connection.
+                if let Some(reply) = coordination_reply(&hub, other) {
+                    let _ = tx.send(reply);
+                }
             }
             Err(e) => {
                 let _ = tx.send(error_line(&format!("bad message: {e}")));

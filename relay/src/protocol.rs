@@ -9,7 +9,22 @@ use serde::{Deserialize, Serialize};
 
 /// Bump on incompatible wire changes; the relay rejects mismatched joins.
 /// v2: members carry their puppy's name (Join/Joined/MemberJoined).
-pub const PROTO_VERSION: u32 = 2;
+/// v3: file claims + roomless coordination ops (claim/release/list/post).
+pub const PROTO_VERSION: u32 = 3;
+
+/// An active file claim in a room.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ClaimInfo {
+    /// Workspace-relative (or otherwise agreed) file path being worked on.
+    pub path: String,
+    pub user: String,
+    #[serde(default)]
+    pub puppy: String,
+    /// Why it's claimed ("refactoring auth"), may be empty.
+    #[serde(default)]
+    pub note: String,
+    pub ts: u64,
+}
 
 /// A pack member as the relay knows them.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -42,6 +57,33 @@ pub enum ClientMsg {
     Activity { kind: String, detail: String },
     /// Graceful goodbye (disconnecting works too).
     Leave,
+    // -- Coordination ops (Tier 3). Also valid as a connection's FIRST message
+    // -- ("roomless": op -> one reply -> close), which is how the agent-side
+    // -- helper CLI uses them. The room code is the capability.
+    /// Claim a file for this user; fails if another user holds it.
+    Claim {
+        room: String,
+        user: String,
+        #[serde(default)]
+        puppy: String,
+        path: String,
+        #[serde(default)]
+        note: String,
+    },
+    /// Release this user's claim on a file.
+    Release {
+        room: String,
+        user: String,
+        path: String,
+    },
+    /// Ask for the room's active claims.
+    ListClaims { room: String },
+    /// Post a chat line into the room (e.g. the agent announcing its plan).
+    Post {
+        room: String,
+        from: String,
+        text: String,
+    },
 }
 
 /// What the relay sends to pack members.
@@ -75,6 +117,25 @@ pub enum ServerMsg {
     Error {
         message: String,
     },
+    /// Reply to a `Claim`: on failure `holder` says who has it.
+    ClaimResult {
+        ok: bool,
+        #[serde(default)]
+        holder: Option<ClaimInfo>,
+    },
+    /// Reply to a `Release`.
+    ReleaseResult {
+        ok: bool,
+    },
+    /// The room's active claims: reply to `ListClaims` AND broadcast to members
+    /// whenever they change.
+    Claims {
+        items: Vec<ClaimInfo>,
+    },
+    /// Reply to a `Post`.
+    PostResult {
+        ok: bool,
+    },
 }
 
 #[cfg(test)]
@@ -106,6 +167,24 @@ mod tests {
                 detail: "edit_file src/main.rs".into(),
             },
             ClientMsg::Leave,
+            ClientMsg::Claim {
+                room: "r".into(),
+                user: "jacob".into(),
+                puppy: "Rufus".into(),
+                path: "src/auth.rs".into(),
+                note: "refactoring".into(),
+            },
+            ClientMsg::Release {
+                room: "r".into(),
+                user: "jacob".into(),
+                path: "src/auth.rs".into(),
+            },
+            ClientMsg::ListClaims { room: "r".into() },
+            ClientMsg::Post {
+                room: "r".into(),
+                from: "Rufus".into(),
+                text: "starting on the UI".into(),
+            },
         ] {
             assert_eq!(rt_client(&msg), msg);
         }
@@ -146,6 +225,27 @@ mod tests {
             ServerMsg::Error {
                 message: "nope".into(),
             },
+            ServerMsg::ClaimResult {
+                ok: false,
+                holder: Some(ClaimInfo {
+                    path: "src/auth.rs".into(),
+                    user: "mike".into(),
+                    puppy: "Biscuit".into(),
+                    note: "auth refactor".into(),
+                    ts: 9,
+                }),
+            },
+            ServerMsg::ReleaseResult { ok: true },
+            ServerMsg::Claims {
+                items: vec![ClaimInfo {
+                    path: "a.rs".into(),
+                    user: "u".into(),
+                    puppy: String::new(),
+                    note: String::new(),
+                    ts: 1,
+                }],
+            },
+            ServerMsg::PostResult { ok: true },
         ] {
             assert_eq!(rt_server(&msg), msg);
         }

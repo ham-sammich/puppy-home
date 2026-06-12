@@ -235,11 +235,26 @@ PHASE B (Puppy Pack) in progress:
   App-side glue extracted to src/app/pack_sync.rs (app/mod.rs back to 620).
   NOTE: remote workspaces don't get the breadcrumb yet (write via RemoteFs is
   possible but chatty; revisit).
-- NEXT (B4/Tier 3): pack-coordination MCP server
-  (claim_file/release_file/post_to_pack/check_teammate_status/list_claims) so
-  agents actively coordinate, not just observe.
-- NOTE: protocol v2 means BOTH devices must rebuild (old clients get a clean
-  'protocol mismatch' from a new relay and vice versa).
+- Inc B4 (Tier 3) DONE: agent coordination. Protocol v3: ClaimInfo + roomless
+  one-shot ops (claim/release/list_claims/post) usable as a connection's first
+  message; relay keeps claims per-room (1h TTL, die with the room, holder-only
+  release, same-user re-claim refreshes) and broadcasts 'claims' on change.
+  AGENT SIDE: sidecar/pack_helper.py (dependency-free CLI: claim/release/
+  claims/post/status) is embedded via include_str! and dropped at
+  .puppy/pack_helper.py next to pack.json (which now carries relay/helper/
+  claims); pack_context() teaches the agent to claim BEFORE editing + post
+  plans. Panel shows a CLAIMS section. DEVIATION from plan's 'MCP server':
+  helper-CLI via the agent's shell tool (the cdp_helper.py pattern) -- zero
+  config mutation; wrap in MCP later if demand appears.
+  VALIDATED LIVE: real relay + joined member + helper: claim -> broadcast,
+  rival refused w/ holder named, post lands as \"Rufus (jacob's puppy)\",
+  release empties. 155 tests total.
+>>> PHASE B (Puppy Pack v1, Tiers 1-3) is FEATURE-COMPLETE. <<<
+- NOTE: protocol v3 -- BOTH devices must rebuild (mismatches get a clean
+  'protocol mismatch' relay error).
+- Pack polish backlog: remote-workspace breadcrumbs; GUI claim buttons;
+  claims surfaced on the Dashboard; relay auth beyond room codes (TLS/proxy =
+  the ws upgrade path).
 - To try it: cargo run -p puppy-relay (or ./target/debug/puppy-relay), then
   top bar -> Pack -> join the same room code from two machines/instances.
 

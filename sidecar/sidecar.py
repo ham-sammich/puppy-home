@@ -244,7 +244,8 @@ def pack_context(cwd: str) -> str:
         others = [m for m in (data.get("members") or [])
                   if m.get("user") and m.get("user") != me]
         chat = data.get("chat") or []
-        if not others and not chat:
+        claims = data.get("claims") or []
+        if not others and not chat and not claims:
             return ""
         lines = []
         for m in others:
@@ -259,11 +260,36 @@ def pack_context(cwd: str) -> str:
         )
         if lines:
             note += "Teammate activity right now:\n" + "\n".join(lines) + "\n"
+        if claims:
+            claim_lines = []
+            for c in claims:
+                who = c.get("user", "?")
+                pup = (c.get("puppy") or "").strip()
+                tag = f"{who} ({pup})" if pup else who
+                cn = (c.get("note") or "").strip()
+                claim_lines.append(
+                    f"- {c.get('path', '?')} -- {tag}" + (f": {cn}" if cn else "")
+                )
+            note += (
+                "Active file claims (do NOT edit files claimed by someone "
+                "else):\n" + "\n".join(claim_lines) + "\n"
+            )
         if chat:
             recent = "\n".join(
                 f"  {c.get('from', '?')}: {c.get('text', '')}" for c in chat[-8:]
             )
             note += "Recent pack chat:\n" + recent + "\n"
+        helper = (data.get("helper") or "").strip()
+        if helper:
+            note += (
+                "Coordinate through the pack helper (dependency-free, already "
+                f'on disk): `python "{helper}" claim <path> --note <why>` '
+                "BEFORE editing files teammates might touch; "
+                f'`python "{helper}" release <path>` when done; '
+                f'`python "{helper}" claims` to list claims; '
+                f'`python "{helper}" post "<msg>"` to announce your plan to '
+                "the pack. "
+            )
         note += (
             "Coordinate, don't collide: avoid rewriting files a teammate's "
             "puppy is actively working on, and flag overlaps to your user. "

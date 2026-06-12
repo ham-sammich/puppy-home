@@ -7,6 +7,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use super::PuppyApp;
 
+/// The agent-side coordination CLI (claim/release/claims/post/status), shipped
+/// into each workspace's `.puppy/` so agents can run it with plain python.
+const PACK_HELPER: &str = include_str!("../../sidecar/pack_helper.py");
+
 impl PuppyApp {
     /// Tell the pack what this member's puppies are doing -- a compact summary
     /// of every workspace's state, sent only when it changes (checked at most
@@ -65,10 +69,17 @@ impl PuppyApp {
                         .unwrap_or(0);
                     map.insert("updated".into(), serde_json::json!(now));
                 }
-                let text = serde_json::to_string_pretty(&obj).unwrap_or_default();
                 for root in &roots {
                     let dir = root.join(".puppy");
                     let _ = std::fs::create_dir_all(&dir);
+                    let helper = dir.join("pack_helper.py");
+                    let _ = std::fs::write(&helper, PACK_HELPER);
+                    // Per-root copy so the breadcrumb can point at ITS helper.
+                    let mut per_root = obj.clone();
+                    if let Some(map) = per_root.as_object_mut() {
+                        map.insert("helper".into(), serde_json::json!(helper.to_string_lossy()));
+                    }
+                    let text = serde_json::to_string_pretty(&per_root).unwrap_or_default();
                     let _ = std::fs::write(dir.join("pack.json"), &text);
                 }
                 self.pack_breadcrumb_sig = sig;
@@ -79,7 +90,9 @@ impl PuppyApp {
                 if self.pack_breadcrumb_written {
                     for w in self.sup.iter() {
                         if !w.is_remote() {
-                            let _ = std::fs::remove_file(w.root.join(".puppy").join("pack.json"));
+                            let dir = w.root.join(".puppy");
+                            let _ = std::fs::remove_file(dir.join("pack.json"));
+                            let _ = std::fs::remove_file(dir.join("pack_helper.py"));
                         }
                     }
                     self.pack_breadcrumb_written = false;

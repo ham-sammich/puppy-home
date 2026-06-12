@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use eframe::egui;
-use puppy_relay::protocol::{MemberInfo, ServerMsg};
+use puppy_relay::protocol::{ClaimInfo, MemberInfo, ServerMsg};
 use serde_json::{Value, json};
 
 use crate::pack::{PackClient, PackEvent};
@@ -27,10 +27,15 @@ enum FeedItem {
 struct Conn {
     client: PackClient,
     rx: Receiver<PackEvent>,
+    /// The relay address we connected to (rides in the breadcrumb so the
+    /// agent helper can reach the same relay).
+    addr: String,
     room: String,
     members: Vec<MemberInfo>,
     /// user -> (kind, detail) of their latest activity ping.
     activity: HashMap<String, (String, String)>,
+    /// Active file claims in the room (relay-broadcast on change).
+    claims: Vec<ClaimInfo>,
     feed: Vec<FeedItem>,
     input: String,
 }
@@ -108,11 +113,22 @@ impl PackView {
             })
             .collect();
         let recent: Vec<Value> = chat.iter().rev().take(10).rev().cloned().collect();
+        let claims: Vec<Value> = conn
+            .claims
+            .iter()
+            .map(|c| {
+                json!({
+                    "path": c.path, "user": c.user, "puppy": c.puppy, "note": c.note,
+                })
+            })
+            .collect();
         Some(json!({
             "room": conn.room,
+            "relay": conn.addr,
             "user": self.user.trim(),
             "puppy": self.puppy.trim(),
             "members": members,
+            "claims": claims,
             "chat": recent,
         }))
     }
@@ -170,6 +186,12 @@ fn apply(conn: &mut Conn, msg: ServerMsg) {
         } => {
             conn.activity.insert(from, (kind, detail));
         }
+        ServerMsg::Claims { items } => conn.claims = items,
+        // Replies to coordination ops; the panel doesn't issue those (the
+        // agent helper does, over its own one-shot connections).
+        ServerMsg::ClaimResult { .. }
+        | ServerMsg::ReleaseResult { .. }
+        | ServerMsg::PostResult { .. } => {}
         ServerMsg::Error { message } => push(conn, FeedItem::Note(format!("relay: {message}"))),
     }
 }
@@ -247,9 +269,11 @@ fn render_join_form(ui: &mut egui::Ui, view: &mut PackView) {
                 view.conn = Some(Conn {
                     client,
                     rx,
+                    addr: view.relay.trim().to_string(),
                     room: view.room.trim().to_string(),
                     members: Vec::new(),
                     activity: HashMap::new(),
+                    claims: Vec::new(),
                     feed: Vec::new(),
                     input: String::new(),
                 });
@@ -295,6 +319,23 @@ fn render_room(ui: &mut egui::Ui, view: &mut PackView) {
                 ui.weak(format!("- {kind}: {detail}"));
             }
         });
+    }
+    if !conn.claims.is_empty() {
+        ui.separator();
+        ui.label(egui::RichText::new("CLAIMS").small().weak());
+        for c in &conn.claims {
+            let who = if c.puppy.is_empty() {
+                c.user.clone()
+            } else {
+                format!("{} ({})", c.user, c.puppy)
+            };
+            let line = if c.note.is_empty() {
+                format!("{} - {who}", c.path)
+            } else {
+                format!("{} - {who}: {}", c.path, c.note)
+            };
+            ui.label(egui::RichText::new(line).monospace().small());
+        }
     }
     ui.separator();
 

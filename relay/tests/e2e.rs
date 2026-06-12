@@ -21,7 +21,7 @@ impl Client {
         let reader = BufReader::new(stream.try_clone().unwrap());
         let mut c = Client { stream, reader };
         c.send(&format!(
-            r#"{{"op":"join","room":"{room}","user":"{user}","puppy":"{user}-pup","proto":2}}"#
+            r#"{{"op":"join","room":"{room}","user":"{user}","puppy":"{user}-pup","proto":3}}"#
         ));
         c
     }
@@ -110,6 +110,48 @@ fn rooms_do_not_leak_into_each_other() {
         first.contains("bob-only"),
         "cross-room leak: bob saw {first:?}"
     );
+}
+
+/// The agent-helper path: one-shot connections that claim/list without joining.
+#[test]
+fn one_shot_claims_work_without_joining() {
+    let port = start_relay();
+    let mut alice = Client::join(port, "work-room", "alice");
+    alice.read_line(); // joined
+
+    // One-shot claim (what `pack_helper.py claim` sends).
+    let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut w = stream.try_clone().unwrap();
+    writeln!(
+        w,
+        r#"{{"op":"claim","room":"work-room","user":"alice","puppy":"Rex","path":"src/auth.rs","note":"refactor"}}"#
+    )
+    .unwrap();
+    let mut line = String::new();
+    BufReader::new(stream).read_line(&mut line).unwrap();
+    assert!(line.contains(r#""event":"claim_result""#) && line.contains(r#""ok":true"#));
+
+    // The joined member sees the claims broadcast.
+    let seen = alice.read_line();
+    assert!(seen.contains(r#""event":"claims""#) && seen.contains("src/auth.rs"));
+
+    // A rival one-shot claim is refused and names the holder.
+    let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut w = stream.try_clone().unwrap();
+    writeln!(
+        w,
+        r#"{{"op":"claim","room":"work-room","user":"bob","path":"src/auth.rs"}}"#
+    )
+    .unwrap();
+    let mut line = String::new();
+    BufReader::new(stream).read_line(&mut line).unwrap();
+    assert!(line.contains(r#""ok":false"#) && line.contains("alice"));
 }
 
 #[test]
