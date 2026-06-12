@@ -19,8 +19,8 @@ use eframe::egui::{
 
 /// Card corner radius (design token: cards 13).
 pub const CARD_RADIUS: u8 = 13;
-/// Card inner padding (comfy density).
-pub const CARD_PAD: f32 = 14.0;
+/// Card inner padding (design token: comfy card-pad 16).
+pub const CARD_PAD: f32 = 16.0;
 /// Bounded repaint interval for decorative animation (pulse, ring spin).
 const ANIM_INTERVAL: Duration = Duration::from_millis(50);
 

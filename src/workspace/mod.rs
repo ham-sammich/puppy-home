@@ -20,11 +20,13 @@ use crate::backend::{AgentInfo, CodePuppy, CommandInfo, CompletionItem, ModelInf
 
 mod ask;
 mod chat;
+mod chat_body;
 mod clipboard;
 mod composer;
 mod diff;
 mod dock;
 mod editor;
+mod editor_area;
 mod events;
 mod file_picker;
 pub(crate) mod fs;

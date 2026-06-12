@@ -461,6 +461,10 @@ fn render_header(
 
 /// The blinking LIVE indicator (1.6s cycle), gated on motion_enabled; reduced
 /// motion / unfocused renders a steady dot with no scheduled repaints.
+///
+/// Deliberate idle-invariant exception: while joined, focused, and motion is
+/// allowed, this blinks even when the room is quiet — LIVE is the room's
+/// liveness signal (mock behavior). "calm" silences it like every other loop.
 fn live_badge(ui: &mut egui::Ui, accents: &Accents) {
     let animate = widgets::motion_enabled(ui.ctx());
     let alpha = if animate {

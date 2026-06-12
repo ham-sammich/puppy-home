@@ -110,14 +110,24 @@ pub(crate) fn role_emoji(agent: &str) -> &'static str {
     }
 }
 
+/// The user's home dir, resolved once (this runs per card per frame — an
+/// env lookup + alloc each time would be a needless hot-path cost).
+fn home_dir() -> Option<&'static str> {
+    static HOME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    HOME.get_or_init(|| {
+        std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(|h| h.to_string_lossy().into_owned())
+            .filter(|h| !h.is_empty())
+    })
+    .as_deref()
+}
+
 /// Abbreviate the user's home dir as `~` for the card meta line.
 pub(crate) fn tilde_path(path: &std::path::Path) -> String {
     let s = path.to_string_lossy();
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(|h| h.to_string_lossy().into_owned());
-    match home {
-        Some(h) if !h.is_empty() && s.starts_with(h.as_str()) => format!("~{}", &s[h.len()..]),
+    match home_dir() {
+        Some(h) if s.starts_with(h) => format!("~{}", &s[h.len()..]),
         _ => s.into_owned(),
     }
 }

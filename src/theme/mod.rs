@@ -197,7 +197,18 @@ impl ThemePalette {
         v.selection.stroke = egui::Stroke::new(1.0, text);
 
         // Widget states: text everywhere, distinct fills per interaction state.
+        // Buttons ride the design token radius (8; cards 13 and pills 999 are
+        // applied at their call sites).
         let w = &mut v.widgets;
+        for ws in [
+            &mut w.noninteractive,
+            &mut w.inactive,
+            &mut w.hovered,
+            &mut w.active,
+            &mut w.open,
+        ] {
+            ws.corner_radius = egui::CornerRadius::same(8);
+        }
         for ws in [&mut w.noninteractive, &mut w.inactive, &mut w.open] {
             ws.fg_stroke.color = text;
             ws.bg_stroke = stroke;
