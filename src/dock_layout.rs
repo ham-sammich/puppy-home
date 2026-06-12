@@ -19,6 +19,9 @@ use crate::workspace::WorkspaceId;
 
 /// Snapshot the open workspaces + dock layout as a persistable session.
 pub fn current_session(sup: &Supervisor, theme: Theme, dock: Option<&DockState<Tab>>) -> Session {
+    // Owned by the redesign shells' pickers; carried so a save from this
+    // branch never clobbers the choice (lossless round-trip).
+    let carry = crate::session::load();
     Session {
         workspaces: sup
             .iter()
@@ -38,6 +41,8 @@ pub fn current_session(sup: &Supervisor, theme: Theme, dock: Option<&DockState<T
             normalize_layout_rects(&mut saved);
             saved
         }),
+        user_avatar: carry.user_avatar,
+        puppy_avatar: carry.puppy_avatar,
     }
 }
 

@@ -21,6 +21,14 @@ pub struct Session {
     /// run or pre-layout sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<DockState<SavedTab>>,
+    /// Your avatar emoji in transcripts (empty = the \u{1f9d1} default).
+    /// Owned by the redesign shells' pickers (QW8); present here so
+    /// session.json round-trips losslessly across all branches.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub user_avatar: String,
+    /// Your puppy's avatar emoji (empty = the \u{1f436} default).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub puppy_avatar: String,
 }
 
 /// A persistable mirror of `shell::Tab` using stable keys instead of runtime
@@ -172,6 +180,8 @@ mod tests {
         }
 
         let session = Session {
+            user_avatar: String::new(),
+            puppy_avatar: String::new(),
             workspaces: vec![
                 WorkspaceEntry {
                     path: "D:/proj/a".into(),
@@ -223,6 +233,8 @@ mod tests {
     #[test]
     fn custom_theme_roundtrips_via_serde() {
         let s = Session {
+            user_avatar: String::new(),
+            puppy_avatar: String::new(),
             workspaces: vec![],
             theme: Theme::Custom("Neon".into()),
             layout: None,
@@ -238,6 +250,8 @@ mod tests {
         let mut dock = DockState::new(vec![SavedTab::Dashboard, SavedTab::McpManager]);
         normalize_layout_rects(&mut dock); // fresh leaves carry inf rects
         let s = Session {
+            user_avatar: String::new(),
+            puppy_avatar: String::new(),
             workspaces: vec![],
             theme: Theme::Dark,
             layout: Some(dock),
@@ -263,6 +277,8 @@ mod tests {
     #[test]
     fn theme_serializes_lowercase() {
         let s = Session {
+            user_avatar: String::new(),
+            puppy_avatar: String::new(),
             workspaces: vec![],
             theme: Theme::Light,
             layout: None,
