@@ -12,3 +12,4 @@ pub mod path_browser;
 pub mod remote_connect;
 pub mod skills_manager;
 pub mod skills_wizard;
+pub mod widgets;
