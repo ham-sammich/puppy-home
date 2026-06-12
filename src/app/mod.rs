@@ -9,7 +9,7 @@ use egui_dock::{DockArea, DockState, NodeIndex, NodePath, Style};
 
 use crate::browser::BrowserManager;
 use crate::dock_layout;
-use crate::session::Theme;
+use crate::session::{ComposerStyle, Theme, UiPrefs};
 use crate::shell::{Shell, ShellAction, Tab};
 use crate::supervisor::Supervisor;
 use crate::theme::{Accents, TerminalTheme, ThemePalette};
@@ -48,6 +48,11 @@ pub struct PuppyApp {
     /// Resolved brand/status colors for the active theme (recomputed on theme
     /// change, never per frame).
     accents: Accents,
+    /// The chat composer skin (persisted user preference, all workspaces).
+    composer_style: ComposerStyle,
+    /// Disable decorative animation app-wide (persisted; widgets read it via
+    /// ctx data each frame).
+    reduce_motion: bool,
     /// State for the Puppy Pack tab (one instance; holds the live relay link).
     pack: crate::views::pack_panel::PackView,
     /// Last activity summary broadcast to the pack (skip resends of the same).
@@ -101,6 +106,8 @@ impl PuppyApp {
         let saved = crate::session::load();
         let theme = saved.theme;
         let dashboard_mode = saved.dashboard_view;
+        let composer_style = saved.composer_style;
+        let reduce_motion = saved.reduce_motion;
         let themes = crate::theme::load_themes();
         let terminal_theme = crate::theme::load_terminal();
         // Seed the editor buffer with the active theme (or a fresh dark base).
@@ -170,7 +177,16 @@ impl PuppyApp {
         // Seed the signature so we don't immediately rewrite the same session
         // (agent/model fill in once each sidecar is ready, which then persists).
         let last_session_sig = dock_layout::persist_sig(
-            &dock_layout::current_session(&sup, theme.clone(), dashboard_mode, Some(&dock)),
+            &dock_layout::current_session(
+                &sup,
+                UiPrefs {
+                    theme: theme.clone(),
+                    dashboard_view: dashboard_mode,
+                    composer_style,
+                    reduce_motion,
+                },
+                Some(&dock),
+            ),
             Some(&dock),
         );
         let accents = Accents::from_palette(&crate::theme::palette_for(&theme, &themes));
@@ -202,6 +218,8 @@ impl PuppyApp {
             agents: crate::views::agent_manager::AgentManagerView::default(),
             dashboard: crate::views::dashboard::DashboardView::with_mode(dashboard_mode),
             accents,
+            composer_style,
+            reduce_motion,
             remote: None,
             remote_pending: None,
         }
@@ -223,8 +241,12 @@ impl PuppyApp {
     fn persist_session_now(&mut self) {
         let session = dock_layout::current_session(
             &self.sup,
-            self.theme.clone(),
-            self.dashboard.mode,
+            UiPrefs {
+                theme: self.theme.clone(),
+                dashboard_view: self.dashboard.mode,
+                composer_style: self.composer_style,
+                reduce_motion: self.reduce_motion,
+            },
             self.dock.as_ref(),
         );
         let sig = dock_layout::persist_sig(&session, self.dock.as_ref());
@@ -461,6 +483,7 @@ impl eframe::App for PuppyApp {
 
         // Copy the bits the menu needs so its closure doesn't borrow `self`.
         let mut perf_visible = self.perf.visible;
+        let mut reduce_motion = self.reduce_motion;
         let picking = self.folder_pick.is_some();
         let ws_count = self.sup.len();
         let waiting = self.sup.waiting_count();
@@ -538,6 +561,11 @@ impl eframe::App for PuppyApp {
                 ui.separator();
                 ui.toggle_value(&mut perf_visible, "perf")
                     .on_hover_text("Performance HUD: frame cost, repaint rate, memory");
+                ui.toggle_value(&mut reduce_motion, "\u{1f9d8} calm")
+                    .on_hover_text(
+                        "Reduce motion: disable decorative animation app-wide \
+                         (pulses, ring spins, the empty-state bob)",
+                    );
                 ui.menu_button(format!("Theme: {}", theme.label()), |ui| {
                     if ui.selectable_label(theme == Theme::Dark, "Dark").clicked() {
                         pick_theme = Some(Theme::Dark);
@@ -656,6 +684,10 @@ impl eframe::App for PuppyApp {
         self.browser.set_parent_hwnd(parent_hwnd);
         self.browser.begin_frame();
 
+        self.reduce_motion = reduce_motion;
+        // Publish the motion preference so every widget can gate its loops.
+        crate::views::widgets::set_reduce_motion(ui.ctx(), self.reduce_motion);
+
         let mut dock = self.dock.take().expect("dock present");
         {
             let mut shell = Shell {
@@ -667,6 +699,7 @@ impl eframe::App for PuppyApp {
                 pack: &mut self.pack,
                 dashboard: &mut self.dashboard,
                 accents: &self.accents,
+                composer_style: &mut self.composer_style,
                 actions: &mut actions,
             };
             DockArea::new(&mut dock)

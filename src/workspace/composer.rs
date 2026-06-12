@@ -1,5 +1,7 @@
-//! The chat composer: input box, inline completion, commands menu, pending
-//! interactive prompts, and the agent/model/puppy-name controls.
+//! The shared composer core: input state, inline completion (the slash
+//! palette), commands menu, attachments, and the Classic style's layout.
+//! Every composer style (see `dock.rs`) is a skin over this one state and
+//! send path: `composer_prelude` → style layout → `composer_epilogue`.
 
 use eframe::egui;
 
@@ -7,65 +9,59 @@ use crate::backend::CommandInfo;
 
 use super::Workspace;
 
+/// Side effects a composer style requests this frame. The dock routes them
+/// through [`Workspace::composer_epilogue`] so every skin shares one send path.
+#[derive(Default)]
+pub(crate) struct ComposerFx {
+    /// Send the input (steers while a turn runs).
+    pub(crate) submit: bool,
+    /// Attach an image from the clipboard.
+    pub(crate) paste: bool,
+    /// Open the @file browser.
+    pub(crate) files: bool,
+}
+
 impl Workspace {
-    pub(crate) fn render_agent_picker(&mut self, ui: &mut egui::Ui) {
-        let mut chosen: Option<String> = None;
-        let current = if self.agent.is_empty() {
-            "agent"
+    /// Stable id for the composer input, shared by every style so focus,
+    /// paste detection, and history recall survive style switches.
+    pub(crate) fn composer_input_id(&self) -> egui::Id {
+        egui::Id::new(("composer-input", self.id.0))
+    }
+
+    /// Placeholder text for the input field (any style).
+    pub(crate) fn composer_hint(&self) -> String {
+        if !self.ready {
+            "Waiting for Code Puppy to start\u{2026}".to_string()
+        } else if self.running {
+            format!("Steer {} mid-turn\u{2026}", self.puppy_name)
         } else {
-            &self.agent
-        };
-        egui::ComboBox::from_id_salt(("agent-combo", self.id.0))
-            .selected_text(format!("🐶 {current}"))
-            .show_ui(ui, |ui| {
-                for a in &self.agents {
-                    let label = if a.display_name.is_empty() {
-                        a.name.clone()
-                    } else {
-                        a.display_name.clone()
-                    };
-                    let resp = ui
-                        .selectable_label(a.current, label)
-                        .on_hover_text(&a.description);
-                    if resp.clicked() && !a.current {
-                        chosen = Some(a.name.clone());
-                    }
-                }
-            });
-        if let Some(name) = chosen
-            && let Some(backend) = &self.backend
-        {
-            backend.set_agent(&name);
+            format!(
+                "Message {}\u{2026}  (/ for commands, @ for files)",
+                self.puppy_name
+            )
         }
     }
 
-    pub(crate) fn render_model_picker(&mut self, ui: &mut egui::Ui) {
-        let mut chosen: Option<String> = None;
-        let current = if self.model.is_empty() {
-            "model"
-        } else {
-            &self.model
-        };
-        egui::ComboBox::from_id_salt(("model-combo", self.id.0))
-            .selected_text(current.to_string())
-            .show_ui(ui, |ui| {
-                for m in &self.models {
-                    let resp = ui
-                        .selectable_label(m.current, &m.name)
-                        .on_hover_text(&m.description);
-                    if resp.clicked() && !m.current {
-                        chosen = Some(m.name.clone());
-                    }
-                }
-            });
-        if let Some(name) = chosen
-            && let Some(backend) = &self.backend
-        {
-            backend.set_model(&name);
+    /// Consume a bare Enter while the input has focus. Multiline styles call
+    /// this BEFORE adding their field so Enter sends and Shift+Enter newlines.
+    pub(crate) fn take_enter(&self, ui: &mut egui::Ui) -> bool {
+        ui.memory(|m| m.has_focus(self.composer_input_id()))
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+    }
+
+    /// One-shot focus request, honored by whichever style draws the field.
+    pub(crate) fn focus_if_requested(&mut self, field: &egui::Response) {
+        if self.request_input_focus {
+            field.request_focus();
+            self.request_input_focus = false;
         }
     }
 
-    pub(crate) fn render_composer(&mut self, ui: &mut egui::Ui) {
+    /// Shared pre-input machinery for every composer style: restart banner,
+    /// image paste, history recall, completion keys, the slash palette, and
+    /// attachment thumbnails. Returns whether a completion should be applied
+    /// instead of submitting.
+    pub(crate) fn composer_prelude(&mut self, ui: &mut egui::Ui) -> bool {
         // A crashed/exited sidecar leaves no backend; offer a one-click restart
         // that relaunches it and re-attaches this workspace's conversation.
         if self.backend.is_none() {
@@ -173,140 +169,82 @@ impl Workspace {
         }
 
         self.render_attachments(ui);
+        apply
+    }
 
-        let mut stop = false;
-        let mut do_submit = false;
-        let mut do_steer = false;
-        let mut do_pause = false;
-        let mut paste_image = false;
-        let mut open_files = false;
+    /// Classic style: ⌘Commands · Image · Files · input · Send, plus a second
+    /// row of Terminal / Sessions toggles and the agent/model switchers.
+    pub(crate) fn render_style_classic(&mut self, ui: &mut egui::Ui, apply: bool) -> ComposerFx {
+        let mut fx = ComposerFx::default();
         ui.horizontal(|ui| {
-            // Commands menu to the left of the input box.
             self.render_commands_menu(ui);
             if ui
-                .button("Image")
+                .button("\u{1f5bc} Image")
                 .on_hover_text("Attach an image from the clipboard (or press Ctrl+V)")
                 .clicked()
             {
-                paste_image = true;
+                fx.paste = true;
             }
             if ui
-                .button("File")
+                .button("\u{1f4ce} Files")
                 .on_hover_text("Browse workspace files and @-reference one in your message")
                 .clicked()
             {
-                open_files = true;
+                fx.files = true;
             }
-
-            let running = self.running;
-            // While a turn runs, the input box steers; otherwise it sends.
-            let input_enabled = self.ready;
-            let hint = if !self.ready {
-                "Waiting for Code Puppy to start…".to_string()
-            } else if running {
-                format!("Steer {} mid-turn… (Enter to steer)", self.puppy_name)
-            } else {
-                format!(
-                    "Message {}…  (/ for commands, @ for files)",
-                    self.puppy_name
-                )
-            };
-            // Reserve room on the right for the action buttons.
-            let reserve = if running { 250.0 } else { 70.0 };
+            let hint = self.composer_hint();
+            let input_id = self.composer_input_id();
             let field = ui.add_enabled(
-                input_enabled,
+                self.ready,
                 egui::TextEdit::singleline(&mut self.input)
                     // Stable, absolute id so focus survives the completion popup
                     // appearing/disappearing above us (which shifts auto-ids).
-                    .id(egui::Id::new(("composer-input", self.id.0)))
-                    .desired_width((ui.available_width() - reserve).max(60.0))
+                    .id(input_id)
+                    .desired_width((ui.available_width() - 70.0).max(60.0))
                     .hint_text(hint),
             );
-            if self.request_input_focus {
-                field.request_focus();
-                self.request_input_focus = false;
-            }
+            self.focus_if_requested(&field);
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if running {
-                // Steer delivery mode toggle (now = interrupt, queue = after turn).
-                let mode_label = if self.steer_queue_mode {
-                    "📨 queue"
-                } else {
-                    "🎯 now"
-                };
-                if ui
-                    .selectable_label(false, mode_label)
-                    .on_hover_text(
-                        "Steer delivery — now: interrupt mid-turn · queue: after this turn",
-                    )
-                    .clicked()
-                {
-                    self.steer_queue_mode = !self.steer_queue_mode;
-                }
-                let steer = ui
-                    .add_enabled(input_enabled, egui::Button::new("Steer"))
-                    .on_hover_text("Send this as a steering message")
-                    .clicked();
-                let pause_label = if self.paused {
-                    "▶ Resume"
-                } else {
-                    "⏸ Pause"
-                };
-                if ui
-                    .button(pause_label)
-                    .on_hover_text("Pause/resume the turn at the next safe point")
-                    .clicked()
-                {
-                    do_pause = true;
-                }
-                if ui
-                    .button("⏹ Stop")
-                    .on_hover_text("Cancel the running turn")
-                    .clicked()
-                {
-                    stop = true;
-                }
-                if !apply && (enter || steer) {
-                    do_steer = true;
-                }
-            } else {
-                let send = ui
-                    .add_enabled(input_enabled, egui::Button::new("Send"))
-                    .clicked();
-                if !apply && (enter || send) {
-                    do_submit = true;
-                }
+            let label = if self.running { "Steer" } else { "Send" };
+            let send = ui
+                .add_enabled(self.ready, egui::Button::new(label))
+                .clicked();
+            if !apply && (enter || send) {
+                fx.submit = true;
             }
         });
+        ui.add_space(5.0);
+        ui.horizontal(|ui| {
+            self.terminal_toggle(ui);
+            self.sessions_toggle(ui);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.model_switcher(ui);
+                self.agent_switcher(ui);
+            });
+        });
+        fx
+    }
 
-        if do_submit {
-            self.submit();
-            self.request_input_focus = true;
-        }
-        if do_steer {
-            self.steer();
-            self.request_input_focus = true;
-        }
-        if do_pause {
-            self.toggle_pause();
-        }
-        if stop {
-            if let Some(backend) = &self.backend {
-                backend.cancel();
-            }
-            self.status_line = "Cancelling…".to_string();
-        }
+    /// Shared post-input dispatch: apply a completion, or send (steer while a
+    /// turn runs), plus the paste / file-browser side actions.
+    pub(crate) fn composer_epilogue(&mut self, ui: &mut egui::Ui, apply: bool, fx: ComposerFx) {
         if apply {
             self.apply_completion();
             self.request_input_focus = true;
+        } else if fx.submit {
+            if self.running {
+                self.steer();
+            } else {
+                self.submit();
+            }
+            self.request_input_focus = true;
         }
-        if paste_image {
+        if fx.paste {
             self.try_paste_image(ui.ctx());
         }
-        if open_files {
+        if fx.files {
             self.open_file_browser();
         }
-
         self.maybe_request_completion();
     }
 
@@ -420,41 +358,63 @@ impl Workspace {
         self.last_query = self.input.clone();
     }
 
+    /// The slash palette: sidecar-provided completions (commands, @files)
+    /// styled per the mock — mono command + weak hint rows in a popup frame.
     pub(crate) fn render_completion_popup(&mut self, ui: &mut egui::Ui) {
         let mut clicked: Option<usize> = None;
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            egui::ScrollArea::vertical()
-                .max_height(180.0)
-                .auto_shrink([false, true])
-                .show(ui, |ui| {
-                    for (i, c) in self.completions.iter().enumerate() {
-                        let selected = i == self.comp_selected;
-                        let resp = ui
-                            .horizontal(|ui| {
-                                let lab = ui.selectable_label(
-                                    selected,
-                                    egui::RichText::new(&c.display).monospace(),
-                                );
-                                if !c.meta.is_empty() {
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            ui.label(egui::RichText::new(&c.meta).weak().small());
-                                        },
+        egui::Frame::new()
+            .fill(ui.visuals().window_fill)
+            .stroke(ui.visuals().window_stroke)
+            .corner_radius(egui::CornerRadius::same(10))
+            .inner_margin(6.0)
+            .shadow(egui::epaint::Shadow {
+                offset: [0, 10],
+                blur: 28,
+                spread: 0,
+                color: egui::Color32::from_black_alpha(150),
+            })
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(
+                        "Commands \u{00b7} \u{2191}\u{2193} then Tab or Enter \u{00b7} Esc closes",
+                    )
+                    .weak()
+                    .small(),
+                );
+                egui::ScrollArea::vertical()
+                    .max_height(200.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        for (i, c) in self.completions.iter().enumerate() {
+                            let selected = i == self.comp_selected;
+                            let resp = ui
+                                .horizontal(|ui| {
+                                    let lab = ui.selectable_label(
+                                        selected,
+                                        egui::RichText::new(&c.display).monospace(),
                                     );
-                                }
-                                lab
-                            })
-                            .inner;
-                        if resp.clicked() {
-                            clicked = Some(i);
+                                    if !c.meta.is_empty() {
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                ui.label(
+                                                    egui::RichText::new(&c.meta).weak().small(),
+                                                );
+                                            },
+                                        );
+                                    }
+                                    lab
+                                })
+                                .inner;
+                            if resp.clicked() {
+                                clicked = Some(i);
+                            }
+                            if selected {
+                                resp.scroll_to_me(Some(egui::Align::Center));
+                            }
                         }
-                        if selected {
-                            resp.scroll_to_me(Some(egui::Align::Center));
-                        }
-                    }
-                });
-        });
+                    });
+            });
         if let Some(i) = clicked {
             self.comp_selected = i;
             self.apply_completion();

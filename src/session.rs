@@ -24,6 +24,65 @@ pub struct Session {
     /// The dashboard's fleet view (Grid / List / Focus), remembered per machine.
     #[serde(default)]
     pub dashboard_view: DashboardViewMode,
+    /// The chat composer style (a user preference, applies to all workspaces).
+    #[serde(default)]
+    pub composer_style: ComposerStyle,
+    /// Disable decorative animation app-wide (pulses, ring spins, bobs).
+    #[serde(default)]
+    pub reduce_motion: bool,
+}
+
+/// App-level UI preferences snapshotted into a [`Session`] on save (keeps
+/// `current_session`'s signature from growing a parameter per preference).
+#[derive(Clone)]
+pub struct UiPrefs {
+    pub theme: Theme,
+    pub dashboard_view: DashboardViewMode,
+    pub composer_style: ComposerStyle,
+    pub reduce_motion: bool,
+}
+
+/// Which composer skin the chat dock renders. One shared input state
+/// underneath; this only picks the layout. Persisted per machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ComposerStyle {
+    /// Buttons + menus, like today (evolved).
+    #[default]
+    Classic,
+    /// One rounded accent bar with inline chips and switchers.
+    Unified,
+    /// Keyboard / command-first mono prompt.
+    Palette,
+    /// Friendly: starter prompts, drop zone, labeled selectors.
+    Guided,
+}
+
+impl ComposerStyle {
+    pub const ALL: [ComposerStyle; 4] = [
+        ComposerStyle::Classic,
+        ComposerStyle::Unified,
+        ComposerStyle::Palette,
+        ComposerStyle::Guided,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ComposerStyle::Classic => "Classic",
+            ComposerStyle::Unified => "Unified",
+            ComposerStyle::Palette => "Palette",
+            ComposerStyle::Guided => "Guided",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            ComposerStyle::Classic => "Buttons + menu, like today",
+            ComposerStyle::Unified => "One bar, inline chips & switch",
+            ComposerStyle::Palette => "Keyboard / command-first",
+            ComposerStyle::Guided => "Friendly, with starter prompts",
+        }
+    }
 }
 
 /// How the dashboard lays out the fleet. Persisted in `session.json`.
@@ -205,6 +264,8 @@ mod tests {
             theme: Theme::Light,
             layout: None,
             dashboard_view: DashboardViewMode::Focus,
+            composer_style: ComposerStyle::Unified,
+            reduce_motion: true,
         };
         save(&session);
 
@@ -220,6 +281,8 @@ mod tests {
         assert_eq!(loaded.workspaces[1].agent, None);
         assert_eq!(loaded.theme, Theme::Light);
         assert_eq!(loaded.dashboard_view, DashboardViewMode::Focus);
+        assert_eq!(loaded.composer_style, ComposerStyle::Unified);
+        assert!(loaded.reduce_motion);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -230,6 +293,8 @@ mod tests {
         assert!(s.workspaces.is_empty());
         assert_eq!(s.theme, Theme::Dark);
         assert_eq!(s.dashboard_view, DashboardViewMode::Grid);
+        assert_eq!(s.composer_style, ComposerStyle::Classic);
+        assert!(!s.reduce_motion);
     }
 
     #[test]
@@ -246,6 +311,8 @@ mod tests {
             theme: Theme::Custom("Neon".into()),
             layout: None,
             dashboard_view: DashboardViewMode::default(),
+            composer_style: ComposerStyle::default(),
+            reduce_motion: false,
         };
         let j = serde_json::to_string(&s).unwrap();
         assert!(j.contains("\"theme\":\"custom:Neon\""));
@@ -262,6 +329,8 @@ mod tests {
             theme: Theme::Dark,
             layout: Some(dock),
             dashboard_view: DashboardViewMode::default(),
+            composer_style: ComposerStyle::default(),
+            reduce_motion: false,
         };
         let j = serde_json::to_string(&s).unwrap();
         let back: Session = serde_json::from_str(&j).unwrap();
@@ -288,6 +357,8 @@ mod tests {
             theme: Theme::Light,
             layout: None,
             dashboard_view: DashboardViewMode::default(),
+            composer_style: ComposerStyle::default(),
+            reduce_motion: false,
         };
         let j = serde_json::to_string(&s).unwrap();
         assert!(j.contains("\"theme\":\"light\""));

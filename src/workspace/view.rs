@@ -7,12 +7,17 @@ use eframe::egui;
 
 use super::Workspace;
 use super::diff::{file_name, marker_color};
-use super::render::{TreeActions, render_dir, render_entry};
+use super::render::{TreeActions, TurnMeta, render_dir, render_entry};
 use super::state::{EditorItem, EditorSide, Entry};
 use crate::browser::BrowserManager;
 
 impl Workspace {
-    pub fn render_chat(&mut self, ui: &mut egui::Ui, browser: &mut BrowserManager) {
+    pub fn render_chat(
+        &mut self,
+        ui: &mut egui::Ui,
+        browser: &mut BrowserManager,
+        composer_style: &mut crate::session::ComposerStyle,
+    ) {
         let id = self.id.0;
         self.poll_git(ui.ctx());
 
@@ -38,6 +43,8 @@ impl Workspace {
         let mut open_browser: Option<Option<String>> = None;
 
         let mut open_git = false;
+        let mut new_chat = false;
+        let can_new_chat = self.ready && !self.running && !self.transcript.is_empty();
         egui::Panel::top(egui::Id::new(("ws-top", id))).show_inside(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.toggle_value(&mut self.show_tree, "🗂 Tree")
@@ -49,6 +56,13 @@ impl Workspace {
                         .clicked()
                 {
                     open_git = true;
+                }
+                if ui
+                    .add_enabled(can_new_chat, egui::Button::new("\u{ff0b} New chat"))
+                    .on_hover_text("Clear the conversation and start fresh")
+                    .clicked()
+                {
+                    new_chat = true;
                 }
                 ui.separator();
                 self.render_puppy_name(ui);
@@ -89,6 +103,11 @@ impl Workspace {
 
         if open_git {
             self.show_git();
+        }
+        if new_chat {
+            // Reuses the /clear machinery: wipes the transcript (showing the
+            // empty state) and resets the sidecar conversation.
+            self.dispatch_command("/clear");
         }
         // Open the browser as an editor tab *inside* this workspace.
         if let Some(url) = open_browser {
@@ -265,7 +284,7 @@ impl Workspace {
         // chat is pushed into a resizable bottom panel (IDE style). With nothing
         // open, the chat fills the whole area.
         if self.editor_open.is_empty() {
-            self.render_chat_body(ui);
+            self.render_chat_body(ui, composer_style);
         } else {
             match self.editor_side {
                 EditorSide::Bottom => {
@@ -274,7 +293,7 @@ impl Workspace {
                         .resizable(true)
                         .default_size(280.0)
                         .show_inside(ui, |ui| {
-                            self.render_chat_body(ui);
+                            self.render_chat_body(ui, composer_style);
                         });
                     self.render_editor_area(ui, browser);
                 }
@@ -286,7 +305,7 @@ impl Workspace {
                         .show_inside(ui, |ui| {
                             self.render_editor_area(ui, browser);
                         });
-                    self.render_chat_body(ui);
+                    self.render_chat_body(ui, composer_style);
                 }
             }
         }
@@ -326,24 +345,20 @@ impl Workspace {
         }
     }
 
-    /// The chat region: transcript (scrolling) with the composer pinned to the
-    /// bottom and the optional logs panel above it.
-    pub(crate) fn render_chat_body(&mut self, ui: &mut egui::Ui) {
+    /// The chat region: transcript (scrolling) with the composer dock pinned
+    /// to the bottom and the optional logs panel above it.
+    pub(crate) fn render_chat_body(
+        &mut self,
+        ui: &mut egui::Ui,
+        composer_style: &mut crate::session::ComposerStyle,
+    ) {
         let id = self.id.0;
 
-        // Bottom-pinned controls: the chat composer (chat mode only) plus the
-        // always-visible bottom menu bar (terminal toggle + agent + model).
+        // Bottom-pinned: the composer dock (status line + selected composer
+        // style + footer; slim terminal bar while the terminal is shown).
         egui::Panel::bottom(egui::Id::new(("ws-composer", id))).show_inside(ui, |ui| {
             ui.add_space(4.0);
-            if !self.show_terminal {
-                if self.pending.is_some() {
-                    self.render_pending(ui);
-                } else {
-                    self.render_composer(ui);
-                }
-                ui.add_space(2.0);
-            }
-            self.render_bottom_bar(ui);
+            self.render_dock(ui, composer_style);
             ui.add_space(4.0);
         });
 
@@ -388,11 +403,8 @@ impl Workspace {
                             self.transcript_collapsed
                         ));
                     }
-                    if self.transcript.is_empty() {
-                        ui.weak(format!(
-                            "Ask {} to build, edit, or explain code.",
-                            self.puppy_name
-                        ));
+                    if self.transcript.is_empty() && self.transcript_collapsed == 0 {
+                        self.render_empty_state(ui);
                     }
                     let total = self.transcript.len();
                     let start = if self.transcript_show_all {
@@ -409,10 +421,16 @@ impl Workspace {
                         });
                     }
                     // Namespace each entry's widget ids (commonmark tables use a
-                    // Grid) so repeated/duplicate content doesn't clash.
+                    // Grid) so repeated/duplicate content doesn't clash. Turn
+                    // meta is built once per frame, not per entry.
+                    let meta = TurnMeta {
+                        puppy: &self.puppy_name,
+                        agent: &self.agent,
+                        model: &self.model,
+                    };
                     for (i, entry) in self.transcript.iter().enumerate().skip(start) {
                         ui.push_id(("entry", i), |ui| {
-                            render_entry(ui, entry, &mut self.md_cache, &self.puppy_name);
+                            render_entry(ui, entry, &mut self.md_cache, &meta);
                         });
                     }
                 });
@@ -565,42 +583,15 @@ impl Workspace {
         }
     }
 
-    /// The bottom menu bar (always shown): terminal toggle + agent + model.
+    /// The slim bar shown while the embedded terminal fills the chat area:
+    /// terminal/sessions toggles + the agent/model switchers.
     pub(crate) fn render_bottom_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            let term_live = self.terminal.as_ref().map(|t| t.alive).unwrap_or(false);
-            let label = if self.show_terminal {
-                "🖥 Terminal ▾"
-            } else {
-                "🖥 Terminal"
-            };
-            let resp = ui
-                .selectable_label(self.show_terminal, label)
-                .on_hover_text("Toggle an embedded shell in the chat area");
-            if resp.clicked() {
-                self.show_terminal = !self.show_terminal;
-                if self.show_terminal && self.terminal.is_none() {
-                    self.spawn_terminal(ui.ctx().clone());
-                }
-            }
-            if self.show_terminal && !term_live && self.terminal.is_some() {
-                ui.colored_label(egui::Color32::from_gray(150), "(exited)");
-            }
-            if ui
-                .selectable_label(self.show_sessions, "🗂 Sessions")
-                .on_hover_text("Browse & resume saved Code Puppy conversations")
-                .clicked()
-            {
-                self.show_sessions = !self.show_sessions;
-                if self.show_sessions
-                    && let Some(backend) = &self.backend
-                {
-                    backend.list_sessions();
-                }
-            }
+            self.terminal_toggle(ui);
+            self.sessions_toggle(ui);
             ui.separator();
-            self.render_agent_picker(ui);
-            self.render_model_picker(ui);
+            self.agent_switcher(ui);
+            self.model_switcher(ui);
         });
     }
 

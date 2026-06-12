@@ -10,27 +10,131 @@ use crate::backend::BackendMessage;
 
 use super::diff::marker_color;
 use super::fs::WorkspaceFs;
-use super::state::{Entry, TREE_IGNORE};
+use super::state::{Entry, TREE_IGNORE, tool_label};
 
 pub(crate) const AGENT_COLOR: egui::Color32 = egui::Color32::from_rgb(150, 220, 150);
 
+/// Per-frame turn context (built once per frame in `view.rs`, borrowed by
+/// every entry — no per-entry allocation).
+pub(crate) struct TurnMeta<'a> {
+    pub(crate) puppy: &'a str,
+    pub(crate) agent: &'a str,
+    pub(crate) model: &'a str,
+}
+
 pub(crate) fn render_markdown(ui: &mut egui::Ui, cache: &mut CommonMarkCache, text: &str) {
     CommonMarkViewer::new().show(ui, cache, text);
+}
+
+/// A transcript turn row: 30px avatar tile + (who line, body) column.
+fn turn(
+    ui: &mut egui::Ui,
+    emoji: &str,
+    who: impl FnOnce(&mut egui::Ui),
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    ui.horizontal_top(|ui| {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), egui::Sense::hover());
+        if ui.is_rect_visible(rect) {
+            let p = ui.painter();
+            p.rect_filled(
+                rect,
+                egui::CornerRadius::same(8),
+                ui.visuals().faint_bg_color,
+            );
+            p.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                emoji,
+                egui::FontId::proportional(15.0),
+                ui.visuals().text_color(),
+            );
+        }
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            who(ui);
+            body(ui);
+        });
+    });
+    ui.add_space(8.0);
+}
+
+/// The puppy turn's who line: accent name + a weak `agent · model` tag.
+fn agent_who(ui: &mut egui::Ui, meta: &TurnMeta) {
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(meta.puppy)
+                .color(AGENT_COLOR)
+                .strong()
+                .small(),
+        );
+        if !meta.agent.is_empty() {
+            ui.label(
+                egui::RichText::new(format!("{} \u{00b7} {}", meta.agent, meta.model))
+                    .monospace()
+                    .weak()
+                    .small(),
+            );
+        }
+    });
+}
+
+/// A tool-call chip: `🔧 {tool}` + optional file + optional ✓ +A −D counts.
+fn tool_chip(ui: &mut egui::Ui, label: &str, detail: Option<&str>, counts: Option<(usize, usize)>) {
+    egui::Frame::new()
+        .fill(ui.visuals().faint_bg_color)
+        .corner_radius(egui::CornerRadius::same(255))
+        .inner_margin(egui::Margin::symmetric(8, 3))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
+            ui.label(
+                egui::RichText::new(format!("\u{1f527} {label}"))
+                    .monospace()
+                    .small(),
+            );
+            if let Some(d) = detail {
+                ui.label(egui::RichText::new(d).monospace().small().weak());
+            }
+            if let Some((adds, dels)) = counts {
+                ui.label(
+                    egui::RichText::new(format!("\u{2713} +{adds}"))
+                        .monospace()
+                        .small()
+                        .color(egui::Color32::from_rgb(120, 200, 130)),
+                );
+                ui.label(
+                    egui::RichText::new(format!("\u{2212}{dels}"))
+                        .monospace()
+                        .small()
+                        .color(egui::Color32::from_rgb(230, 120, 120)),
+                );
+            }
+        });
 }
 
 pub(crate) fn render_entry(
     ui: &mut egui::Ui,
     entry: &Entry,
     cache: &mut CommonMarkCache,
-    puppy: &str,
+    meta: &TurnMeta,
 ) {
     match entry {
-        Entry::User(text) => labelled(ui, "you", egui::Color32::from_rgb(120, 170, 255), text),
-        Entry::Agent(text) => {
-            ui.colored_label(AGENT_COLOR, format!("🐶 {puppy}:"));
-            render_markdown(ui, cache, text);
-            ui.add_space(6.0);
-        }
+        Entry::User(text) => turn(
+            ui,
+            "\u{1f9d1}",
+            |ui| {
+                ui.label(egui::RichText::new("you").weak().small());
+            },
+            |ui| {
+                ui.label(text);
+            },
+        ),
+        Entry::Agent(text) => turn(
+            ui,
+            "\u{1f436}",
+            |ui| agent_who(ui, meta),
+            |ui| render_markdown(ui, cache, text),
+        ),
         Entry::Note(text) => {
             ui.label(egui::RichText::new(text).weak().italics());
             ui.add_space(4.0);
@@ -39,7 +143,7 @@ pub(crate) fn render_entry(
             ui.colored_label(egui::Color32::from_rgb(240, 120, 120), format!("⚠ {text}"));
             ui.add_space(4.0);
         }
-        Entry::Message(msg) => render_message(ui, msg, cache, puppy),
+        Entry::Message(msg) => render_message(ui, msg, cache, meta),
         Entry::Thinking { text, collapse } => {
             let dim = egui::Color32::from_gray(150);
             let id = ui.id().with("think");
@@ -65,25 +169,68 @@ pub(crate) fn render_entry(
     }
 }
 
+/// Light per-frame pass over a `DiffMessage` payload: path + add/del counts
+/// only (the full line list is parsed lazily, inside the opened collapsible).
+fn diff_chip_info(msg: &BackendMessage) -> Option<(&str, usize, usize)> {
+    let p = &msg.payload;
+    let path = p.get("path")?.as_str()?;
+    let (mut adds, mut dels) = (0usize, 0usize);
+    if let Some(arr) = p.get("diff_lines").and_then(serde_json::Value::as_array) {
+        for l in arr {
+            match l.get("type").and_then(serde_json::Value::as_str) {
+                Some("add") => adds += 1,
+                Some("remove") => dels += 1,
+                _ => {}
+            }
+        }
+    }
+    Some((path, adds, dels))
+}
+
 pub(crate) fn render_message(
     ui: &mut egui::Ui,
     msg: &BackendMessage,
     cache: &mut CommonMarkCache,
-    puppy: &str,
+    meta: &TurnMeta,
 ) {
-    // Agent prose is markdown — render it formatted.
+    // Agent prose is markdown — render it as a full puppy turn.
     if msg.category == "agent" {
-        ui.label(
-            egui::RichText::new(format!("🐶 {puppy}"))
-                .color(AGENT_COLOR)
-                .small(),
+        turn(
+            ui,
+            "\u{1f436}",
+            |ui| agent_who(ui, meta),
+            |ui| render_markdown(ui, cache, &msg.text),
         );
-        render_markdown(ui, cache, &msg.text);
+        return;
+    }
+    // Diffs: a tool chip (edit · path · ✓ +A −D) over a collapsed colored
+    // body. Full line parsing only happens while the body is open.
+    if msg.kind == "DiffMessage"
+        && let Some((path, adds, dels)) = diff_chip_info(msg)
+    {
+        ui.horizontal(|ui| {
+            tool_chip(ui, "edit", Some(path), Some((adds, dels)));
+        });
+        egui::CollapsingHeader::new(egui::RichText::new("view diff").weak().small())
+            .id_salt(ui.id().with("diff-body"))
+            .show(ui, |ui| {
+                if let Some(rec) = super::diff::parse_diff(msg) {
+                    super::diff::render_diff_lines(ui, &rec.lines);
+                }
+            });
+        ui.add_space(2.0);
+        return;
+    }
+    // Other tool output: a chip with the friendly tool name + clamped text.
+    if msg.category == "tool_output" {
+        ui.horizontal_wrapped(|ui| {
+            tool_chip(ui, &tool_label(&msg.kind), None, None);
+            clamped_text(ui, &msg.text);
+        });
         ui.add_space(2.0);
         return;
     }
     let color = match msg.category.as_str() {
-        "tool_output" => egui::Color32::from_rgb(200, 180, 120),
         "user_interaction" => egui::Color32::from_rgb(220, 160, 220),
         "divider" => egui::Color32::DARK_GRAY,
         _ => egui::Color32::GRAY,
@@ -94,23 +241,27 @@ pub(crate) fn render_message(
                 .color(color)
                 .small(),
         );
-        // Tool output can be enormous (multi-KB JSON dumps); clamp what we
-        // render so a single message can't wreck layout or framerate.
-        const MAX_CHARS: usize = 4000;
-        if msg.text.len() > MAX_CHARS {
-            let cut: String = msg.text.chars().take(MAX_CHARS).collect();
-            let omitted = msg.text.len().saturating_sub(cut.len());
-            ui.label(cut);
-            ui.label(
-                egui::RichText::new(format!("… (+{omitted} bytes trimmed)"))
-                    .weak()
-                    .small(),
-            );
-        } else {
-            ui.label(&msg.text);
-        }
+        clamped_text(ui, &msg.text);
     });
     ui.add_space(2.0);
+}
+
+/// Tool output can be enormous (multi-KB JSON dumps); clamp what we render so
+/// a single message can't wreck layout or framerate.
+fn clamped_text(ui: &mut egui::Ui, text: &str) {
+    const MAX_CHARS: usize = 4000;
+    if text.len() > MAX_CHARS {
+        let cut: String = text.chars().take(MAX_CHARS).collect();
+        let omitted = text.len().saturating_sub(cut.len());
+        ui.label(cut);
+        ui.label(
+            egui::RichText::new(format!("… (+{omitted} bytes trimmed)"))
+                .weak()
+                .small(),
+        );
+    } else {
+        ui.label(text);
+    }
 }
 
 pub(crate) fn labelled(ui: &mut egui::Ui, who: &str, color: egui::Color32, text: &str) {

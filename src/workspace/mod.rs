@@ -23,6 +23,7 @@ mod chat;
 mod clipboard;
 mod composer;
 mod diff;
+mod dock;
 mod editor;
 mod events;
 mod file_picker;

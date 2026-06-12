@@ -24,6 +24,24 @@ pub const CARD_PAD: f32 = 14.0;
 /// Bounded repaint interval for decorative animation (pulse, ring spin).
 const ANIM_INTERVAL: Duration = Duration::from_millis(50);
 
+/// Per-context flag: the user asked for reduced motion (persisted preference,
+/// pushed into ctx data each frame by the app).
+fn motion_flag_id() -> Id {
+    Id::new("cc-reduce-motion")
+}
+
+/// Publish the reduce-motion preference for this frame (called by the app).
+pub fn set_reduce_motion(ctx: &egui::Context, reduce: bool) {
+    ctx.data_mut(|d| d.insert_temp(motion_flag_id(), reduce));
+}
+
+/// Whether decorative animation may run this frame: not reduced-motion, and
+/// the window is focused (an unfocused/idle app schedules no repaints).
+pub fn motion_enabled(ctx: &egui::Context) -> bool {
+    let reduced = ctx.data(|d| d.get_temp::<bool>(motion_flag_id()).unwrap_or(false));
+    !reduced && ctx.input(|i| i.focused)
+}
+
 /// Blend `a` toward `b` by `t` in gamma space (cheap tint helper — egui has no
 /// CSS `color-mix`).
 pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
@@ -89,10 +107,16 @@ pub fn status_dot(ui: &mut Ui, col: Color32, live: bool) {
     }
     let c = rect.center();
     if live {
-        let t = ui.input(|i| i.time);
-        let a = (0.5 + 0.5 * (t * 2.2).sin() as f32) * 0.30; // 0..0.30
-        ui.painter().circle_filled(c, 6.0, col.linear_multiply(a));
-        ui.ctx().request_repaint_after(ANIM_INTERVAL);
+        if motion_enabled(ui.ctx()) {
+            let t = ui.input(|i| i.time);
+            let a = (0.5 + 0.5 * (t * 2.2).sin() as f32) * 0.30; // 0..0.30
+            ui.painter().circle_filled(c, 6.0, col.linear_multiply(a));
+            ui.ctx().request_repaint_after(ANIM_INTERVAL);
+        } else {
+            // Reduced motion / unfocused: a static halo, no repaints.
+            ui.painter()
+                .circle_filled(c, 6.0, col.linear_multiply(0.18));
+        }
     }
     ui.painter().circle_filled(c, 3.5, col);
 }
@@ -121,19 +145,28 @@ pub fn avatar(ui: &mut Ui, emoji: &str, ring: Color32, live: bool) {
         ui.visuals().text_color(),
     );
     if live {
-        // ~30% arc orbiting the avatar, one revolution per 3.4s.
-        let t = ui.input(|i| i.time) as f32;
-        let a0 = t * (std::f32::consts::TAU / 3.4);
-        let r = size * 0.5 + 2.0;
-        let c = rect.center();
-        let pts: Vec<Pos2> = (0..=10)
-            .map(|i| {
-                let a = a0 + i as f32 / 10.0 * std::f32::consts::TAU * 0.3;
-                c + r * vec2(a.cos(), a.sin())
-            })
-            .collect();
-        ui.painter().add(Shape::line(pts, Stroke::new(1.5, ring)));
-        ui.ctx().request_repaint_after(ANIM_INTERVAL);
+        if motion_enabled(ui.ctx()) {
+            // ~30% arc orbiting the avatar, one revolution per 3.4s.
+            let t = ui.input(|i| i.time) as f32;
+            let a0 = t * (std::f32::consts::TAU / 3.4);
+            let r = size * 0.5 + 2.0;
+            let c = rect.center();
+            let pts: Vec<Pos2> = (0..=10)
+                .map(|i| {
+                    let a = a0 + i as f32 / 10.0 * std::f32::consts::TAU * 0.3;
+                    c + r * vec2(a.cos(), a.sin())
+                })
+                .collect();
+            ui.painter().add(Shape::line(pts, Stroke::new(1.5, ring)));
+            ui.ctx().request_repaint_after(ANIM_INTERVAL);
+        } else {
+            // Reduced motion / unfocused: a static ring, no repaints.
+            ui.painter().circle_stroke(
+                rect.center(),
+                size * 0.5 + 2.0,
+                Stroke::new(1.0, ring.linear_multiply(0.5)),
+            );
+        }
     }
 }
 
@@ -204,13 +237,38 @@ pub fn popover_below<R>(
     anchor: Rect,
     add_contents: impl FnOnce(&mut Ui) -> R,
 ) -> Option<R> {
+    let pos = anchor.left_bottom() + vec2(0.0, 6.0);
+    popover_panel(ui, id, anchor, pos, Align2::LEFT_TOP, add_contents)
+}
+
+/// Like [`popover_below`], but the panel grows upward from above the anchor
+/// (for bottom-docked controls like the composer's pills).
+pub fn popover_above<R>(
+    ui: &Ui,
+    id: Id,
+    anchor: Rect,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
+    let pos = anchor.left_top() - vec2(0.0, 6.0);
+    popover_panel(ui, id, anchor, pos, Align2::LEFT_BOTTOM, add_contents)
+}
+
+fn popover_panel<R>(
+    ui: &Ui,
+    id: Id,
+    anchor: Rect,
+    pos: Pos2,
+    pivot: Align2,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
     let ctx = ui.ctx().clone();
     if !popover_is_open(&ctx, id) {
         return None;
     }
     let area = egui::Area::new(id.with("popover-area"))
         .order(egui::Order::Foreground)
-        .fixed_pos(anchor.left_bottom() + vec2(0.0, 6.0))
+        .pivot(pivot)
+        .fixed_pos(pos)
         .show(&ctx, |ui| {
             egui::Frame::new()
                 .fill(ui.visuals().window_fill)

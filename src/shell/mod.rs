@@ -74,6 +74,8 @@ pub struct Shell<'a> {
     pub dashboard: &'a mut views::dashboard::DashboardView,
     /// Resolved brand/status colors for the active theme.
     pub accents: &'a crate::theme::Accents,
+    /// The chat composer skin (user preference; the gear popover edits it).
+    pub composer_style: &'a mut crate::session::ComposerStyle,
     pub actions: &'a mut Vec<ShellAction>,
 }
 
@@ -113,7 +115,7 @@ impl TabViewer for Shell<'_> {
                 self.actions,
             ),
             Tab::Chat(id) => match self.sup.get_mut(*id) {
-                Some(ws) => ws.render_chat(ui, self.browser),
+                Some(ws) => ws.render_chat(ui, self.browser, self.composer_style),
                 None => closed_placeholder(ui),
             },
             Tab::Browser(id) => self.browser.render_tab(ui, *id),
