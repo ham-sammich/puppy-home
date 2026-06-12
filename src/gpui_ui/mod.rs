@@ -864,7 +864,7 @@ impl RootView {
                     root.maybe_probe_manager(cx);
                     root.maybe_probe_theme_remote(cx);
                     root.mgr_upkeep();
-                    root.remote_upkeep();
+                    root.remote_upkeep(cx);
                     root.pack_sync_upkeep();
                     root.ensure_answer_input_if_needed(cx);
                     root.prune_toasts();
@@ -1237,6 +1237,17 @@ impl Render for RootView {
                 )
             })
             .collect();
+        // Screen sanity (B13.1 class fix): a chat screen must have a live
+        // workspace AND its input entity. Any path that forgets (a closed
+        // workspace, a future jump-to-chat) degrades to the dashboard
+        // instead of panicking the whole app.
+        if let Screen::Chat(id) = self.screen {
+            if self.supervisor.get(id).is_none() {
+                self.screen = Screen::Dashboard;
+            } else {
+                self.ensure_chat_input(id, cx);
+            }
+        }
         let active_chat = match self.screen {
             Screen::Chat(id) => Some(id),
             _ => None,
@@ -1254,9 +1265,22 @@ impl Render for RootView {
 
         let body: gpui::AnyElement = match self.screen {
             Screen::Den => self.den_body(cx),
+            Screen::Chat(id)
+                if self.supervisor.get(id).is_none() || !self.chat_inputs.contains_key(&id) =>
+            {
+                // Unreachable in practice (the sanity pass above repairs
+                // both); kept so a future slip degrades instead of
+                // aborting the app (B13.1 was an `expect` here).
+                self.screen = Screen::Dashboard;
+                div().size_full().into_any_element()
+            }
             Screen::Chat(id) => {
-                let ws = self.supervisor.get(id).expect("validated above");
-                let input = self.chat_inputs.get(&id).expect("created on open").clone();
+                let ws = self.supervisor.get(id).expect("guarded by the arm above");
+                let input = self
+                    .chat_inputs
+                    .get(&id)
+                    .expect("guarded by the arm above")
+                    .clone();
                 chat::chat_screen(&chat::ChatArgs {
                     t,
                     ws,

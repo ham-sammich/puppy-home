@@ -221,7 +221,7 @@ impl RootView {
 
     /// Drain-loop upkeep: poll the in-flight listing + connection threads
     /// (egui's per-frame `try_recv` + `poll_remote`).
-    pub(crate) fn remote_upkeep(&mut self) {
+    pub(crate) fn remote_upkeep(&mut self, cx: &mut gpui::Context<Self>) {
         // Folder-browser listing result.
         if let Some(b) = self.remote.as_mut().and_then(|s| s.browser.as_mut())
             && let Some(rx) = &b.pending
@@ -242,18 +242,17 @@ impl RootView {
             }
         }
         // Connection result -> adopt into the Supervisor (egui poll_remote).
-        let result = match &self.remote_pending {
-            Some(p) => match p.rx.try_recv() {
-                Ok(r) => r,
-                Err(TryRecvError::Empty) => return,
-                Err(TryRecvError::Disconnected) => {
-                    self.remote_pending = None;
-                    return;
-                }
-            },
-            None => return,
+        let Some(pending) = self.remote_pending.take() else {
+            return;
         };
-        let pending = self.remote_pending.take().expect("pending present");
+        let result = match pending.rx.try_recv() {
+            Ok(r) => r,
+            Err(TryRecvError::Empty) => {
+                self.remote_pending = Some(pending); // still in flight
+                return;
+            }
+            Err(TryRecvError::Disconnected) => return,
+        };
         match result {
             Ok((backend, ev_rx, fs, git)) => {
                 let accent = self.tokens.accent;
@@ -266,7 +265,10 @@ impl RootView {
                     ev_rx,
                 );
                 // egui pushes a Chat tab for the new workspace; our shape
-                // of that is jumping to its chat screen.
+                // of that is jumping to its chat screen. The input MUST
+                // exist before the screen flips — render assumes it
+                // (B13.1: skipping ensure_chat_input here crashed the app).
+                self.ensure_chat_input(id, cx);
                 self.screen = Screen::Chat(id);
                 self.pending_focus = Some(id);
                 self.toast(format!("Connected {}", pending.label), accent);

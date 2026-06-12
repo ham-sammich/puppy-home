@@ -274,7 +274,8 @@ fn key_to_bytes(ev: &KeyDownEvent, cx: &mut gpui::App) -> Option<Vec<u8>> {
     }
     if ks.modifiers.control
         && ks.key.len() == 1
-        && let Some(b) = ctrl_byte(ks.key.chars().next().unwrap())
+        && let Some(c) = ks.key.chars().next()
+        && let Some(b) = ctrl_byte(c)
     {
         return Some(vec![b]);
     }
