@@ -101,7 +101,8 @@ impl Workspace {
             UiEvent::Ask { id, questions } => {
                 let headers: Vec<String> = questions.iter().map(|q| q.header.clone()).collect();
                 self.transcript.push(Entry::Note(format!(
-                    "\u{1f436} asked: {}",
+                    "{} asked: {}",
+                    crate::session::avatars().1,
                     headers.join(", ")
                 )));
                 self.pending_ask = Some(AskState::from(id, questions));

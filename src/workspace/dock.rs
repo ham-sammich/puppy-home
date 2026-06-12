@@ -527,7 +527,7 @@ impl Workspace {
                 p.text(
                     rect.center() + vec2(0.0, 2.0 - 2.0 * phase),
                     Align2::CENTER_CENTER,
-                    "\u{1f436}",
+                    crate::session::avatars().1.as_str(),
                     FontId::proportional(size),
                     ui.visuals().text_color(),
                 );

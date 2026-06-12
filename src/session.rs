@@ -30,6 +30,36 @@ pub struct Session {
     /// Disable decorative animation app-wide (pulses, ring spins, bobs).
     #[serde(default)]
     pub reduce_motion: bool,
+    /// Your avatar emoji in transcripts (empty = the \u{1f9d1} default).
+    /// Owned by the GPUI shell's picker (QW8 sync); egui renders + carries
+    /// it so a legacy-shell save never clobbers the choice.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub user_avatar: String,
+    /// Your puppy's avatar emoji (empty = the \u{1f436} default).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub puppy_avatar: String,
+}
+
+/// The avatar pair `(user, puppy)` with defaults applied, loaded ONCE per
+/// run (the egui shell has no picker; changes made in the GPUI shell show
+/// up on the next launch — no per-frame file reads).
+pub fn avatars() -> &'static (String, String) {
+    static AVATARS: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
+    AVATARS.get_or_init(|| {
+        let s = load();
+        (
+            if s.user_avatar.is_empty() {
+                "\u{1f9d1}".to_string()
+            } else {
+                s.user_avatar
+            },
+            if s.puppy_avatar.is_empty() {
+                "\u{1f436}".to_string()
+            } else {
+                s.puppy_avatar
+            },
+        )
+    })
 }
 
 /// App-level UI preferences snapshotted into a [`Session`] on save (keeps
@@ -247,6 +277,8 @@ mod tests {
         }
 
         let session = Session {
+            user_avatar: String::new(),
+            puppy_avatar: String::new(),
             workspaces: vec![
                 WorkspaceEntry {
                     path: "D:/proj/a".into(),
@@ -307,6 +339,8 @@ mod tests {
     #[test]
     fn custom_theme_roundtrips_via_serde() {
         let s = Session {
+            user_avatar: String::new(),
+            puppy_avatar: String::new(),
             workspaces: vec![],
             theme: Theme::Custom("Neon".into()),
             layout: None,
@@ -325,6 +359,8 @@ mod tests {
         let mut dock = DockState::new(vec![SavedTab::Dashboard, SavedTab::McpManager]);
         normalize_layout_rects(&mut dock); // fresh leaves carry inf rects
         let s = Session {
+            user_avatar: String::new(),
+            puppy_avatar: String::new(),
             workspaces: vec![],
             theme: Theme::Dark,
             layout: Some(dock),
@@ -353,6 +389,8 @@ mod tests {
     #[test]
     fn theme_serializes_lowercase() {
         let s = Session {
+            user_avatar: String::new(),
+            puppy_avatar: String::new(),
             workspaces: vec![],
             theme: Theme::Light,
             layout: None,

@@ -19,11 +19,17 @@ use crate::workspace::WorkspaceId;
 
 /// Snapshot the open workspaces + dock layout as a persistable session.
 pub fn current_session(sup: &Supervisor, prefs: UiPrefs, dock: Option<&DockState<Tab>>) -> Session {
+    // Avatar prefs are owned by the GPUI shell's picker; carry the saved
+    // values so an egui-shell save never clobbers them (the same courtesy
+    // the GPUI shell extends to egui-owned theme/layout fields).
+    let carry = crate::session::load();
     Session {
         theme: prefs.theme,
         dashboard_view: prefs.dashboard_view,
         composer_style: prefs.composer_style,
         reduce_motion: prefs.reduce_motion,
+        user_avatar: carry.user_avatar,
+        puppy_avatar: carry.puppy_avatar,
         workspaces: sup
             .iter()
             .map(|w| WorkspaceEntry {

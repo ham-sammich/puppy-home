@@ -121,7 +121,7 @@ pub(crate) fn render_entry(
     match entry {
         Entry::User(text) => turn(
             ui,
-            "\u{1f9d1}",
+            &crate::session::avatars().0,
             |ui| {
                 ui.label(egui::RichText::new("you").weak().small());
             },
@@ -131,7 +131,7 @@ pub(crate) fn render_entry(
         ),
         Entry::Agent(text) => turn(
             ui,
-            "\u{1f436}",
+            &crate::session::avatars().1,
             |ui| agent_who(ui, meta),
             |ui| render_markdown(ui, cache, text),
         ),
@@ -197,7 +197,7 @@ pub(crate) fn render_message(
     if msg.category == "agent" {
         turn(
             ui,
-            "\u{1f436}",
+            &crate::session::avatars().1,
             |ui| agent_who(ui, meta),
             |ui| render_markdown(ui, cache, &msg.text),
         );
