@@ -294,6 +294,34 @@ are chrome around the ONE ChatInput entity; the gear popover persists
   is ignored.
 - No soft wrap in the input (above).
 
+## Phase E run 1 — manager overlay patterns (MCP / Skills / Agents)
+
+- **One overlay, one field pool.** `manager_open: Option<MgrKind>` gates a
+  single centered overlay (sessions-browser pattern: `deferred` + `occlude`
+  scrim, priority 210). Because only one manager is open at a time, a small
+  POOL of `ChatInput` entities (`mgr_inputs`, indices `F_*` in
+  `managers.rs`) is reused across every form/wizard: fields are **seeded
+  when a form opens** and **read back on advance/submit** — no
+  per-keystroke field sync, no per-form entity churn.
+- **Shared state machines, GPUI dispatch.** The egui wizards'
+  frontend-agnostic structs (`views/{mcp,skills,agent}_wizard::Wizard` —
+  paste parse/validate, review compose, scope mapping) are driven directly
+  by `dispatch_mcp/skills/agents`; their private fields were widened to
+  `pub(crate)` (sync-queued for the egui branch — behavior unchanged).
+  Step gating (validate-before-advance) matches egui exactly.
+- **Paste mode = the editor input.** One shared code-mode `ChatInput`
+  (`mgr_paste_input`) carries every paste buffer, re-highlighted per edit
+  via `editor::highlight` with the grammar keyed off the open manager
+  (`x.json` vs `SKILL.md`).
+- **egui cadence mechanics ported 1:1**: serving-workspace invariant
+  (first ready sidecar), request gap 2s / mcp refresh 5s / slow refresh
+  10s, optimistic toggle overrides (`mgr_pending`) cleared when the
+  catalog generation bumps, generation bump re-fetches the open detail.
+  `mgr_upkeep()` rides the existing drain loop — no new timers.
+- **Probe**: `PUPPY_GPUI_MGR=mcp|skills|agents` opens the overlay once a
+  sidecar is ready (render-survival validation, same style as the
+  terminal/chat probes).
+
 ## Phase D — the terminal element
 
 - **Split**: terminal.rs keeps PTY/vt100/reader-thread (renderer-free

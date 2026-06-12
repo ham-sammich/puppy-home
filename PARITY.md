@@ -116,14 +116,34 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
 
 ## Phase E — app management
 
-- [ ] E1. MCP manager + wizard. Ref: `views/mcp_manager.rs`,
-      `views/mcp_wizard/`. Backend events already fold (`mcp_servers`,
-      generation counter).
-- [ ] E2. Skills manager + wizard. Ref: `views/skills_manager.rs`,
-      `views/skills_wizard.rs` (`skills`, `skill_detail` events).
-- [ ] E3. Agent manager + wizard (JSON agent configs, visual builder,
-      tool/MCP catalogs). Ref: `views/agent_manager.rs`,
-      `views/agent_wizard/` (`agent_configs` events).
+- [x] E1. MCP manager + wizard: status-dot list (state colors, error tip,
+      summary, optimistic enable switch), 3-step add wizard (transport
+      cards / details / review) + Form|Paste toggle reusing the shared
+      `mcp_wizard::Wizard` state machine (paste parse, mcpServers unwrap,
+      transport inference, validate). egui has no test-connection action
+      beyond wizard validation — matched exactly (Add/Refresh/toggles).
+- [x] E2. Skills manager + wizard: user+project list w/ filter + enable
+      toggles, detail pane (Edit gated on fetched detail), 3-step wizard
+      + SKILL.md paste mode over `skills_wizard::Wizard`.
+- [x] E3. Agent manager + wizard: list w/ filter + source badges +
+      (active) marker, detail pane (Clone always; Edit/Delete gated on
+      editable; delete blocked on the active agent, inline confirm),
+      4-step builder (basics/prompt/tools+MCP chips/review) + JSON paste
+      mode over `agent_wizard::Wizard`. Paste buffers are ONE shared
+      code-mode input with live syntect highlighting (JSON for MCP/agents,
+      markdown for skills) — the "if cheap" upgrade landed, not plain mono.
+      Phase-E manager deviations (all three, deliberate):
+      - Overlay (sessions-browser pattern, one at a time) instead of
+        egui's dockable tabs; access is app-wide from the dashboard
+        toolbar = egui's top-bar buttons. Serving-workspace invariant,
+        poll cadences (2s gap/5s mcp/10s slow) and generation-driven
+        optimistic-toggle clearing ported 1:1.
+      - env/headers edit as KEY=VALUE lines, not add/remove pair rows.
+      SYNC QUEUE (phase-end batch to shared-backend + egui): pub(crate)
+      visibility opens on `views/{mcp_wizard,skills_wizard,agent_wizard}`
+      state machines + `views/{agent,skills}_manager` helpers (egui
+      behavior unchanged — fields/methods only widened so the GPUI
+      dispatch drives the same state machines).
 - [ ] E4. Remote SSH connect flow: connect dialog, off-thread spawn,
       `Supervisor::adopt`, remote-label UI states. Ref:
       `views/remote_connect.rs`, `app/remote.rs`, `backend/remote.rs`,
