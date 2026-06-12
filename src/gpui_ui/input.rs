@@ -215,6 +215,10 @@ impl ChatInput {
     /// the active palette; entities can't read it back, so it's pushed).
     pub fn set_tokens(&mut self, t: Tokens, cx: &mut Context<Self>) {
         self.tokens = t;
+        // The shaped-run color comes from these tokens (B13.2 redux) and
+        // the cache key is only (generation, wrap) — drop it or a theme
+        // switch keeps the old-palette colors until the next edit.
+        *self.cache.borrow_mut() = None;
         cx.notify();
     }
 
@@ -634,7 +638,13 @@ impl ChatInput {
         {
             return layout.clone();
         }
-        let color = window.text_style().color;
+        // Plain-text runs are colored from the input's OWN tokens, not the
+        // ambient div cascade: shaped runs don't inherit `text_color` from
+        // ancestors, and `window.text_style()` falls back to gpui's default
+        // (black) whenever a container forgot to set one — which is exactly
+        // how every plain input went black-on-dark (B13.2 redux). The
+        // tokens are pushed by the root on theme switches (`set_tokens`).
+        let color = gpui::Hsla::from(self.tokens.text);
         let wrap = (wrap_px >= 0).then(|| px(wrap_px as f32));
         let layout = std::sync::Arc::new(shape_lines(
             &self.content,

@@ -369,6 +369,29 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       E2E vs a real remote needs human QA (standing E4 limitation).
       `5df2868`
 
+- [x] B13.2 REDUX input fields rendered BLACK text in dark mode (user
+      report; the earlier sweep fixed surface styling + syntect code
+      mode but missed the plain-text machinery). ROOT CAUSE: ChatInput
+      shapes its own runs, and shaped runs don't inherit the div
+      cascade's text_color — `cached_layout` colored plain content from
+      `window.text_style().color`, which falls back to gpui's DEFAULT
+      (black) whenever the surface container didn't set an explicit
+      text_color. Every plain input without one went black-on-dark.
+      SECONDARY: the shape cache key is (generation, wrap) only, so
+      set_tokens kept stale-palette runs until the next edit. FIX at
+      the machinery: plain runs (and the syntax fallback + marked-text
+      path) color from the input's OWN tokens (self.tokens.text, pushed
+      by apply_palette on theme switch); set_tokens now drops the cache.
+      Placeholder (dim), cursor (accent), selection (accent 0.25) were
+      already token-colored. ONE EntityInputHandler impl = every input
+      surface fixed in one place: chat composer, answer input, sessions
+      filter, git commit/branch/creds, tree rename/new, editor (syntect
+      mode untouched), remote target/path, den join/message/card-title,
+      browser URL, MCP/Skills/Agent wizard fields, theme-editor hex
+      fields. No surface overrides run colors locally (containers'
+      text_color only ever styled labels). Probed dark + light themes.
+      `<hash3>`
+
 - [x] B13.3 REDUX model chip still clipped (user screenshot): the previous
       fix left the 180px max-width ALWAYS on, so wide cards with free
       header space still truncated long ids. Now: no fixed cap — the pill
