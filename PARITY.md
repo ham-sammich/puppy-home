@@ -372,6 +372,37 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       + push-creds-by-consequence.]
       `5df2868`
 
+- [x] E8 REDUX #3 BROWSER POLISH after user feedback (dated look /
+      can't pop back in / can't close):
+      1. "DATED": wry's DEFAULT User-Agent is an anonymous WebKit string
+         — google.com served its 2009 legacy no-JS homepage to it
+         (beveled buttons, underlined links; screenshot-proven). Fix:
+         with_user_agent matching real Safari 17.6 on macOS (Safari
+         freezes the OS token at 10_15_7 — exact match is the point);
+         Edge-shaped UA on Windows, Chrome-shaped on Linux. AFTER:
+         modern Google (doodle, pill search, AI Mode). Crispness at 2x
+         confirmed fine — scale theory ruled out, UA was everything.
+      2. "CAN'T POP BACK IN" root cause: Float left the window glued at
+         the embed rect, COVERING the host's browser toolbar — \u{2913}
+         and Stop were unreachable (also half of "can't close"). Fix:
+         Float now repositions to a standalone spot (logical 140,120 @
+         1100x740). Host-window capture during pop-out shows the full
+         toolbar incl. \u{2913}.
+      3. "CAN'T CLOSE": the Web tab had NO close affordance — once
+         opened, permanent. Fix: \u{2715} on the Web tab ->
+         BrowserAction::CloseSurface (stop_tab + close_tab +
+         browser_tab=None + leave Browser screen). Live: process GONE +
+         all plugin windows gone from CGWindowList. Plugin death via
+         window close (CloseRequested -> exit, code path present;
+         approximated live with SIGTERM — can't click traffic lights
+         headlessly): host flips to Launch immediately, no zombie
+         toolbar. Toolbar Stop unchanged (kill -> overlay dies with
+         process).
+      Probes: PUPPY_GPUI_BROWSER=launch:<url> (UA canary),
+      cycle probe stage 5 = close. Plugin rebuilt + reinstalled.
+      Occluded-window captures via `screencapture -l <id>` (user was
+      using the machine — full-screen shots were Discord). `<hash7>`
+
 - [x] E8 REDUX #2 GPUI IN-TAB BROWSER EMBEDDING (user: "should appear
       embedded with a pop-out icon"). The E8 "embedding N/A in GPUI"
       verdict is RETIRED — the investigation found the missing pieces

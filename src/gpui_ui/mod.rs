@@ -746,9 +746,16 @@ impl RootView {
             unsafe { std::env::remove_var("PUPPY_GPUI_BROWSER") };
             self.dispatch(DashAction::Browser(browser_ui::BrowserAction::Open), cx);
             eprintln!("[probe] opened the browser surface");
-            // `PUPPY_GPUI_BROWSER=launch` also launches the plugin (E2E:
-            // the float_pump must then put a real window on screen).
-            if v == "launch" && self.browser.is_available() {
+            // `PUPPY_GPUI_BROWSER=launch[:<url>]` also launches the plugin
+            // (E2E; the optional url is the UA-canary hook).
+            let v = v.to_string_lossy().to_string();
+            if (v == "launch" || v.starts_with("launch:")) && self.browser.is_available() {
+                if let Some(url) = v.strip_prefix("launch:")
+                    && let Some(input) = &self.browser_url_input
+                {
+                    let url = url.to_string();
+                    input.update(cx, |i, cx| i.set_text(&url, cx));
+                }
                 self.dispatch(DashAction::Browser(browser_ui::BrowserAction::Launch), cx);
                 eprintln!("[probe] launched the browser plugin");
             }
@@ -1229,11 +1236,12 @@ impl RootView {
         }
         let elapsed = self.browser_cycle_at.unwrap().elapsed().as_secs();
         let stage = self.browser_cycle_stage;
-        let actions: [(u64, &str); 4] = [
+        let actions: [(u64, &str); 5] = [
             (6, "dashboard"),
             (12, "browser"),
             (18, "popout"),
             (24, "popin"),
+            (30, "close"),
         ];
         if let Some(&(at, what)) = actions.get(stage as usize)
             && elapsed >= at
@@ -1247,6 +1255,10 @@ impl RootView {
                     self.dispatch(DashAction::Browser(browser_ui::BrowserAction::PopOut), cx)
                 }
                 "popin" => self.dispatch(DashAction::Browser(browser_ui::BrowserAction::PopIn), cx),
+                "close" => self.dispatch(
+                    DashAction::Browser(browser_ui::BrowserAction::CloseSurface),
+                    cx,
+                ),
                 _ => {}
             }
             cx.notify();

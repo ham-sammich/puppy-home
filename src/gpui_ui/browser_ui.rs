@@ -39,6 +39,9 @@ pub enum BrowserAction {
     PopOut,
     /// \u{2913} — re-embed the floating webview into the Browser screen.
     PopIn,
+    /// \u{2715} on the Web tab: stop the plugin and dismiss the surface
+    /// entirely (the tab previously could never be closed).
+    CloseSurface,
     InstallLocal,
     Rescan,
     OpenPluginsDir,
@@ -118,6 +121,16 @@ impl RootView {
             BrowserAction::Stop => {
                 if let Some(id) = self.browser_tab {
                     self.browser.stop_tab(id);
+                }
+            }
+            BrowserAction::CloseSurface => {
+                if let Some(id) = self.browser_tab.take() {
+                    self.browser.stop_tab(id);
+                    self.browser.close_tab(id);
+                }
+                *self.browser_embed_slot.lock().unwrap() = None;
+                if self.screen == crate::gpui_ui::Screen::Browser {
+                    self.screen = crate::gpui_ui::Screen::Dashboard;
                 }
             }
             BrowserAction::PopOut => {

@@ -953,7 +953,33 @@ pub fn tab_strip(
                         .border_color(t.line_soft)
                 })
                 .when(!active, |d| d.text_color(t.weak))
+                .flex()
+                .items_center()
+                .gap_1()
                 .child(format!("\u{1f310} {title}"))
+                .child({
+                    // Close: stop the plugin + dismiss the surface (the
+                    // tab used to be permanent once opened).
+                    let root = root.clone();
+                    div()
+                        .id("tab-browser-close")
+                        .px_0p5()
+                        .text_size(px(10.))
+                        .text_color(t.weak)
+                        .hover(|d| d.text_color(t.text))
+                        .child("\u{2715}")
+                        .on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            root.update(cx, |r, cx| {
+                                r.dispatch(
+                                    DashAction::Browser(
+                                        crate::gpui_ui::browser_ui::BrowserAction::CloseSurface,
+                                    ),
+                                    cx,
+                                )
+                            });
+                        })
+                })
                 .on_click(move |_, _, cx| {
                     root.update(cx, |r, cx| {
                         r.dispatch(
