@@ -31,6 +31,11 @@ pub struct MgrArgs<'a> {
     pub skills_wizard: Option<&'a crate::views::skills_wizard::Wizard>,
     pub agent_wizard: Option<&'a crate::views::agent_wizard::Wizard>,
     pub agent_delete_confirm: Option<&'a str>,
+    /// Models manager: the extra_models.json editor is open (QW4).
+    pub models_editor: bool,
+    /// Config manager: parsed puppy.cfg entries + the row being edited (QW5).
+    pub cfg_entries: &'a [(String, String)],
+    pub cfg_edit_key: Option<&'a str>,
 }
 
 /// Click handler that funnels a manager action through the root dispatch.
@@ -258,20 +263,29 @@ pub fn overlay(args: &MgrArgs) -> AnyElement {
         MgrKind::Mcp => args.mcp_wizard.is_some(),
         MgrKind::Skills => args.skills_wizard.is_some(),
         MgrKind::Agents => args.agent_wizard.is_some(),
+        MgrKind::Models => args.models_editor,
+        MgrKind::Config => false,
     };
-    let body: AnyElement = match args.ws {
-        None => center_hint(
-            &t,
-            &[
-                "No Code Puppy connected",
-                "Open a workspace first \u{2014} managers talk through its sidecar.",
-            ],
-        ),
-        Some(ws) => match args.kind {
-            MgrKind::Mcp => super::managers_mcp::body(args, ws),
-            MgrKind::Skills => super::managers_skills::body(args, ws),
-            MgrKind::Agents => super::managers_agents::body(args, ws),
-        },
+    let body: AnyElement = if args.kind == MgrKind::Config {
+        // Config is file-based — no sidecar needed.
+        super::managers_config::body(args)
+    } else {
+        match args.ws {
+            None => center_hint(
+                &t,
+                &[
+                    "No Code Puppy connected",
+                    "Open a workspace first \u{2014} managers talk through its sidecar.",
+                ],
+            ),
+            Some(ws) => match args.kind {
+                MgrKind::Mcp => super::managers_mcp::body(args, ws),
+                MgrKind::Skills => super::managers_skills::body(args, ws),
+                MgrKind::Agents => super::managers_agents::body(args, ws),
+                MgrKind::Models => super::managers_models::body(args, ws),
+                MgrKind::Config => unreachable!("handled above"),
+            },
+        }
     };
 
     // Header: title + "subtitle - via {ws}" + Add/Create + Refresh + Close.
@@ -303,6 +317,12 @@ pub fn overlay(args: &MgrArgs) -> AnyElement {
                     disabled_btn(&t, "\u{ff0b} Create agent").into_any_element()
                 }
             }
+            MgrKind::Models => widgets::primary_btn(&t, "\u{270e} Edit extra_models.json")
+                .id("mgr-add")
+                .on_click(act(&args.root, MgrAction::ModelsEditorOpen))
+                .into_any_element(),
+            // Config rows edit inline; no header action.
+            MgrKind::Config => div().into_any_element(),
         })
     };
 

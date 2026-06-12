@@ -41,6 +41,8 @@ pub enum MgrKind {
     Mcp,
     Skills,
     Agents,
+    Models,
+    Config,
 }
 
 impl MgrKind {
@@ -49,6 +51,8 @@ impl MgrKind {
             MgrKind::Mcp => "MCP Servers",
             MgrKind::Skills => "Skills",
             MgrKind::Agents => "Agents",
+            MgrKind::Models => "Models",
+            MgrKind::Config => "Puppy Config",
         }
     }
 
@@ -58,6 +62,8 @@ impl MgrKind {
             MgrKind::Mcp => "global Code Puppy config",
             MgrKind::Skills => "user + project skills",
             MgrKind::Agents => "JSON + built-in agents",
+            MgrKind::Models => "sidecar catalog + extra_models.json",
+            MgrKind::Config => "puppy.cfg \u{2014} global settings",
         }
     }
 }
@@ -104,6 +110,16 @@ pub enum MgrAction {
     AgentToolsNone,
     AgentFormat,
     AgentSubmit,
+    // models (QW4)
+    ModelSetActive(String),
+    ModelsEditorOpen,
+    ModelsEditorCancel,
+    ModelsEditorSave,
+    ModelRemove(String),
+    // config (QW5)
+    CfgEdit(String),
+    CfgEditCancel,
+    CfgEditSave,
 }
 
 // Field-pool indices (one manager open at a time -> safe reuse).
@@ -210,6 +226,11 @@ impl RootView {
             Open(kind) => {
                 self.ensure_mgr_inputs(cx);
                 self.manager_open = Some(kind);
+                self.models_editor = false;
+                self.cfg_edit_key = None;
+                if kind == MgrKind::Config {
+                    self.cfg_reload();
+                }
                 self.mgr_selected = None;
                 self.agent_delete_confirm = None;
                 self.mcp_wizard = None;
@@ -228,6 +249,9 @@ impl RootView {
                 self.agent_wizard = None;
             }
             Refresh => {
+                if self.manager_open == Some(MgrKind::Config) {
+                    self.cfg_reload();
+                }
                 self.mgr_last_request = None;
                 self.mgr_upkeep();
             }
@@ -237,6 +261,9 @@ impl RootView {
             | SkillMode(_) | SkillStep(_) | SkillScope(_) | SkillFormat | SkillSubmit) => {
                 self.dispatch_skills(a, cx)
             }
+            a @ (ModelSetActive(_) | ModelsEditorOpen | ModelsEditorCancel | ModelsEditorSave
+            | ModelRemove(_)) => self.dispatch_models(a, cx),
+            a @ (CfgEdit(_) | CfgEditCancel | CfgEditSave) => self.dispatch_config(a, cx),
             a => self.dispatch_agents(a, cx),
         }
         cx.notify();
@@ -249,6 +276,11 @@ impl RootView {
         let Some(kind) = self.manager_open else {
             return;
         };
+        // Models reads the always-maintained catalog; Config reads a local
+        // file — neither polls the sidecar.
+        if matches!(kind, MgrKind::Models | MgrKind::Config) {
+            return;
+        }
         let Some((ws_id, generation, have)) = self.serving_ws().map(|ws| match kind {
             MgrKind::Mcp => (ws.id, ws.mcp_generation, ws.mcp_servers.is_some()),
             MgrKind::Skills => (ws.id, ws.skills_generation, ws.skills.is_some()),
@@ -257,6 +289,7 @@ impl RootView {
                 ws.agent_configs_generation,
                 ws.agent_configs.is_some(),
             ),
+            MgrKind::Models | MgrKind::Config => unreachable!("early-returned above"),
         }) else {
             return;
         };
@@ -270,7 +303,7 @@ impl RootView {
                 self.with_ready_backend(|b| match kind {
                     MgrKind::Skills => b.get_skill(&sel),
                     MgrKind::Agents => b.get_agent_config(&sel),
-                    MgrKind::Mcp => {}
+                    MgrKind::Mcp | MgrKind::Models | MgrKind::Config => {}
                 });
             }
         }
@@ -288,6 +321,7 @@ impl RootView {
                 MgrKind::Mcp => b.list_mcp_servers(),
                 MgrKind::Skills => b.list_skills(),
                 MgrKind::Agents => b.list_agent_configs(),
+                MgrKind::Models | MgrKind::Config => {}
             });
             self.mgr_last_request = Some(Instant::now());
         }

@@ -24,7 +24,9 @@ pub mod input;
 pub mod managers;
 pub mod managers_agents;
 pub mod managers_agents_wizard;
+pub mod managers_config;
 pub mod managers_mcp;
+pub mod managers_models;
 pub mod managers_skills;
 pub mod managers_ui;
 pub mod markdown;
@@ -236,6 +238,11 @@ pub struct RootView {
     pub(crate) mgr_last_request: Option<Instant>,
     /// Optimistic toggle overrides (name -> desired), cleared on fresh data.
     pub(crate) mgr_pending: HashMap<String, bool>,
+    /// Models manager: extra_models.json editor open (QW4).
+    pub(crate) models_editor: bool,
+    /// Config manager: parsed puppy.cfg + the row in edit mode (QW5).
+    pub(crate) cfg_entries: Vec<(String, String)>,
+    pub(crate) cfg_edit_key: Option<String>,
     pub(crate) mcp_wizard: Option<crate::views::mcp_wizard::Wizard>,
     pub(crate) skills_wizard: Option<crate::views::skills_wizard::Wizard>,
     pub(crate) agent_wizard: Option<crate::views::agent_wizard::Wizard>,
@@ -408,6 +415,9 @@ impl RootView {
             mgr_seen: None,
             mgr_last_request: None,
             mgr_pending: HashMap::new(),
+            models_editor: false,
+            cfg_entries: Vec::new(),
+            cfg_edit_key: None,
             mcp_wizard: None,
             skills_wizard: None,
             agent_wizard: None,
@@ -1363,6 +1373,7 @@ impl RootView {
         };
         div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap_2()
             .child(
@@ -1474,6 +1485,26 @@ impl RootView {
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.dispatch(
                             DashAction::Mgr(managers::MgrAction::Open(managers::MgrKind::Agents)),
+                            cx,
+                        )
+                    })),
+            )
+            .child(
+                widgets::btn(t, "Models")
+                    .id("tb-models")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.dispatch(
+                            DashAction::Mgr(managers::MgrAction::Open(managers::MgrKind::Models)),
+                            cx,
+                        )
+                    })),
+            )
+            .child(
+                widgets::btn(t, "Config")
+                    .id("tb-config")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.dispatch(
+                            DashAction::Mgr(managers::MgrAction::Open(managers::MgrKind::Config)),
                             cx,
                         )
                     })),
@@ -1750,6 +1781,9 @@ impl Render for RootView {
                     skills_wizard: self.skills_wizard.as_ref(),
                     agent_wizard: self.agent_wizard.as_ref(),
                     agent_delete_confirm: self.agent_delete_confirm.as_deref(),
+                    models_editor: self.models_editor,
+                    cfg_entries: &self.cfg_entries,
+                    cfg_edit_key: self.cfg_edit_key.as_deref(),
                 })
             }))
             .children(self.remote.as_ref().map(|st| {
