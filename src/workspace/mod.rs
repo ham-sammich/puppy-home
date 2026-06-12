@@ -38,11 +38,12 @@ mod state;
 mod tree_ops;
 mod view;
 
+pub(crate) use ask::AskState;
+pub(crate) use state::{Entry, Pending};
 pub use state::{InstanceStatus, SPARK_SAMPLES, SparkRing};
 
-use ask::AskState;
 use diff::DiffRecord;
-use state::{EditorItem, Entry, FileBuffer, GitView, Pending};
+use state::{EditorItem, FileBuffer, GitView};
 
 /// Stable, never-reused identity for a workspace.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -387,6 +388,32 @@ impl Workspace {
     #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn spark_history(&self) -> &[f32] {
         self.sparks.samples()
+    }
+
+    /// The outstanding input/confirm/select request, if any (frontends
+    /// render it; answers go through [`Self::pending_choose`] /
+    /// [`Self::pending_answer_text`]).
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub(crate) fn pending_request(&self) -> Option<&Pending> {
+        self.pending.as_ref()
+    }
+
+    /// Answer a confirm/select request by picking option `i`.
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub(crate) fn pending_choose(&mut self, i: usize) {
+        if let Some(p) = self.pending.as_mut() {
+            p.selection = i;
+            self.answer_pending();
+        }
+    }
+
+    /// Answer an input request with typed text.
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub(crate) fn pending_answer_text(&mut self, text: &str) {
+        if let Some(p) = self.pending.as_mut() {
+            p.text = text.to_string();
+            self.answer_pending();
+        }
     }
 
     /// Session diff totals: (+lines, −lines) across recorded diff records
