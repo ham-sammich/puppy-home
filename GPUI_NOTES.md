@@ -149,6 +149,89 @@ waker → drain → `cx.notify()`.
 - Known third-party noise: `block v0.1.6` future-incompat report (pulled by
   the pre-existing `objc` macOS FFI, not by gpui; same on the base branch).
 
+## Task 2.2 — Dashboard architecture (the template for 2.3+)
+
+### Entity / view structure
+ONE gpui entity: `RootView`. It owns the `Supervisor` and every piece of
+dashboard UI state (view mode, toasts, the open inline input, the open model
+popover, the focus handle, pending navigation intent). Everything below it is
+**stateless render code**:
+
+```text
+RootView (Entity, owns Supervisor + UI state)
+ ├─ toolbar (brand · puppy chip · Open Folder · motion toggle · segmented)
+ ├─ dashboard::pack_header / attention_banner   (header.rs — plain fns)
+ ├─ dashboard::fleet ─┬─ card::AgentCard         (RenderOnce, snapshot-fed)
+ │                   ├─ model_pill (deferred popover)
+ │                   └─ table::FleetTable       (RenderOnce, List view)
+ └─ widgets::toast_layer (absolute, bottom-center)
+```
+
+### State flow: snapshots down, actions up
+`render` never hands live `&Workspace` references to components. It builds
+plain `CardSnapshot` structs (strings + numbers + a cloned 40-float spark
+ring) once per frame and moves them into `RenderOnce` components. Costly
+extras (the model catalog) are only snapshotted for the card whose popover
+is open. Benefits: components are `'static` (no borrow fights with gpui's
+closure-heavy API), trivially testable, and the live data has exactly one
+reader path.
+
+Interactions all flow through ONE funnel: handlers capture
+`Entity<RootView>` and call `root.update(cx, |r, cx| r.dispatch(DashAction::X, cx))`.
+`dispatch` is the only place that mutates workspaces (pause/resume/stop/
+steer/send/set-model via the shared `Workspace` card-action senders ported
+from redesign/egui), pushes toasts, persists prefs, and records nav intents.
+It is the moral equivalent of the egui branch's `ShellAction` queue — same
+vocabulary, same backend calls.
+
+### Popovers, toasts, inputs
+- **Popover** (model switch): state = `RootView.model_popover:
+  Option<WorkspaceId>`. Rendered inside the pill's `relative()` wrapper as an
+  `absolute()` panel wrapped in `deferred(…).with_priority(100)` so it paints
+  above sibling cards; `.occlude()` + `.on_mouse_down_out(…)` close it on
+  outside click.
+- **Toasts**: `Vec<Toast>` on the root, pruned by the drain loop (which runs
+  fast while toasts are alive — `busy || !toasts.is_empty()`), rendered as an
+  absolute bottom-center layer. Every dispatch arm pushes one.
+- **Inline inputs** (steer / new prompt): one `CardInput` at a time on the
+  root; a focusable div (`track_focus`) handles keys — printable chars via
+  `Keystroke::key_char`, backspace, cmd-V paste, Enter submits through
+  `dispatch(SubmitInput)`, Escape closes. Deliberately minimal: **the full
+  IME-aware `EntityInputHandler` input (gpui's `input.rs` example, ~700
+  lines) is the 2.3 composer's job.** Don't grow this one.
+
+### Animation & reduce-motion
+`with_animation(id, Animation::new(…).repeat().with_easing(ease_in_out), …)`
+drives: status-dot halo pulse (1.6s), live avatar ring glow (3.4s), card
+entrance fade (one-shot, keyed by workspace id so it plays once per card).
+EVERY decorative loop is gated on the shared `Session.reduce_motion` flag
+(same session.json field as redesign/egui; toggle in the toolbar persists
+read-modify-write so the egui branch's fields survive). Reduce-motion swaps
+pulses for static rings — state stays legible without motion.
+
+### Sparklines
+No chart primitive: `canvas(…)` + `gpui::Path`. The painter fills a soft
+area under the curve plus a 1.4px offset band for the line — two
+`paint_path` calls, no per-frame allocation beyond the cloned samples.
+Used at 104×18 (header Throughput, fed by `Supervisor::aggregate_sparks`)
+and 46×16 (card tok/s, fed by `Workspace::spark_history`).
+
+### Status vocabulary (parity with redesign/egui)
+Starting→"Waking up" · Running→"Fetching" · Thinking→"Sniffing" ·
+ToolCalling→"Digging" · Waiting→"Needs you" · Paused→"Napping" ·
+Idle→"Resting" · Dead→"Stuck". Sort rank: waiting → live → paused/stuck →
+resting. Spend prints "—" while the cost ledger is absent — never $0.00.
+
+### Known 2.2 gaps (deliberate)
+- `Open →` / `Changes` / `Answer →` record a `NavIntent` + toast (the chat
+  and diff views land in 2.3; the intent enum is already consumed there).
+- No context-progress bar (sidecar still lacks ctx%; same gap as egui).
+- Grid uses flex-wrap `minmax(420,1fr)`-style sizing; last-row cards may
+  stretch wider than a CSS grid would — acceptable, looks intentional.
+- Inline input has no cursor movement / selection / IME (see above).
+- Visual QA was log-based this session (no screen-recording permission for
+  `screencapture`); animations confirmed by code-path, not by eyeball.
+
 ## Status (Task 2.1)
 
 - [x] Branch `redesign/gpui` forked from `0f00eed`.

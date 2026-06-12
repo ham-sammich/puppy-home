@@ -10,14 +10,16 @@
 use gpui::Rgba;
 
 use crate::theme::{ThemePalette, parse_hex};
-use crate::workspace::InstanceStatus;
 
-// Several tokens (panel/strong/well/accent_2/accent_ink) have no consumer in
-// the Task 2.1 scaffold yet — they are the vocabulary for Task 2.2+.
-#[allow(dead_code)] // consumed by the upcoming GPUI dashboard tasks
+// A few tokens have no consumer yet — they are the vocabulary for Task 2.3+.
+#[allow(dead_code)] // consumed by the upcoming GPUI chat/den tasks
+#[derive(Clone, Copy)]
 pub struct Tokens {
     /// App backdrop behind all panels (GPUI_GUIDE §2; no palette equivalent).
     pub bg: Rgba,
+    /// Dimmest text (idle labels). Mock `--dim #696977`; no palette field —
+    /// documented constant like `bg`.
+    pub dim: Rgba,
     pub panel: Rgba,
     /// Card surface (`ThemePalette.window` doubles as the card fill).
     pub card: Rgba,
@@ -48,6 +50,7 @@ impl Tokens {
     pub fn from_palette(p: &ThemePalette) -> Self {
         Tokens {
             bg: gpui::rgb(0x121217),
+            dim: gpui::rgb(0x696977),
             panel: hex(&p.panel),
             card: hex(&p.window),
             line_soft: hex(&p.stroke),
@@ -63,18 +66,6 @@ impl Tokens {
             wait: hex(&p.status_wait),
             paused: hex(&p.status_paused),
             error: hex(&p.status_error),
-        }
-    }
-
-    /// The dot/label color for an instance status, in token terms.
-    pub fn status_color(&self, status: InstanceStatus) -> Rgba {
-        match status {
-            InstanceStatus::Starting | InstanceStatus::Idle => self.weak,
-            InstanceStatus::Running => self.run,
-            InstanceStatus::Thinking | InstanceStatus::ToolCalling => self.think,
-            InstanceStatus::WaitingForInput => self.wait,
-            InstanceStatus::Paused => self.paused,
-            InstanceStatus::Dead => self.error,
         }
     }
 }
