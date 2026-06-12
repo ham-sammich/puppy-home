@@ -308,9 +308,95 @@ fn status_line(args: &ComposerArgs) -> AnyElement {
                 .text_color(t.weak)
                 .child(ws.status_line.clone()),
         )
+        .children(ctx_chip(args))
         .child(div().flex_1())
         .children(controls)
+        .child(context_pill(args))
         .into_any_element()
+}
+
+/// Compact context-window usage near the composer (QW9). Unknown ctx
+/// renders nothing — a 0% chip would be a lie (same rule as the
+/// dashboard card's bar). Thresholds: calm under 60, warn under 85,
+/// alarm above.
+fn ctx_chip(args: &ComposerArgs) -> Option<AnyElement> {
+    let t = args.t;
+    let pct = args.ws.ctx_pct?;
+    let color = if pct < 60.0 {
+        t.weak
+    } else if pct < 85.0 {
+        t.wait
+    } else {
+        t.error
+    };
+    Some(
+        div()
+            .id(("ctx-chip", args.ws.id.0))
+            .font_family("JetBrains Mono")
+            .text_size(px(10.5))
+            .text_color(color)
+            .child(format!("ctx {pct:.0}%"))
+            .tooltip(widgets::text_tip(format!("context window {pct:.0}% full")))
+            .into_any_element(),
+    )
+}
+
+/// `/cmds` pill + popover: the context/history commands code_puppy
+/// actually ships (verified in source). Buttons send EXACTLY what
+/// typing would; parametrized /truncate and /pop N seed the input
+/// instead so the user picks N — no invented defaults.
+fn context_pill(args: &ComposerArgs) -> AnyElement {
+    let id = args.ws.id;
+    let send = |c: &str| DashAction::SendCommand(id, c.to_string());
+    let seed = |c: &str| DashAction::SeedCommand(id, c.to_string());
+    let open = matches!(args.pop, Some(ChatPop::Context(p)) if *p == id);
+    let items = open.then(|| {
+        vec![
+            (
+                "/pop".to_string(),
+                "remove the last message from history".to_string(),
+                false,
+                send("/pop"),
+            ),
+            (
+                "/pop N\u{2026}".to_string(),
+                "remove the last N messages (system prompt kept)".to_string(),
+                false,
+                seed("/pop "),
+            ),
+            (
+                "/compact".to_string(),
+                "summarize + compact chat history".to_string(),
+                false,
+                send("/compact"),
+            ),
+            (
+                "/truncate N\u{2026}".to_string(),
+                "keep only the N most recent messages".to_string(),
+                false,
+                seed("/truncate "),
+            ),
+            (
+                "/dump_context".to_string(),
+                "save message history to a file".to_string(),
+                false,
+                send("/dump_context"),
+            ),
+            (
+                "/clear".to_string(),
+                "forget all prior turns (rotates autosave)".to_string(),
+                false,
+                send("/clear"),
+            ),
+        ]
+    });
+    switch_pill(
+        args,
+        "ctx-pill",
+        "/cmds \u{25be}".to_string(),
+        ChatPop::Context(id),
+        items,
+    )
 }
 
 // ---------------------------------------------------------------------------

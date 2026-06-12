@@ -24,6 +24,8 @@ pub enum ChatPop {
     FilePicker(WorkspaceId, PathBuf),
     /// Tree-row context panel: (workspace, path, is_dir).
     TreeMenu(WorkspaceId, PathBuf, bool),
+    /// Composer context-commands menu (QW9).
+    Context(WorkspaceId),
 }
 
 /// Every dashboard interaction, funneled through [`RootView::dispatch`].
@@ -65,6 +67,10 @@ pub enum DashAction {
     SetAgent(WorkspaceId, String),
     SetComposerStyle(ComposerStyle),
     ToggleChatPop(ChatPop),
+    /// Send a slash command exactly as if typed in the composer (QW9).
+    SendCommand(WorkspaceId, String),
+    /// Seed the composer input (parametrized commands like /truncate N).
+    SeedCommand(WorkspaceId, String),
     CloseChatPop,
     ApplyCompletion(WorkspaceId, usize),
     /// Toggle a transcript entry's collapsible body (diff / thinking).
@@ -303,6 +309,22 @@ impl RootView {
                 self.chat_pop = None;
                 self.save_prefs();
                 self.toast(format!("Composer: {}", style.label()), accent);
+            }
+            DashAction::SendCommand(id, cmd) => {
+                // The exact typed path: send_prompt_text routes '/' through
+                // dispatch_command and no-ops mid-turn, same as typing.
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.send_prompt_text(&cmd);
+                }
+                self.chat_pop = None;
+            }
+            DashAction::SeedCommand(id, cmd) => {
+                self.ensure_chat_input(id, cx);
+                if let Some(input) = self.chat_inputs.get(&id) {
+                    input.update(cx, |i, cx| i.set_text(cmd, cx));
+                }
+                self.pending_focus = Some(id);
+                self.chat_pop = None;
             }
             DashAction::ToggleChatPop(pop) => {
                 self.chat_pop = if self.chat_pop.as_ref() == Some(&pop) {
