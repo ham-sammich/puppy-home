@@ -144,16 +144,44 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       state machines + `views/{agent,skills}_manager` helpers (egui
       behavior unchanged — fields/methods only widened so the GPUI
       dispatch drives the same state machines).
-- [ ] E4. Remote SSH connect flow: connect dialog, off-thread spawn,
-      `Supervisor::adopt`, remote-label UI states. Ref:
-      `views/remote_connect.rs`, `app/remote.rs`, `backend/remote.rs`,
-      `backend/ssh.rs`.
-- [ ] E5. Path browser (shared folder-picker widget for wizards/remote).
-      Ref: `views/path_browser.rs`.
-- [ ] E6. Theme switching (Dark/Light/custom from themes.json) + the theme
-      editor. Tokens currently hardcode `ThemePalette::dark()`. Ref:
-      `theme/mod.rs` (`visuals_for` equivalent -> `Tokens::from_palette`
-      already exists), `theme/editor.rs`.
+- [x] E4. Remote SSH connect: "Connect Remote…" in the toolbar (egui's
+      top-bar slot) -> centered dialog with ~/.ssh/config hosts list,
+      `[user@]host[:port]` target + remote-path fields, remote folder
+      browser, inline errors, "Connecting over SSH…" replaces the buttons
+      while the worker runs (egui behavior incl. blocked dismissal).
+      Worker = the same `CodePuppy::spawn_remote` -> `Supervisor::adopt`
+      flow; success jumps to the workspace chat (egui pushes a Chat tab).
+      Probe: PUPPY_GPUI_REMOTE=1 (live-validated). Real-host end-to-end
+      connect still pending a reachable SSH box (flagged for QA).
+- [x] E5. Path browser: the dir-pick listing panel inside the connect
+      dialog (folders-first alphabetical, ".. up", mono cwd header,
+      "(empty)", inline error, "Use this folder"). egui's second call
+      site (file-pick mode backing the local @file picker) is already
+      covered by the GPUI B2 picker — not duplicated. Loading shows a
+      static "loading…" label, not a spinner (motion discipline).
+- [x] E6. Theme switching + editor: toolbar `Theme: {label}` popover
+      (Dark / Light / customs from themes.json / Edit themes…), live
+      apply via `Tokens::from_palette` re-resolution + `set_tokens` push
+      into every live ChatInput (`Tokens::current()` seam covers inputs
+      created later); selection persists through the shared session.json
+      (read-modify-write). Editor overlay = egui's window at parity:
+      library load/New/Save/Delete, Start-from presets, dark-base toggle,
+      per-field rows w/ live swatch + hex input + per-keystroke preview
+      (edits implicitly select a Custom theme, egui's `changed`), terminal
+      palette (fg/bg/cursor + 16 ANSI) w/ live apply to the running
+      terminal + Save to terminal.json. `bg`/`dim` became palette fields
+      (`app_bg`/`dim_text`, serde-defaulted — legacy themes.json loads).
+      Deviations: saved-theme combo box -> flat chip row; egui's native
+      color-picker button has no GPUI counterpart at this pin (hex fields
+      are canonical in both editors). Probe: PUPPY_GPUI_THEME=light
+      (live-validated).
+      SYNC QUEUE (additions, phase-end batch): theme/mod.rs `app_bg` +
+      `dim_text` palette fields + `palette_for` (visuals_for now wraps
+      it); theme/editor.rs pub `upsert`/`unique_name`/`ANSI_NAMES` + the
+      two new color rows; theme `save_terminal` re-export;
+      views/remote_connect.rs `list_remote_blocking` extraction +
+      pub(crate) `join_remote`/`parent_remote`/`ListResult` (+ their new
+      unit tests).
 - [ ] E7. Den leftovers: legacy Activity status broadcast +
       `.puppy/pack.json` Tier-2 breadcrumb sync (+ periodic re-stamp,
       removal on leave). Ref: `app/pack_sync.rs` (`sync_pack_breadcrumb`,

@@ -294,6 +294,38 @@ are chrome around the ONE ChatInput entity; the gear popover persists
   is ignored.
 - No soft wrap in the input (above).
 
+## Phase E run 2 — remote connect + theming
+
+- **Tokens re-resolution (the theming spine).** `RootView.tokens =
+  Tokens::from_palette(&palette_for(theme, library))` on every pick/edit;
+  render-side everything follows via the snapshot pattern. Long-lived
+  `ChatInput` entities can't read the root, so two seams cover them:
+  `Tokens::set_current()` (a root-written static `ChatInput::new` reads —
+  the ONE sanctioned global, documented in tokens.rs) and an
+  `apply_palette` walk pushing `set_tokens` into every live input.
+  `bg`/`dim` stopped being constants: they're palette fields now
+  (`app_bg`/`dim_text`, serde-defaulted so legacy themes.json loads).
+- **Theme editor = one input pool + per-keystroke read-back.** 45 pooled
+  inputs (name + 25 palette + 3 term + 16 ANSI; `T_*` indices in
+  theme_ui.rs), seeded on open/load/start-from; every `Edited` event
+  re-reads ALL fields into the working buffers and live-applies (cheap:
+  hex strings). `palette_slots()` owns the (label, field) pairing once —
+  seeding, read-back and rendering all iterate it (a missed field is a
+  test failure, not a silent gap). Editing implicitly selects
+  `Theme::Custom(name)`, exactly egui's `changed` outcome.
+- **Terminal palette live-applies** to the running terminal:
+  `term_colors = TermColors::from_theme(buffer)` on each edit; Save
+  writes terminal.json (egui parity is the per-frame ctx-data insert).
+- **Remote connect rides the waker.** Listing + connection both run on
+  plain threads that `waker.wake()` when done; `remote_upkeep()` in the
+  drain loop polls the receivers (egui's per-frame `try_recv` +
+  `poll_remote`, verbatim — including keep-dialog-open-on-error and
+  ignore-dismiss-while-connecting). The blocking `ls` body is shared with
+  egui (`remote_connect::list_remote_blocking`). Adoption =
+  `Supervisor::adopt` + jump to the new workspace's chat.
+- **Probes**: `PUPPY_GPUI_THEME=dark|light|<name>` (picks + opens the
+  editor), `PUPPY_GPUI_REMOTE=1` (opens the dialog).
+
 ## Phase E run 1 — manager overlay patterns (MCP / Skills / Agents)
 
 - **One overlay, one field pool.** `manager_open: Option<MgrKind>` gates a
