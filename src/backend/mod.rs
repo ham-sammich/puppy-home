@@ -17,9 +17,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
-use eframe::egui;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::waker::UiWaker;
 
 mod protocol;
 pub mod remote;
@@ -702,11 +703,11 @@ impl CodePuppy {
     /// Launch the sidecar. Returns the handle and the event stream, or an error
     /// string if the process couldn't even be started.
     ///
-    /// `ctx` is used to wake the GUI (`request_repaint`) when events arrive.
+    /// `waker` is used to wake the GUI when events arrive.
     /// `cwd`, when set, becomes the sidecar's working directory — Code Puppy's
     /// `os.getcwd()` adopts it, scoping the whole process to that workspace.
     pub fn spawn(
-        ctx: egui::Context,
+        waker: Arc<dyn UiWaker>,
         cwd: Option<&std::path::Path>,
     ) -> Result<(Self, Receiver<UiEvent>), String> {
         let sidecar_path = write_sidecar().map_err(|e| format!("writing sidecar: {e}"))?;
@@ -732,9 +733,9 @@ impl CodePuppy {
         let (tx, rx) = mpsc::channel::<UiEvent>();
 
         // stdout -> protocol events (no RPC dispatch for a local sidecar)
-        spawn_stdout_reader(stdout, tx.clone(), ctx.clone(), None);
+        spawn_stdout_reader(stdout, tx.clone(), waker.clone(), None);
         // stderr -> log events
-        spawn_stderr_reader(stderr, tx.clone(), ctx.clone());
+        spawn_stderr_reader(stderr, tx.clone(), waker);
 
         Ok((
             CodePuppy {
@@ -751,7 +752,7 @@ impl CodePuppy {
     /// event stream are identical to [`spawn`](Self::spawn) -- the JSON protocol
     /// is transport-agnostic. `remote_cwd` is a path *on the remote*.
     pub fn spawn_remote(
-        ctx: egui::Context,
+        waker: Arc<dyn UiWaker>,
         target: &ssh::SshTarget,
         remote_cwd: Option<&str>,
     ) -> Result<RemoteHandle, String> {
@@ -801,7 +802,7 @@ impl CodePuppy {
 
         // Share the stdin so the remote fs/git can send RPC ops down the pipe.
         let stdin = Arc::new(Mutex::new(stdin));
-        let remote = remote::RemoteState::new(stdin.clone(), ctx.clone());
+        let remote = remote::RemoteState::new(stdin.clone(), waker.clone());
         let remote_fs: Arc<dyn crate::workspace::fs::WorkspaceFs> =
             Arc::new(remote::RemoteFs::new(remote.clone()));
         let remote_git: Arc<dyn crate::git::WorkspaceGit> = Arc::new(remote::RemoteGit::new(
@@ -813,8 +814,8 @@ impl CodePuppy {
         // The stdout reader routes `fs_result`/`git_result` lines to `remote`
         // (off the UI thread, so a blocking remote op can't deadlock); the rest
         // become UiEvents on `tx`.
-        spawn_stdout_reader(stdout, tx.clone(), ctx.clone(), Some(remote));
-        spawn_stderr_reader(stderr, tx.clone(), ctx.clone());
+        spawn_stdout_reader(stdout, tx.clone(), waker.clone(), Some(remote));
+        spawn_stderr_reader(stderr, tx.clone(), waker);
 
         Ok((
             CodePuppy {
@@ -1025,7 +1026,7 @@ impl Drop for CodePuppy {
 fn spawn_stdout_reader(
     stdout: std::process::ChildStdout,
     tx: Sender<UiEvent>,
-    ctx: egui::Context,
+    waker: Arc<dyn UiWaker>,
     rpc: Option<Arc<remote::RemoteState>>,
 ) {
     std::thread::Builder::new()
@@ -1047,7 +1048,7 @@ fn spawn_stdout_reader(
                                 Some("fs_result" | "git_result")
                             ) {
                                 rpc.handle_result(&val);
-                                ctx.request_repaint();
+                                waker.wake();
                                 continue;
                             }
                             match serde_json::from_value::<Wire>(val) {
@@ -1066,15 +1067,19 @@ fn spawn_stdout_reader(
                 if tx.send(event).is_err() {
                     break;
                 }
-                ctx.request_repaint();
+                waker.wake();
             }
             let _ = tx.send(UiEvent::Exited { code: None });
-            ctx.request_repaint();
+            waker.wake();
         })
         .expect("spawn stdout reader");
 }
 
-fn spawn_stderr_reader(stderr: std::process::ChildStderr, tx: Sender<UiEvent>, ctx: egui::Context) {
+fn spawn_stderr_reader(
+    stderr: std::process::ChildStderr,
+    tx: Sender<UiEvent>,
+    waker: Arc<dyn UiWaker>,
+) {
     std::thread::Builder::new()
         .name("cp-stderr".into())
         .spawn(move || {
@@ -1084,7 +1089,7 @@ fn spawn_stderr_reader(stderr: std::process::ChildStderr, tx: Sender<UiEvent>, c
                 if tx.send(UiEvent::Log(line)).is_err() {
                     break;
                 }
-                ctx.request_repaint();
+                waker.wake();
             }
         })
         .expect("spawn stderr reader");

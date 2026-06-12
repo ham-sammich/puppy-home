@@ -23,6 +23,7 @@ mod supervisor;
 mod terminal;
 mod theme;
 mod views;
+mod waker;
 mod workspace;
 
 use eframe::egui;

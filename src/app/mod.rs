@@ -103,7 +103,7 @@ impl PuppyApp {
             _ => ThemePalette::dark(),
         };
         apply_theme(&cc.egui_ctx, &theme, &themes);
-        let mut sup = Supervisor::new(cc.egui_ctx.clone());
+        let mut sup = Supervisor::new(crate::waker::egui_waker(&cc.egui_ctx));
         let mut status = "Open a folder to start a Code Puppy workspace.".to_string();
         let mut opened: Vec<PathBuf> = Vec::new();
         let mut opened_ids: Vec<WorkspaceId> = Vec::new();

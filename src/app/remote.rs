@@ -54,12 +54,12 @@ impl PuppyApp {
         }
         let label = target.destination();
         let (tx, rx) = std::sync::mpsc::channel();
-        let ctx2 = ctx.clone();
+        let waker = crate::waker::egui_waker(ctx);
         let path = remote_path.clone();
         std::thread::spawn(move || {
-            let result = CodePuppy::spawn_remote(ctx2.clone(), &target, Some(&path));
+            let result = CodePuppy::spawn_remote(waker.clone(), &target, Some(&path));
             let _ = tx.send(result);
-            ctx2.request_repaint();
+            waker.wake();
         });
         self.remote_pending = Some(RemotePending {
             rx,

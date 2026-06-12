@@ -7,12 +7,13 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
-use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, channel};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use eframe::egui;
 use puppy_relay::protocol::{ClientMsg, PROTO_VERSION, ServerMsg};
+
+use crate::waker::UiWaker;
 
 /// What the reader thread delivers to the UI.
 pub enum PackEvent {
@@ -29,13 +30,13 @@ pub struct PackClient {
 impl PackClient {
     /// Connect, send the join, and start the reader thread. `addr` may omit the
     /// port (defaults to the relay's 9220). `puppy` is this member's puppy name,
-    /// shown to the pack (may be empty).
+    /// shown to the pack (may be empty). `waker` nudges the UI per event.
     pub fn connect(
         addr: &str,
         room: &str,
         user: &str,
         puppy: &str,
-        ctx: egui::Context,
+        waker: Arc<dyn UiWaker>,
     ) -> Result<(PackClient, Receiver<PackEvent>), String> {
         let addr = if addr.contains(':') {
             addr.to_string()
@@ -78,7 +79,7 @@ impl PackClient {
                     if let Ok(msg) = serde_json::from_str::<ServerMsg>(&line)
                         && tx.send(PackEvent::Msg(msg)).is_ok()
                     {
-                        ctx.request_repaint();
+                        waker.wake();
                         continue;
                     }
                     // Unparseable line or UI gone: either way, stop cleanly.
@@ -87,7 +88,7 @@ impl PackClient {
                     }
                 }
                 let _ = tx.send(PackEvent::Disconnected);
-                ctx.request_repaint();
+                waker.wake();
             })
             .map_err(|e| format!("spawn reader: {e}"))?;
 
@@ -138,13 +139,12 @@ mod tests {
             let _ = puppy_relay::server::run(listener);
         });
 
-        let ctx = egui::Context::default();
         let (client, rx) = PackClient::connect(
             &format!("127.0.0.1:{port}"),
             "test-room",
             "tester",
             "Rex",
-            ctx,
+            Arc::new(crate::waker::NoopWaker),
         )
         .expect("connect+join");
 

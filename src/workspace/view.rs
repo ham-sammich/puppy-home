@@ -606,7 +606,7 @@ impl Workspace {
 
     /// Lazily spawn (or respawn) the workspace shell.
     pub(crate) fn spawn_terminal(&mut self, ctx: egui::Context) {
-        match crate::terminal::Terminal::spawn(&self.root, ctx) {
+        match crate::terminal::Terminal::spawn(&self.root, crate::waker::egui_waker(&ctx)) {
             Ok(t) => self.terminal = Some(t),
             Err(e) => self.status_line = format!("Couldn't start terminal: {e}"),
         }

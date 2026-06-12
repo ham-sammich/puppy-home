@@ -5,31 +5,31 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
-use eframe::egui;
-
 use crate::backend::{CodePuppy, UiEvent};
 use crate::git::{LocalGit, WorkspaceGit};
+use crate::waker::UiWaker;
 use crate::workspace::fs::{CachedFs, LocalFs, WorkspaceFs};
 use crate::workspace::{InstanceStatus, Workspace, WorkspaceId};
 
 pub struct Supervisor {
     workspaces: BTreeMap<WorkspaceId, Workspace>,
     next_id: u64,
-    ctx: egui::Context,
+    /// Wakes the frontend when a backend thread has fresh events.
+    waker: Arc<dyn UiWaker>,
 }
 
 impl Supervisor {
-    pub fn new(ctx: egui::Context) -> Self {
+    pub fn new(waker: Arc<dyn UiWaker>) -> Self {
         Supervisor {
             workspaces: BTreeMap::new(),
             next_id: 1,
-            ctx,
+            waker,
         }
     }
 
     /// Open a folder as a new workspace: spawn a Code Puppy sidecar scoped to it.
     pub fn open(&mut self, root: PathBuf) -> Result<WorkspaceId, String> {
-        let (backend, rx) = CodePuppy::spawn(self.ctx.clone(), Some(&root))?;
+        let (backend, rx) = CodePuppy::spawn(self.waker.clone(), Some(&root))?;
         let git: Arc<dyn WorkspaceGit> = Arc::new(LocalGit::new(root.clone()));
         // TTL-cached so the per-frame tree doesn't enumerate NTFS every frame.
         let fs: Arc<dyn WorkspaceFs> = Arc::new(CachedFs::new(LocalFs));

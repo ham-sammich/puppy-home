@@ -14,6 +14,8 @@ use std::thread;
 use eframe::egui;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 
+use crate::waker::UiWaker;
+
 const SCROLLBACK: usize = 5000;
 const FONT_SIZE: f32 = 13.0;
 
@@ -60,8 +62,8 @@ fn shell() -> (String, Vec<String>) {
 }
 
 impl Terminal {
-    /// Spawn a shell on a fresh PTY rooted at `cwd`. `ctx` wakes the UI on output.
-    pub fn spawn(cwd: &Path, ctx: egui::Context) -> Result<Self, String> {
+    /// Spawn a shell on a fresh PTY rooted at `cwd`. `waker` wakes the UI on output.
+    pub fn spawn(cwd: &Path, waker: Arc<dyn UiWaker>) -> Result<Self, String> {
         let (rows, cols) = (24u16, 80u16);
         let pty = native_pty_system();
         let pair = pty
@@ -124,7 +126,7 @@ impl Terminal {
                                 let _ = w.write_all(&reply);
                                 let _ = w.flush();
                             }
-                            ctx.request_repaint();
+                            waker.wake();
                         }
                     }
                 }

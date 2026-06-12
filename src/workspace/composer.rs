@@ -79,7 +79,7 @@ impl Workspace {
                     .on_hover_text("Relaunch the sidecar and restore this conversation")
                     .clicked()
                 {
-                    self.restart(ui.ctx());
+                    self.restart(crate::waker::egui_waker(ui.ctx()));
                 }
             });
             ui.add_space(4.0);

@@ -386,8 +386,8 @@ impl Workspace {
     /// Relaunch a crashed/exited sidecar for this workspace and re-attach the
     /// conversation. The fresh sidecar's `Ready` re-applies agent/model/session
     /// through the existing restore path, so the chat picks up where it died.
-    pub fn restart(&mut self, ctx: &eframe::egui::Context) {
-        match CodePuppy::spawn(ctx.clone(), Some(&self.root)) {
+    pub fn restart(&mut self, waker: std::sync::Arc<dyn crate::waker::UiWaker>) {
+        match CodePuppy::spawn(waker, Some(&self.root)) {
             Ok((backend, rx)) => {
                 self.rx = rx;
                 self.backend = Some(backend);

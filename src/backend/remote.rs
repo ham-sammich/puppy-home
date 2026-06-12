@@ -24,9 +24,9 @@ use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use eframe::egui;
 use serde_json::{Map, Value, json};
 
+use crate::waker::UiWaker;
 use crate::workspace::fs::{DirEntry, WorkspaceFs};
 
 /// How long a blocking remote op waits before giving up.
@@ -61,7 +61,7 @@ enum Pending {
 /// reader thread.
 pub struct RemoteState {
     stdin: Arc<Mutex<ChildStdin>>,
-    ctx: egui::Context,
+    waker: Arc<dyn UiWaker>,
     next_id: AtomicU64,
     dirs: Mutex<HashMap<PathBuf, DirState>>,
     stats: Mutex<HashMap<PathBuf, Option<StatInfo>>>,
@@ -69,10 +69,10 @@ pub struct RemoteState {
 }
 
 impl RemoteState {
-    pub fn new(stdin: Arc<Mutex<ChildStdin>>, ctx: egui::Context) -> Arc<Self> {
+    pub fn new(stdin: Arc<Mutex<ChildStdin>>, waker: Arc<dyn UiWaker>) -> Arc<Self> {
         Arc::new(RemoteState {
             stdin,
-            ctx,
+            waker,
             next_id: AtomicU64::new(1),
             dirs: Mutex::new(HashMap::new()),
             stats: Mutex::new(HashMap::new()),
@@ -110,7 +110,7 @@ impl RemoteState {
                     DirState::Failed
                 };
                 self.dirs.lock().unwrap().insert(path, state);
-                self.ctx.request_repaint();
+                self.waker.wake();
             }
             Pending::Stat(path) => {
                 let info = StatInfo {
@@ -118,7 +118,7 @@ impl RemoteState {
                     is_dir: ok && val.get("is_dir").and_then(Value::as_bool).unwrap_or(false),
                 };
                 self.stats.lock().unwrap().insert(path, Some(info));
-                self.ctx.request_repaint();
+                self.waker.wake();
             }
             Pending::Reply(tx) => {
                 let _ = tx.send(val.clone());
@@ -235,7 +235,7 @@ impl RemoteState {
             self.dirs.lock().unwrap().remove(dir);
             self.stats.lock().unwrap().remove(dir);
         }
-        self.ctx.request_repaint();
+        self.waker.wake();
     }
 }
 
