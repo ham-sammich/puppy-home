@@ -53,8 +53,8 @@ pub struct PuppyApp {
     /// Disable decorative animation app-wide (persisted; widgets read it via
     /// ctx data each frame).
     reduce_motion: bool,
-    /// State for the Puppy Pack tab (one instance; holds the live relay link).
-    pack: crate::views::pack_panel::PackView,
+    /// State for the Den tab (one instance; holds the live relay link).
+    pack: crate::views::den::DenView,
     /// Last activity summary broadcast to the pack (skip resends of the same).
     pack_activity_last: String,
     /// Signature of the last den roster broadcast (skip no-op re-sends).
@@ -205,7 +205,7 @@ impl PuppyApp {
             browser: BrowserManager::discover(),
             perf: crate::perf::PerfStats::default(),
             mcp: crate::views::mcp_manager::McpManagerView::default(),
-            pack: crate::views::pack_panel::PackView::default(),
+            pack: crate::views::den::DenView::default(),
             pack_activity_last: String::new(),
             den_roster_last: String::new(),
             den_roster_at: std::time::Instant::now(),
@@ -453,8 +453,10 @@ impl eframe::App for PuppyApp {
         self.poll_folder_pick();
         self.poll_remote();
         // Keep the den mirror fresh even while its tab is closed (the panel
-        // also polls on render; draining twice is harmless).
+        // also polls on render; draining twice is harmless), and keep our
+        // presence honest (focus + input recency) regardless of visible tab.
         self.pack.poll();
+        self.pack.tick_presence(ui.ctx());
         self.broadcast_pack_activity();
         self.broadcast_den_roster();
         self.sync_pack_breadcrumb();

@@ -69,7 +69,7 @@ pub struct Shell<'a> {
     pub mcp: &'a mut views::mcp_manager::McpManagerView,
     pub skills: &'a mut views::skills_manager::SkillsManagerView,
     pub agents: &'a mut views::agent_manager::AgentManagerView,
-    pub pack: &'a mut views::pack_panel::PackView,
+    pub pack: &'a mut views::den::DenView,
     /// Dashboard view state (Grid/List/Focus, inline inputs, toasts).
     pub dashboard: &'a mut views::dashboard::DashboardView,
     /// Resolved brand/status colors for the active theme.
@@ -123,7 +123,7 @@ impl TabViewer for Shell<'_> {
             Tab::SkillsManager => views::skills_manager::render(ui, self.sup, self.skills),
             Tab::AgentManager => views::agent_manager::render(ui, self.sup, self.agents),
             Tab::Pack => {
-                // Attach the local puppy's name to our pack presence (prefer a
+                // Attach the local puppy's name to our den presence (prefer a
                 // workspace that has learned its real name over the default).
                 let puppy = self
                     .sup
@@ -131,7 +131,7 @@ impl TabViewer for Shell<'_> {
                     .map(|w| w.puppy_name.clone())
                     .find(|p| !p.is_empty() && p != "Puppy")
                     .unwrap_or_default();
-                views::pack_panel::render(ui, self.pack, &puppy)
+                views::den::render(ui, self.pack, self.sup, self.accents, self.actions, &puppy)
             }
         }
     }

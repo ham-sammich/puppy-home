@@ -201,13 +201,11 @@ impl PackClient {
     }
 
     /// Announce going active/idle (the roster presence dot).
-    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn send_presence(&self, presence: Presence) {
         self.send(&ClientMsg::Presence { presence });
     }
 
     /// A puppy speaking into the feed (`to_puppy` empty = the whole room).
-    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn puppy_msg(&self, puppy: &str, to_puppy: &str, review: bool, text: &str) {
         self.send(&ClientMsg::PuppyMsg {
             puppy: puppy.to_string(),
@@ -218,7 +216,6 @@ impl PackClient {
     }
 
     /// Create a kanban card (the relay assigns the id).
-    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn task_create(&self, title: &str, column: TaskColumn, owner: &str, plan: bool) {
         self.send(&ClientMsg::TaskCreate {
             title: title.to_string(),
@@ -229,13 +226,11 @@ impl PackClient {
     }
 
     /// Move a kanban card to a column.
-    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn task_move(&self, id: u64, column: TaskColumn) {
         self.send(&ClientMsg::TaskMove { id, column });
     }
 
     /// Re-assign a kanban card (empty owner = unassign).
-    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn task_assign(&self, id: u64, owner: &str) {
         self.send(&ClientMsg::TaskAssign {
             id,
@@ -244,7 +239,6 @@ impl PackClient {
     }
 
     /// Rename a kanban card.
-    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn task_retitle(&self, id: u64, title: &str) {
         self.send(&ClientMsg::TaskRetitle {
             id,
@@ -253,13 +247,11 @@ impl PackClient {
     }
 
     /// Delete a kanban card.
-    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn task_delete(&self, id: u64) {
         self.send(&ClientMsg::TaskDelete { id });
     }
 
     /// Share (or update) a puppy's plans.md with the den.
-    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn plan_share(&self, puppy: &str, markdown: &str) {
         self.send(&ClientMsg::PlanShare {
             puppy: puppy.to_string(),
@@ -268,7 +260,6 @@ impl PackClient {
     }
 
     /// Withdraw a previously shared plan.
-    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn plan_unshare(&self, puppy: &str) {
         self.send(&ClientMsg::PlanUnshare {
             puppy: puppy.to_string(),
