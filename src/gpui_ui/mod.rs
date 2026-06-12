@@ -11,6 +11,7 @@
 //! - **The drain loop** (Task 2.1) stays the only repaint driver: backend
 //!   wakes or the adaptive timer → `Supervisor::drain()` → `cx.notify()`.
 
+pub mod about;
 pub mod actions;
 pub mod assets;
 pub mod browser_ui;
@@ -131,6 +132,8 @@ pub struct RootView {
     dash_mode: DashboardViewMode,
     reduce_motion: bool,
     toasts: Vec<Toast>,
+    /// About / version panel state (QW1).
+    pub(crate) about: about::AboutState,
     card_input: Option<CardInput>,
     model_popover: Option<WorkspaceId>,
     input_focus: FocusHandle,
@@ -337,6 +340,7 @@ impl RootView {
             dash_mode: saved.dashboard_view,
             reduce_motion: saved.reduce_motion,
             toasts: Vec::new(),
+            about: about::AboutState::default(),
             card_input: None,
             model_popover: None,
             input_focus: cx.focus_handle(),
@@ -925,6 +929,7 @@ impl RootView {
             loop {
                 let Ok(busy) = this.update(cx, |root, cx| {
                     root.supervisor.drain();
+                    root.about.drain();
                     root.save_session_if_changed();
                     root.sync_active_palette(cx);
                     root.chat_upkeep(cx);
@@ -1314,6 +1319,17 @@ impl RootView {
         line
     }
 
+    /// The installed code_puppy version, from the first sidecar that
+    /// announced one (they all resolve the same uv cache locally).
+    pub(crate) fn cp_version_label(&self) -> String {
+        self.supervisor
+            .iter()
+            .map(|w| w.cp_version.as_str())
+            .find(|v| !v.is_empty() && *v != "?")
+            .unwrap_or("")
+            .to_string()
+    }
+
     /// Native folder picker → spawn a sidecar for the chosen root.
     fn open_folder(&mut self, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
@@ -1416,6 +1432,22 @@ impl RootView {
                         cx.listener(|this, _, _, cx| this.dispatch(DashAction::PerfToggle, cx)),
                     ),
             )
+            .child({
+                let ver = self.cp_version_label();
+                widgets::btn(
+                    t,
+                    &if ver.is_empty() {
+                        "v?".to_string()
+                    } else {
+                        format!("v{ver}")
+                    },
+                )
+                .id("tb-about")
+                .tooltip(widgets::text_tip("Code Puppy version + updates".into()))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.dispatch(DashAction::About(about::AboutAction::Toggle), cx)
+                }))
+            })
             .child(
                 widgets::btn(t, "MCP")
                     .id("tb-mcp")
@@ -1754,6 +1786,10 @@ impl Render for RootView {
                         .collect::<Vec<_>>(),
                     &self.theme,
                 )
+            }))
+            .children(self.about.open.then(|| {
+                let ver = self.cp_version_label();
+                about::panel(&t, &self.about, ver, &entity)
             }))
             .children(
                 self.perf

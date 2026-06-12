@@ -45,7 +45,11 @@ pub enum DashAction {
     /// Spawn a new instance at the user's home directory — the dashboard
     /// whistle and the toolbar "New Chat" (`to_chat` jumps straight into
     /// the new workspace's chat).
-    OpenHome { to_chat: bool },
+    OpenHome {
+        to_chat: bool,
+    },
+    /// About / version panel (toolbar chip).
+    About(crate::gpui_ui::about::AboutAction),
     /// Open a workspace's chat focused on changes (diff chips live in the
     /// transcript; a dedicated diff view is still egui-branch-only).
     Changes(WorkspaceId),
@@ -909,6 +913,14 @@ impl RootView {
             DashAction::SetView(mode) => {
                 self.dash_mode = mode;
                 self.save_prefs();
+            }
+            DashAction::About(a) => {
+                use crate::gpui_ui::about::AboutAction;
+                match a {
+                    AboutAction::Toggle => self.about.open = !self.about.open,
+                    AboutAction::Check => self.about.check(self.waker.clone()),
+                    AboutAction::Update => self.about.update(self.waker.clone()),
+                }
             }
             DashAction::ToggleMotion => {
                 self.reduce_motion = !self.reduce_motion;

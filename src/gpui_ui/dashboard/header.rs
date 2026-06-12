@@ -85,10 +85,7 @@ pub fn pack_header(
                                 ))
                                 .on_click(move |_, _, cx| {
                                     root.update(cx, |r, cx| {
-                                        r.dispatch(
-                                            DashAction::OpenHome { to_chat: false },
-                                            cx,
-                                        )
+                                        r.dispatch(DashAction::OpenHome { to_chat: false }, cx)
                                     });
                                 })
                         }),
