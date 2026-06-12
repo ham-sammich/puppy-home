@@ -84,6 +84,10 @@ struct BrowserTab {
     /// Whether a process was ever launched (distinguishes "not started yet"
     /// from "started and then exited").
     launched: bool,
+    /// Whether the floating-window `float` command was sent to this host
+    /// (GPUI shell path; reset on every (re)launch). egui embeds instead
+    /// and never floats.
+    floated: bool,
     /// Last physical rect (x, y, w, h) the child window was placed at — so we
     /// only call `SetWindowPos` when it actually changes (avoids choppiness).
     placed_rect: Option<(i32, i32, i32, i32)>,
@@ -407,6 +411,26 @@ impl BrowserManager {
 
     #[allow(dead_code)] // consumed by the redesign UI branches
     /// The "Launch browser" button: current URL or the example fallback.
+    /// Floating-window pump for hosts that can't embed (the GPUI shell
+    /// drain loop calls this; egui embeds per-frame instead and must NOT).
+    /// Embeddable platforms start the plugin window HIDDEN, so until either
+    /// `embed` or `float` arrives there is no window at all — this sends
+    /// `float` exactly once per launched process, as soon as it reports
+    /// ready (E8 macOS fix: "launch opens nothing").
+    pub fn float_pump(&mut self) {
+        for tab in self.tabs.values_mut() {
+            if tab.floated {
+                continue;
+            }
+            if let Some(h) = tab.host.as_mut()
+                && h.is_ready()
+            {
+                h.float();
+                tab.floated = true;
+            }
+        }
+    }
+
     pub fn launch_tab(&mut self, id: BrowserId) {
         let exe = self.registry.get(BROWSER_PLUGIN_ID).map(|p| p.exe_path());
         let Some(tab) = self.tabs.get_mut(&id) else {
@@ -742,6 +766,7 @@ fn launch(tab: &mut BrowserTab, exe: Option<&std::path::Path>, url: &str) {
         Ok(h) => {
             tab.host = Some(h);
             tab.launched = true;
+            tab.floated = false; // fresh process: not yet shown anywhere
             tab.cdp_port = cdp_port;
         }
         Err(e) => tab.launch_error = Some(format!("Couldn't launch browser: {e}")),

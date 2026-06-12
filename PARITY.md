@@ -369,6 +369,29 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       E2E vs a real remote needs human QA (standing E4 limitation).
       `5df2868`
 
+- [x] E8 REDUX browser "does nothing" on macOS in the GPUI shell (user:
+      "opens one but there's no browser"). ROOT CAUSE: on embeddable
+      platforms (macOS + Windows) the plugin window starts BORDERLESS +
+      HIDDEN (`with_visible(false)`) awaiting the host's `embed` — the
+      egui shell pumps embed every frame, the GPUI shell sends NOTHING,
+      so the process ran with an invisible window while the UI claimed
+      "running in a separate window". Verified live: CGWindowList showed
+      the window onscreen:no pre-fix; an `embed` over stdin flipped it
+      onscreen:1 (mechanism proof). FIX: new plugin `float` command
+      (decorations on + visible = a real floating window); host
+      BrowserHost::float(); BrowserManager::float_pump() sends it once
+      per launched process when ready — called from the GPUI drain loop
+      only (egui keeps embedding, never floats; protocol is
+      backward/forward compatible — old plugins log-and-ignore float,
+      new plugins under egui never receive it). NOTE: requires a plugin
+      REBUILD + reinstall (Install from local build) — stale installed
+      plugins predate the float command. E2E ON THIS MACHINE: app launch
+      -> probe (PUPPY_GPUI_BROWSER=launch, probe extended) -> decorated
+      "Puppy Browser" window onscreen rendering example.com
+      (screenshot-verified), navigate over stdin OK, plugin exits with
+      the app. Windows GPUI shell gets the same fix by construction
+      (also starts hidden there) — untestable here, flagged. `<hash5>`
+
 - [x] B13.2 REDUX input fields rendered BLACK text in dark mode (user
       report; the earlier sweep fixed surface styling + syntect code
       mode but missed the plain-text machinery). ROOT CAUSE: ChatInput

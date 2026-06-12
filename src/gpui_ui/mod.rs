@@ -708,10 +708,16 @@ impl RootView {
             self.dispatch(DashAction::Remote(remote::RemoteAction::Open), cx);
             eprintln!("[probe] opened the remote-connect dialog");
         }
-        if std::env::var_os("PUPPY_GPUI_BROWSER").is_some() {
+        if let Some(v) = std::env::var_os("PUPPY_GPUI_BROWSER") {
             unsafe { std::env::remove_var("PUPPY_GPUI_BROWSER") };
             self.dispatch(DashAction::Browser(browser_ui::BrowserAction::Open), cx);
             eprintln!("[probe] opened the browser surface");
+            // `PUPPY_GPUI_BROWSER=launch` also launches the plugin (E2E:
+            // the float_pump must then put a real window on screen).
+            if v == "launch" && self.browser.is_available() {
+                self.dispatch(DashAction::Browser(browser_ui::BrowserAction::Launch), cx);
+                eprintln!("[probe] launched the browser plugin");
+            }
         }
         if std::env::var_os("PUPPY_GPUI_PERF").is_some() {
             unsafe { std::env::remove_var("PUPPY_GPUI_PERF") };
@@ -891,6 +897,11 @@ impl RootView {
                     root.maybe_probe_manager(cx);
                     root.maybe_probe_theme_remote(cx);
                     root.mgr_upkeep();
+                    // The GPUI shell can't embed the browser plugin window;
+                    // float it as a real decorated window once it's ready
+                    // (the plugin starts HIDDEN on embeddable platforms —
+                    // without this nothing ever appears; E8 macOS bug).
+                    root.browser.float_pump();
                     root.remote_upkeep(cx);
                     root.pack_sync_upkeep();
                     root.ensure_answer_input_if_needed(cx);

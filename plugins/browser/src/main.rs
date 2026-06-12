@@ -46,6 +46,10 @@ enum WireCmd {
     },
     /// macOS embedding: order this window out (tab inactive / hidden).
     Hide,
+    /// Floating-window mode: show as a normal decorated window (hosts that
+    /// can't embed — the GPUI shell). Embeddable platforms start hidden, so
+    /// without this (or `embed`) the window would never appear at all.
+    Float,
     Close,
 }
 
@@ -147,6 +151,10 @@ fn main() -> wry::Result<()> {
                     mac_order_out(&window);
                     #[cfg(not(target_os = "macos"))]
                     window.set_visible(false);
+                }
+                WireCmd::Float => {
+                    window.set_decorations(true);
+                    window.set_visible(true);
                 }
                 WireCmd::Close => *control_flow = ControlFlow::Exit,
             },

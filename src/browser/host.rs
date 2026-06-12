@@ -93,6 +93,14 @@ impl BrowserHost {
         self.send(json!({ "cmd": "hide" }).to_string());
     }
 
+    /// Floating-window mode: ask the plugin to show itself as a normal
+    /// decorated window. Hosts that can't embed (the GPUI shell) MUST send
+    /// this once the plugin is ready — embeddable platforms start hidden,
+    /// so otherwise no window ever appears (the E8 macOS bug).
+    pub fn float(&mut self) {
+        self.send(json!({ "cmd": "float" }).to_string());
+    }
+
     /// Write one JSON command line to the plugin.
     fn send(&mut self, line: String) {
         if let Some(w) = self.stdin.as_mut() {

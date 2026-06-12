@@ -8,8 +8,10 @@
 //! EMBEDDING IS N/A IN THE GPUI SHELL at this pin, on every OS: the
 //! Windows path reparents into the egui HWND, and the macOS overlay glues
 //! to the eframe viewport's inner_rect — neither attaches to the GPUI
-//! window yet. The webview runs in its own OS window (the pre-embed mode
-//! both paths start from); the viewport region says so honestly.
+//! window yet. Instead the drain loop's `float_pump` sends the plugin the
+//! `float` command once it's ready, turning its (initially HIDDEN —
+//! that was the E8 macOS bug) borderless window into a real decorated
+//! floating window; the viewport region says so honestly.
 
 use gpui::{
     AnyElement, Entity, FontWeight, IntoElement, ParentElement as _, Styled as _, div, prelude::*,
@@ -196,7 +198,8 @@ impl RootView {
         let viewport: AnyElement = if running {
             center_note(
                 &t,
-                "Browser running in a separate window.\n\
+                "Browser running in a floating window (look for \"Puppy \
+                 Browser\").\n\
                  (In-tab embedding isn't available in the GPUI shell yet.)",
             )
         } else {
