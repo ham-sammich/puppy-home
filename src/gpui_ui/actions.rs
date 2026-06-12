@@ -42,6 +42,10 @@ pub enum DashAction {
     ClosePopover,
     /// Open a workspace's chat (cards, tabs, attention banner).
     Open(WorkspaceId),
+    /// Spawn a new instance at the user's home directory — the dashboard
+    /// whistle and the toolbar "New Chat" (`to_chat` jumps straight into
+    /// the new workspace's chat).
+    OpenHome { to_chat: bool },
     /// Open a workspace's chat focused on changes (diff chips live in the
     /// transcript; a dedicated diff view is still egui-branch-only).
     Changes(WorkspaceId),
@@ -239,6 +243,25 @@ impl RootView {
                 self.screen = Screen::Chat(id);
                 self.pending_focus = Some(id);
                 self.chat_pop = None;
+            }
+            DashAction::OpenHome { to_chat } => {
+                let home = std::env::var_os("HOME")
+                    .or_else(|| std::env::var_os("USERPROFILE"))
+                    .map(PathBuf::from);
+                match home {
+                    Some(home) => match self.supervisor.open(home) {
+                        Ok(id) => {
+                            self.last_error = None;
+                            if to_chat {
+                                self.ensure_chat_input(id, cx);
+                                self.screen = Screen::Chat(id);
+                                self.pending_focus = Some(id);
+                            }
+                        }
+                        Err(e) => self.last_error = Some(e),
+                    },
+                    None => self.last_error = Some("No home directory found".into()),
+                }
             }
             DashAction::Changes(id) => {
                 self.ensure_chat_input(id, cx);

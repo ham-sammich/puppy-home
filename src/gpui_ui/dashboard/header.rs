@@ -21,6 +21,7 @@ pub fn pack_header(
     puppy: &str,
     stats: &FleetStats,
     agg_sparks: Vec<f32>,
+    root: &Entity<RootView>,
 ) -> impl IntoElement {
     let lede = div()
         .flex()
@@ -63,10 +64,34 @@ pub fn pack_header(
                 .min_w(px(260.))
                 .child(
                     div()
-                        .text_size(px(22.))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(t.text)
-                        .child("Running agents"),
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_size(px(22.))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(t.text)
+                                .child("Running agents"),
+                        )
+                        .child({
+                            // The whistle: summon a fresh puppy at $HOME —
+                            // Open Folder minus the dialog.
+                            let root = root.clone();
+                            widgets::btn(t, "\u{1f4e3} Whistle")
+                                .id("dash-whistle")
+                                .tooltip(widgets::text_tip(
+                                    "Spawn a Code Puppy at your home directory".into(),
+                                ))
+                                .on_click(move |_, _, cx| {
+                                    root.update(cx, |r, cx| {
+                                        r.dispatch(
+                                            DashAction::OpenHome { to_chat: false },
+                                            cx,
+                                        )
+                                    });
+                                })
+                        }),
                 )
                 .child(lede),
         )

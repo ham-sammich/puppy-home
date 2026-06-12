@@ -1369,6 +1369,16 @@ impl RootView {
                     .child(format!("\u{1f436} {}", self.puppy_name())),
             )
             .child(
+                widgets::btn(t, "\u{2795} New Chat")
+                    .id("tb-new-chat")
+                    .tooltip(widgets::text_tip(
+                        "Spawn a Code Puppy at your home directory".into(),
+                    ))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.dispatch(DashAction::OpenHome { to_chat: true }, cx)
+                    })),
+            )
+            .child(
                 widgets::btn(t, "\u{1f4c1} Open Folder\u{2026}")
                     .id("open-folder")
                     .on_click(cx.listener(|this, _, _, cx| this.open_folder(cx))),
@@ -1798,7 +1808,7 @@ impl RootView {
                             .flex()
                             .flex_col()
                             .gap_3()
-                            .child(dashboard::pack_header(&t, &puppy, &stats, agg))
+                            .child(dashboard::pack_header(&t, &puppy, &stats, agg, &entity))
                             .child(browser_ui::plugins_section(
                                 &t,
                                 &entity,
