@@ -39,9 +39,13 @@ mod tree_ops;
 mod view;
 
 pub(crate) use ask::AskState;
+#[allow(unused_imports)] // consumed by the redesign UI branches
 pub(crate) use editor::language_for;
+#[allow(unused_imports)] // consumed by the redesign UI branches
 pub(crate) use git_graph::{EdgeHalf, GraphRow, compute_graph};
+#[allow(unused_imports)] // consumed by the redesign UI branches
 pub(crate) use render::short_session;
+#[allow(unused_imports)] // consumed by the redesign UI branches
 pub(crate) use state::{EditorItem, Entry, GitView, Pending, PendingKind};
 pub use state::{InstanceStatus, SPARK_SAMPLES, SparkRing};
 
@@ -380,6 +384,7 @@ impl Workspace {
         self.ready && self.status != InstanceStatus::Dead
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Whether a turn is currently running (composer Enter steers if so).
     pub(crate) fn is_running_turn(&self) -> bool {
         self.running
@@ -599,11 +604,13 @@ impl Workspace {
         true
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Whether the embedded terminal fills the chat area.
     pub(crate) fn terminal_visible(&self) -> bool {
         self.show_terminal
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Toggle the terminal (lazy-spawns the shell on first show, like the
     /// egui toggle); spawn failures land in the transcript as a note.
     pub(crate) fn set_terminal_visible(
@@ -624,10 +631,12 @@ impl Workspace {
         self.show_terminal = on;
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn terminal_ref(&self) -> Option<&crate::terminal::Terminal> {
         self.terminal.as_ref()
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn terminal_mut(&mut self) -> Option<&mut crate::terminal::Terminal> {
         self.terminal.as_mut()
     }
@@ -660,6 +669,7 @@ impl Workspace {
         }
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
     /// The question text of an outstanding interactive request, if any (shown
     /// on waiting cards + the attention banner).
     pub fn pending_question(&self) -> Option<&str> {

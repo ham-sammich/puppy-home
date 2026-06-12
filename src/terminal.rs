@@ -182,11 +182,13 @@ impl Terminal {
         }
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Run a closure against the vt100 screen (the GPUI painter's read path).
     pub(crate) fn with_screen<R>(&self, f: impl FnOnce(&vt100::Screen) -> R) -> Option<R> {
         self.parser.lock().ok().map(|p| f(p.screen()))
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Send input bytes (resets scrollback to live first, like the egui path).
     pub(crate) fn send_bytes(&mut self, bytes: &[u8]) {
         if self.scrollback != 0 {
@@ -198,6 +200,7 @@ impl Terminal {
         self.write_bytes(bytes);
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Adjust scrollback by `delta` rows (clamped; positive = older).
     pub(crate) fn scroll_lines(&mut self, delta: i32) {
         let new = (self.scrollback as i32 + delta).clamp(0, SCROLLBACK as i32) as usize;
@@ -209,15 +212,18 @@ impl Terminal {
         }
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn scrollback_pos(&self) -> usize {
         self.scrollback
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Public resize (rows/cols from the GPUI element's measured bounds).
     pub(crate) fn resize_to(&mut self, rows: u16, cols: u16) {
         self.resize(rows, cols);
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn size(&self) -> (u16, u16) {
         (self.rows, self.cols)
     }

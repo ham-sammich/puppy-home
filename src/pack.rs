@@ -110,6 +110,7 @@ impl DenState {
         }
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
     /// The `.puppy/pack.json` breadcrumb body each sidecar reads to inject
     /// "[pack context] ..." into prompts (Tier 2). Shape matches the egui
     /// shell's `PackView::breadcrumb` exactly (members w/ latest activity,
@@ -181,12 +182,14 @@ impl DenState {
     }
 }
 
+#[allow(dead_code)] // consumed by the redesign UI branches
 /// The agent-side coordination CLI (claim/release/claims/post/status),
 /// shipped into each workspace's `.puppy/` so agents can run it with plain
 /// python (one copy of the bytes; the egui shell's `app/pack_sync.rs`
 /// include converges here at sync time).
 pub const PACK_HELPER: &str = include_str!("../sidecar/pack_helper.py");
 
+#[allow(dead_code)] // consumed by the redesign UI branches
 /// Drop the Tier-2 breadcrumb (`pack.json` + `pack_helper.py`) into each
 /// LOCAL workspace root's `.puppy/`. The body gets `updated` stamped and a
 /// per-root `helper` path (so the breadcrumb can point at ITS helper).
@@ -213,6 +216,7 @@ pub fn write_pack_breadcrumb(roots: &[std::path::PathBuf], body: &serde_json::Va
     }
 }
 
+#[allow(dead_code)] // consumed by the redesign UI branches
 /// Remove the breadcrumb files from each root (called on leave).
 pub fn remove_pack_breadcrumb(roots: &[std::path::PathBuf]) {
     for root in roots {

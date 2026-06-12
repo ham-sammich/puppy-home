@@ -12,9 +12,9 @@ mod terminal;
 pub use editor::editor_window;
 #[allow(unused_imports)] // consumed by the GPUI editor
 pub use editor::{ANSI_NAMES, unique_name, upsert};
-pub use terminal::{
-    ResolvedTerminal, TerminalTheme, load_terminal, save_terminal, terminal_colors_id,
-};
+#[allow(unused_imports)] // consumed by the GPUI editor
+pub use terminal::save_terminal;
+pub use terminal::{ResolvedTerminal, TerminalTheme, load_terminal, terminal_colors_id};
 
 use std::path::PathBuf;
 
