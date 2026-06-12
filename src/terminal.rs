@@ -95,6 +95,7 @@ impl Terminal {
             let writer = writer.clone();
             thread::spawn(move || {
                 let mut buf = [0u8; 8192];
+                let mut last_wake = std::time::Instant::now() - std::time::Duration::from_secs(1);
                 loop {
                     match reader.read(&mut buf) {
                         Ok(0) | Err(_) => break,
@@ -126,10 +127,18 @@ impl Terminal {
                                 let _ = w.write_all(&reply);
                                 let _ = w.flush();
                             }
-                            waker.wake();
+                            // Wake throttle: an output flood (`yes`, big
+                            // cat) would otherwise wake the UI per 8KB chunk;
+                            // 8ms between wakes caps redraws at ~120Hz and
+                            // applies gentle backpressure to the flood.
+                            if last_wake.elapsed() >= std::time::Duration::from_millis(8) {
+                                last_wake = std::time::Instant::now();
+                                waker.wake();
+                            }
                         }
                     }
                 }
+                waker.wake(); // final state after EOF
             });
         }
 
@@ -171,6 +180,52 @@ impl Terminal {
         if let Ok(mut p) = self.parser.lock() {
             p.screen_mut().set_size(rows, cols);
         }
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Run a closure against the vt100 screen (the GPUI painter's read path).
+    pub(crate) fn with_screen<R>(&self, f: impl FnOnce(&vt100::Screen) -> R) -> Option<R> {
+        self.parser.lock().ok().map(|p| f(p.screen()))
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Send input bytes (resets scrollback to live first, like the egui path).
+    pub(crate) fn send_bytes(&mut self, bytes: &[u8]) {
+        if self.scrollback != 0 {
+            self.scrollback = 0;
+            if let Ok(mut p) = self.parser.lock() {
+                p.screen_mut().set_scrollback(0);
+            }
+        }
+        self.write_bytes(bytes);
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Adjust scrollback by `delta` rows (clamped; positive = older).
+    pub(crate) fn scroll_lines(&mut self, delta: i32) {
+        let new = (self.scrollback as i32 + delta).clamp(0, SCROLLBACK as i32) as usize;
+        if new != self.scrollback {
+            self.scrollback = new;
+            if let Ok(mut p) = self.parser.lock() {
+                p.screen_mut().set_scrollback(self.scrollback);
+            }
+        }
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub(crate) fn scrollback_pos(&self) -> usize {
+        self.scrollback
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Public resize (rows/cols from the GPUI element's measured bounds).
+    pub(crate) fn resize_to(&mut self, rows: u16, cols: u16) {
+        self.resize(rows, cols);
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub(crate) fn size(&self) -> (u16, u16) {
+        (self.rows, self.cols)
     }
 
     /// The visible screen text (for scanning dev-server URLs, etc.).
@@ -381,34 +436,60 @@ impl Drop for Terminal {
 
 /// Map a key press (with modifiers) to a terminal input sequence, or `None` if
 /// it's an ordinary printable char already delivered via `Event::Text`.
+/// ONE key-encoding table for both shells, keyed by lowercase key names
+/// (gpui keystroke names; the egui adapter maps `egui::Key` onto them).
+pub(crate) fn named_key_seq(name: &str) -> Option<&'static [u8]> {
+    Some(match name {
+        "enter" => b"\r",
+        "backspace" => b"\x7f",
+        "tab" => b"\t",
+        "escape" => b"\x1b",
+        "up" => b"\x1b[A",
+        "down" => b"\x1b[B",
+        "right" => b"\x1b[C",
+        "left" => b"\x1b[D",
+        "home" => b"\x1b[H",
+        "end" => b"\x1b[F",
+        "delete" => b"\x1b[3~",
+        "insert" => b"\x1b[2~",
+        "pageup" => b"\x1b[5~",
+        "pagedown" => b"\x1b[6~",
+        _ => return None,
+    })
+}
+
+/// Ctrl+<letter> -> control byte (Ctrl+A = 0x01 ... Ctrl+Z = 0x1a).
+pub(crate) fn ctrl_byte(c: char) -> Option<u8> {
+    c.is_ascii_lowercase().then_some((c as u8) & 0x1f)
+}
+
 fn key_seq(key: egui::Key, mods: egui::Modifiers) -> Option<Vec<u8>> {
     use egui::Key;
-    let seq: &[u8] = match key {
-        Key::Enter => b"\r",
-        Key::Backspace => b"\x7f",
-        Key::Tab => b"\t",
-        Key::Escape => b"\x1b",
-        Key::ArrowUp => b"\x1b[A",
-        Key::ArrowDown => b"\x1b[B",
-        Key::ArrowRight => b"\x1b[C",
-        Key::ArrowLeft => b"\x1b[D",
-        Key::Home => b"\x1b[H",
-        Key::End => b"\x1b[F",
-        Key::Delete => b"\x1b[3~",
-        Key::Insert => b"\x1b[2~",
-        Key::PageUp => b"\x1b[5~",
-        Key::PageDown => b"\x1b[6~",
+    let name = match key {
+        Key::Enter => "enter",
+        Key::Backspace => "backspace",
+        Key::Tab => "tab",
+        Key::Escape => "escape",
+        Key::ArrowUp => "up",
+        Key::ArrowDown => "down",
+        Key::ArrowRight => "right",
+        Key::ArrowLeft => "left",
+        Key::Home => "home",
+        Key::End => "end",
+        Key::Delete => "delete",
+        Key::Insert => "insert",
+        Key::PageUp => "pageup",
+        Key::PageDown => "pagedown",
         _ => {
-            // Ctrl+<letter> → control byte (Ctrl+A = 0x01 … Ctrl+Z = 0x1a).
             if mods.ctrl
                 && let Some(c) = letter(key)
             {
-                return Some(vec![(c as u8) & 0x1f]);
+                return ctrl_byte(c).map(|b| vec![b]);
             }
             return None;
         }
     };
-    Some(seq.to_vec())
+    named_key_seq(name).map(<[u8]>::to_vec)
 }
 
 /// The lowercase letter for an A–Z key, else `None`.
@@ -459,21 +540,32 @@ fn to_color(
     }
 }
 
-fn ansi_256(i: u8, term: &crate::theme::ResolvedTerminal) -> egui::Color32 {
-    use egui::Color32;
+/// The xterm 256-color cube + grays for indices 16..=255 (shared by both
+/// shells; 0..=15 come from the active terminal theme's palette).
+pub(crate) fn ansi_cube(i: u8) -> (u8, u8, u8) {
     match i {
-        0..=15 => term.ansi[i as usize],
+        0..=15 => (0, 0, 0), // caller resolves from the theme palette
         16..=231 => {
             let i = i - 16;
             let r = i / 36;
             let g = (i % 36) / 6;
             let b = i % 6;
             let conv = |v: u8| if v == 0 { 0 } else { 55 + v * 40 };
-            Color32::from_rgb(conv(r), conv(g), conv(b))
+            (conv(r), conv(g), conv(b))
         }
         232..=255 => {
             let v = 8 + (i - 232) * 10;
-            Color32::from_rgb(v, v, v)
+            (v, v, v)
+        }
+    }
+}
+
+fn ansi_256(i: u8, term: &crate::theme::ResolvedTerminal) -> egui::Color32 {
+    match i {
+        0..=15 => term.ansi[i as usize],
+        _ => {
+            let (r, g, b) = ansi_cube(i);
+            egui::Color32::from_rgb(r, g, b)
         }
     }
 }
@@ -517,6 +609,20 @@ mod tests {
         assert_eq!(key_seq(Key::D, ctrl()).as_deref(), Some(&[0x04u8][..]));
         // Plain letters are delivered via Event::Text, not key_seq.
         assert_eq!(key_seq(Key::A, Modifiers::NONE), None);
+    }
+
+    #[test]
+    fn shared_key_table_and_ctrl_bytes() {
+        // The ONE table both shells encode from.
+        assert_eq!(named_key_seq("enter"), Some(b"\r" as &[u8]));
+        assert_eq!(named_key_seq("backspace"), Some(b"\x7f" as &[u8]));
+        assert_eq!(named_key_seq("up"), Some(b"\x1b[A" as &[u8]));
+        assert_eq!(named_key_seq("pageup"), Some(b"\x1b[5~" as &[u8]));
+        assert_eq!(named_key_seq("pagedown"), Some(b"\x1b[6~" as &[u8]));
+        assert_eq!(named_key_seq("f5"), None);
+        assert_eq!(ctrl_byte('c'), Some(0x03));
+        assert_eq!(ctrl_byte('z'), Some(0x1a));
+        assert_eq!(ctrl_byte('1'), None);
     }
 
     #[test]

@@ -384,6 +384,12 @@ impl Workspace {
         self.ready && self.status != InstanceStatus::Dead
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Whether a turn is currently running (composer Enter steers if so).
+    pub(crate) fn is_running_turn(&self) -> bool {
+        self.running
+    }
+
     /// Whether the running turn is held at the pause gate. Mirrors the private
     /// flag for views outside this module (the redesign's dashboard cards).
     #[allow(dead_code)] // consumed by the redesign UI branches
@@ -391,45 +397,44 @@ impl Workspace {
         self.paused
     }
 
-    /// Recent tok/s samples, oldest → newest (this card's sparkline data).
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Recent tok/s samples, oldest → newest (this card's sparkline data).
     pub fn spark_history(&self) -> &[f32] {
         self.sparks.samples()
     }
 
-    /// The model catalog the sidecar announced (the card's model popover).
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// The model catalog the sidecar announced (the card's model popover).
     pub fn model_catalog(&self) -> &[crate::backend::ModelInfo] {
         &self.models
     }
 
-    /// Transcript entries (the GPUI chat renders a bounded tail of these).
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Transcript entries (the GPUI chat renders a bounded tail of these).
     pub(crate) fn entries(&self) -> &[Entry] {
         &self.transcript
     }
 
-    /// How many oldest entries the ring-buffer cap has dropped (banner text).
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// How many oldest entries the ring-buffer cap has dropped (banner text).
     pub(crate) fn collapsed_count(&self) -> usize {
         self.transcript_collapsed
     }
 
-    /// The agent catalog the sidecar announced (composer AgentSwitcher).
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// The agent catalog the sidecar announced (composer AgentSwitcher).
     pub(crate) fn agent_catalog(&self) -> &[AgentInfo] {
         &self.agents
     }
 
     /// The slash-command catalog (composer Commands menu / palette header).
     #[allow(dead_code)] // palette currently completion-driven; menu lands later
-    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn command_catalog(&self) -> &[CommandInfo] {
         &self.commands
     }
 
-    /// Latest sidecar completions (slash palette body) + visibility flag.
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Latest sidecar completions (slash palette body) + visibility flag.
     pub(crate) fn completion_items(&self) -> &[CompletionItem] {
         &self.completions
     }
@@ -439,9 +444,9 @@ impl Workspace {
         self.comp_visible
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Ask the sidecar to complete `query` (debounced by equality, exactly
     /// like the egui composer): only `/`-commands and `@file` paths complete.
-    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn update_completions(&mut self, query: &str) {
         if query == self.last_query {
             return;
@@ -458,26 +463,26 @@ impl Workspace {
         }
     }
 
-    /// Dismiss the completion popover (focus loss / item picked / escape).
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Dismiss the completion popover (focus loss / item picked / escape).
     pub(crate) fn dismiss_completions(&mut self) {
         self.comp_visible = false;
     }
 
-    /// File-change records this session (the chat's Changes list).
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// File-change records this session (the chat's Changes list).
     pub(crate) fn diff_records(&self) -> &[diff::DiffRecord] {
         &self.diffs
     }
 
-    /// Sidecar log lines (the chat's logs panel).
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Sidecar log lines (the chat's logs panel).
     pub(crate) fn log_lines(&self) -> &[String] {
         &self.logs
     }
 
-    /// Editor-area tabs + the active index (the GPUI editor tab bar).
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Editor-area tabs + the active index (the GPUI editor tab bar).
     pub(crate) fn editor_tabs(&self) -> &[EditorItem] {
         &self.editor_open
     }
@@ -494,9 +499,9 @@ impl Workspace {
         }
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
     /// An open file buffer's view: (content, dirty, load_error, save_error).
     #[allow(clippy::type_complexity)]
-    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn file_view(
         &self,
         path: &std::path::Path,
@@ -511,19 +516,19 @@ impl Workspace {
         })
     }
 
-    /// Replace an open file's buffer content (marks it dirty).
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Replace an open file's buffer content (marks it dirty).
     pub(crate) fn set_file_content(&mut self, path: &std::path::Path, text: String) {
-        if let Some(b) = self.open_files.get_mut(path) {
-            if b.content != text {
-                b.content = text;
-                b.dirty = true;
-            }
+        if let Some(b) = self.open_files.get_mut(path)
+            && b.content != text
+        {
+            b.content = text;
+            b.dirty = true;
         }
     }
 
-    /// Write an open buffer to disk; returns success (egui's inline save).
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Write an open buffer to disk; returns success (egui's inline save).
     pub(crate) fn save_file(&mut self, path: &std::path::Path) -> bool {
         let Some(b) = self.open_files.get_mut(path) else {
             return false;
@@ -541,54 +546,54 @@ impl Workspace {
         }
     }
 
-    /// Whether this workspace's folder is a git repo (markers/changes source).
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Whether this workspace's folder is a git repo (markers/changes source).
     pub(crate) fn is_git_repo(&self) -> bool {
         self.git_repo
     }
 
-    /// Working-tree changes (git repos; the Changes list).
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Working-tree changes (git repos; the Changes list).
     pub(crate) fn git_change_list(&self) -> &[crate::git::GitChange] {
         &self.git_changes
     }
 
-    /// The diff currently shown in the Changes tab.
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// The diff currently shown in the Changes tab.
     pub(crate) fn current_diff_view(&self) -> Option<&diff::DiffRecord> {
         self.current_diff.as_ref()
     }
 
-    /// Saved-session catalog (answer to `list_sessions`).
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Saved-session catalog (answer to `list_sessions`).
     pub(crate) fn sessions_catalog(&self) -> &[crate::backend::SessionInfo] {
         &self.sessions
     }
 
-    /// The session this workspace is currently attached to.
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// The session this workspace is currently attached to.
     pub(crate) fn sessions_current_name(&self) -> &str {
         &self.sessions_current
     }
 
-    /// The most recent session preview (name + entries), if loaded.
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// The most recent session preview (name + entries), if loaded.
     pub(crate) fn session_preview_data(
         &self,
     ) -> Option<&(String, Vec<crate::backend::SessionEntry>)> {
         self.session_preview.as_ref()
     }
 
-    /// Ask the sidecar for the saved-session catalog.
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Ask the sidecar for the saved-session catalog.
     pub(crate) fn request_sessions(&self) {
         if let Some(backend) = &self.backend {
             backend.list_sessions();
         }
     }
 
-    /// Request a read-only preview of one session (clears the stale one).
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Request a read-only preview of one session (clears the stale one).
     pub(crate) fn request_session_preview(&mut self, name: &str, source: &str) {
         self.session_preview = None;
         if let Some(backend) = &self.backend {
@@ -596,8 +601,8 @@ impl Workspace {
         }
     }
 
-    /// Resume a saved session here (egui gate: not while a turn runs).
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Resume a saved session here (egui gate: not while a turn runs).
     pub(crate) fn resume_session(&mut self, name: &str, source: &str) -> bool {
         if self.running {
             return false;
@@ -609,16 +614,16 @@ impl Workspace {
         false
     }
 
-    /// One-shot: the sidecar asked to open the sessions browser (`/resume`).
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// One-shot: the sidecar asked to open the sessions browser (`/resume`).
     pub(crate) fn wants_sessions(&mut self) -> bool {
         std::mem::take(&mut self.show_sessions)
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Start a fresh chat: the egui `+ New chat` reuses the /clear machinery
     /// (wipes the transcript, resets the sidecar conversation). Gated like
     /// the egui button: ready, idle, and something to clear.
-    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn new_chat(&mut self) -> bool {
         if !self.ready || self.running || self.transcript.is_empty() {
             return false;
@@ -627,24 +632,59 @@ impl Workspace {
         true
     }
 
-    /// Filesystem handle for this workspace (the chat's file explorer).
     #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Whether the embedded terminal fills the chat area.
+    pub(crate) fn terminal_visible(&self) -> bool {
+        self.show_terminal
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Toggle the terminal (lazy-spawns the shell on first show, like the
+    /// egui toggle); spawn failures land in the transcript as a note.
+    pub(crate) fn set_terminal_visible(
+        &mut self,
+        on: bool,
+        waker: &Arc<dyn crate::waker::UiWaker>,
+    ) {
+        if on && self.terminal.is_none() {
+            match crate::terminal::Terminal::spawn(&self.root, waker.clone()) {
+                Ok(t) => self.terminal = Some(t),
+                Err(e) => {
+                    self.transcript
+                        .push(Entry::Note(format!("Terminal failed to start: {e}")));
+                    return;
+                }
+            }
+        }
+        self.show_terminal = on;
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub(crate) fn terminal_ref(&self) -> Option<&crate::terminal::Terminal> {
+        self.terminal.as_ref()
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub(crate) fn terminal_mut(&mut self) -> Option<&mut crate::terminal::Terminal> {
+        self.terminal.as_mut()
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// Filesystem handle for this workspace (the chat's file explorer).
     pub(crate) fn fs_handle(&self) -> Arc<dyn fs::WorkspaceFs> {
         self.fs.clone()
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
     /// The outstanding input/confirm/select request, if any (frontends
     /// render it; answers go through [`Self::pending_choose`] /
     /// [`Self::pending_answer_text`]).
-    #[allow(dead_code)] // consumed by the redesign UI branches
-    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn pending_request(&self) -> Option<&Pending> {
         self.pending.as_ref()
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Answer a confirm/select request by picking option `i`.
-    #[allow(dead_code)] // consumed by the redesign UI branches
-    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn pending_choose(&mut self, i: usize) {
         if let Some(p) = self.pending.as_mut() {
             p.selection = i;
@@ -652,14 +692,25 @@ impl Workspace {
         }
     }
 
+    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Answer an input request with typed text.
-    #[allow(dead_code)] // consumed by the redesign UI branches
-    #[allow(dead_code)] // consumed by the redesign UI branches
     pub(crate) fn pending_answer_text(&mut self, text: &str) {
         if let Some(p) = self.pending.as_mut() {
             p.text = text.to_string();
             self.answer_pending();
         }
+    }
+
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    /// The question text of an outstanding interactive request, if any (shown
+    /// on waiting cards + the attention banner).
+    pub fn pending_question(&self) -> Option<&str> {
+        use state::PendingKind;
+        self.pending.as_ref().map(|p| match &p.kind {
+            PendingKind::Input { prompt, .. } => prompt.as_str(),
+            PendingKind::Confirm { title, .. } => title.as_str(),
+            PendingKind::Select { prompt, .. } => prompt.as_str(),
+        })
     }
 
     /// Session diff totals: (+lines, −lines) across recorded diff records

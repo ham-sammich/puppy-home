@@ -14,7 +14,28 @@ use crate::backend::ssh::{self, SshTarget};
 use crate::views::path_browser::{self, BrowseAction};
 
 /// A remote directory listing in flight or done: `(resolved_abs_path, entries)`.
-type ListResult = Result<(String, Vec<(String, bool)>), String>;
+/// (pub(crate): the GPUI connect dialog polls the same result type.)
+pub(crate) type ListResult = Result<(String, Vec<(String, bool)>), String>;
+
+/// Run one remote `ls` and parse it — the blocking body shared by both
+/// shells' off-thread listing spawns (sync note: extracted in Phase E).
+/// `dir` of `None` lists the login home.
+pub(crate) fn list_remote_blocking(target: &SshTarget, dir: Option<&str>) -> ListResult {
+    match target.list_dir_command(dir).output() {
+        Ok(o) if o.status.success() => ssh::parse_listing(&String::from_utf8_lossy(&o.stdout))
+            .ok_or_else(|| "Couldn't read that directory.".to_string()),
+        Ok(o) => {
+            let err = String::from_utf8_lossy(&o.stderr);
+            let err = err.trim();
+            Err(if err.is_empty() {
+                "Listing failed.".to_string()
+            } else {
+                err.to_string()
+            })
+        }
+        Err(e) => Err(format!("ssh failed: {e}")),
+    }
+}
 
 /// The remote folder browser state (opened from "Browse the remote host").
 struct DirBrowser {
@@ -72,28 +93,14 @@ fn spawn_list(ctx: &egui::Context, target: SshTarget, dir: Option<String>) -> Re
     let (tx, rx) = mpsc::channel();
     let ctx = ctx.clone();
     std::thread::spawn(move || {
-        let result = match target.list_dir_command(dir.as_deref()).output() {
-            Ok(o) if o.status.success() => ssh::parse_listing(&String::from_utf8_lossy(&o.stdout))
-                .ok_or_else(|| "Couldn't read that directory.".to_string()),
-            Ok(o) => {
-                let err = String::from_utf8_lossy(&o.stderr);
-                let err = err.trim();
-                Err(if err.is_empty() {
-                    "Listing failed.".to_string()
-                } else {
-                    err.to_string()
-                })
-            }
-            Err(e) => Err(format!("ssh failed: {e}")),
-        };
-        let _ = tx.send(result);
+        let _ = tx.send(list_remote_blocking(&target, dir.as_deref()));
         ctx.request_repaint();
     });
     rx
 }
 
 /// Join a remote dir + child name without doubling the separator.
-fn join_remote(cwd: &str, name: &str) -> String {
+pub(crate) fn join_remote(cwd: &str, name: &str) -> String {
     if cwd.ends_with('/') {
         format!("{cwd}{name}")
     } else {
@@ -102,7 +109,7 @@ fn join_remote(cwd: &str, name: &str) -> String {
 }
 
 /// Parent of an absolute remote path (`None` at the root).
-fn parent_remote(cwd: &str) -> Option<String> {
+pub(crate) fn parent_remote(cwd: &str) -> Option<String> {
     if cwd == "/" {
         return None;
     }
@@ -284,5 +291,25 @@ fn render_browser(ctx: &egui::Context, ui: &mut egui::Ui, st: &mut RemoteConnect
         st.browser = None;
     } else if close {
         st.browser = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn join_remote_never_doubles_the_separator() {
+        assert_eq!(join_remote("/home/alice", "src"), "/home/alice/src");
+        assert_eq!(join_remote("/", "etc"), "/etc");
+        assert_eq!(join_remote("/var/", "log"), "/var/log");
+    }
+
+    #[test]
+    fn parent_remote_walks_to_root_and_stops() {
+        assert_eq!(parent_remote("/a/b/c"), Some("/a/b".to_string()));
+        assert_eq!(parent_remote("/a"), Some("/".to_string()));
+        assert_eq!(parent_remote("/a/"), Some("/".to_string()));
+        assert_eq!(parent_remote("/"), None);
     }
 }

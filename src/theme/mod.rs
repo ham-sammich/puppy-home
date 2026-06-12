@@ -10,6 +10,10 @@ mod editor;
 mod terminal;
 
 pub use editor::editor_window;
+#[allow(unused_imports)] // consumed by the GPUI editor
+pub use editor::{ANSI_NAMES, unique_name, upsert};
+#[allow(unused_imports)] // consumed by the GPUI editor
+pub use terminal::save_terminal;
 pub use terminal::{ResolvedTerminal, TerminalTheme, load_terminal, terminal_colors_id};
 
 use std::path::PathBuf;
@@ -81,6 +85,13 @@ pub struct ThemePalette {
     /// Status: errored / dead.
     #[serde(default = "d_status_error")]
     pub status_error: String,
+    /// App backdrop behind all panels (GPUI shell's outermost fill; egui's
+    /// outermost surface is `panel`, so its renderer ignores this).
+    #[serde(default = "d_app_bg")]
+    pub app_bg: String,
+    /// Dimmest text tier (idle labels; below `weak_text`). GPUI shell.
+    #[serde(default = "d_dim_text")]
+    pub dim_text: String,
 }
 
 // Serde defaults for the redesign tokens — one source of truth shared by the
@@ -105,6 +116,12 @@ fn d_status_paused() -> String {
 }
 fn d_status_error() -> String {
     "#f28585".into()
+}
+fn d_app_bg() -> String {
+    "#121217".into()
+}
+fn d_dim_text() -> String {
+    "#696977".into()
 }
 
 /// The redesign's accent/status tokens resolved to `Color32` once — views hold
@@ -246,6 +263,8 @@ impl ThemePalette {
             status_wait: d_status_wait(),
             status_paused: d_status_paused(),
             status_error: d_status_error(),
+            app_bg: d_app_bg(),
+            dim_text: d_dim_text(),
         }
     }
 
@@ -278,22 +297,31 @@ impl ThemePalette {
             status_wait: d_status_wait(),
             status_paused: d_status_paused(),
             status_error: d_status_error(),
+            app_bg: "#e9e9ee".into(),
+            dim_text: "#8a8a96".into(),
         }
     }
 }
 
-/// Resolve the egui visuals for a selection, looking custom themes up by name in
-/// `library`. An unknown custom name falls back to Dark.
-pub fn visuals_for(theme: &Theme, library: &[ThemePalette]) -> egui::Visuals {
+/// Resolve the palette for a selection, looking custom themes up by name
+/// in `library`. An unknown custom name falls back to Dark. Shared by both
+/// shells (egui maps it onto Visuals, GPUI onto Tokens).
+pub fn palette_for(theme: &Theme, library: &[ThemePalette]) -> ThemePalette {
     match theme {
-        Theme::Dark => ThemePalette::dark().to_visuals(),
-        Theme::Light => ThemePalette::light().to_visuals(),
+        Theme::Dark => ThemePalette::dark(),
+        Theme::Light => ThemePalette::light(),
         Theme::Custom(name) => library
             .iter()
             .find(|p| &p.name == name)
-            .map(ThemePalette::to_visuals)
-            .unwrap_or_else(|| ThemePalette::dark().to_visuals()),
+            .cloned()
+            .unwrap_or_else(ThemePalette::dark),
     }
+}
+
+/// Resolve the egui visuals for a selection (the palette lookup +
+/// `to_visuals`; kept as the egui shell's single entry point).
+pub fn visuals_for(theme: &Theme, library: &[ThemePalette]) -> egui::Visuals {
+    palette_for(theme, library).to_visuals()
 }
 
 /// Per-OS config path for a puppy-home file: `<config>/puppy-home/<file>`.
@@ -384,6 +412,8 @@ mod tests {
                 &p.status_wait,
                 &p.status_paused,
                 &p.status_error,
+                &p.app_bg,
+                &p.dim_text,
             ] {
                 assert!(parse_hex(hex).is_some(), "bad hex {hex:?} in {}", p.name);
             }
@@ -397,6 +427,25 @@ mod tests {
         let c = parse_hex(&ThemePalette::light().weak_text).unwrap();
         let lum = 0.299 * c.r() as f32 + 0.587 * c.g() as f32 + 0.114 * c.b() as f32;
         assert!(lum < 150.0, "light weak-text too bright: {lum}");
+    }
+
+    #[test]
+    fn palette_for_resolves_presets_customs_and_fallback() {
+        let mut neon = ThemePalette::dark();
+        neon.name = "Neon".into();
+        neon.accent = "#00ff88".into();
+        let lib = vec![neon];
+        assert_eq!(palette_for(&Theme::Dark, &lib).accent, "#e7ab4d");
+        assert!(!palette_for(&Theme::Light, &lib).dark_mode);
+        assert_eq!(
+            palette_for(&Theme::Custom("Neon".into()), &lib).accent,
+            "#00ff88"
+        );
+        // Unknown custom name falls back to Dark, not a crash.
+        assert_eq!(
+            palette_for(&Theme::Custom("gone".into()), &lib).accent,
+            "#e7ab4d"
+        );
     }
 
     #[test]
@@ -430,6 +479,8 @@ mod tests {
         assert_eq!(p.accent2, "#f0c987");
         assert_eq!(p.accent_ink, "#1c1402");
         assert_eq!(p.status_paused, "#cfa54e");
+        assert_eq!(p.app_bg, "#121217"); // GPUI backdrop default
+        assert_eq!(p.dim_text, "#696977");
         // And the resolved accessor parses every default.
         let a = Accents::from_palette(&p);
         assert_eq!(a.paused, parse_hex("#cfa54e").unwrap());

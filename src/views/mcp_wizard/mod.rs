@@ -16,14 +16,14 @@ use serde_json::{Map, Value, json};
 use crate::views::common::{EditMode, mode_toggle, validate_name};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Transport {
+pub(crate) enum Transport {
     Stdio,
     Sse,
     Http,
 }
 
 impl Transport {
-    fn wire(self) -> &'static str {
+    pub(crate) fn wire(self) -> &'static str {
         match self {
             Transport::Stdio => "stdio",
             Transport::Sse => "sse",
@@ -31,7 +31,7 @@ impl Transport {
         }
     }
 
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Transport::Stdio => "Command (stdio)",
             Transport::Sse => "Remote URL (SSE)",
@@ -39,7 +39,7 @@ impl Transport {
         }
     }
 
-    fn blurb(self) -> &'static str {
+    pub(crate) fn blurb(self) -> &'static str {
         match self {
             Transport::Stdio => "Run a local process; talk over stdin/stdout.",
             Transport::Sse => "Connect to a server-sent-events endpoint.",
@@ -50,20 +50,22 @@ impl Transport {
 
 /// The guided "Add MCP server" wizard state.
 pub struct Wizard {
-    step: usize,
-    transport: Transport,
-    name: String,
-    command: String,
+    // Fields are pub(crate) so the GPUI manager drives the same state
+    // machine (sync note: mirror on the egui branch at batch time).
+    pub(crate) step: usize,
+    pub(crate) transport: Transport,
+    pub(crate) name: String,
     /// One argument per line.
-    args: String,
-    env: Vec<(String, String)>,
-    url: String,
-    headers: Vec<(String, String)>,
-    error: Option<String>,
+    pub(crate) command: String,
+    pub(crate) args: String,
+    pub(crate) env: Vec<(String, String)>,
+    pub(crate) url: String,
+    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) error: Option<String>,
     /// Form (guided steps) vs. Paste (drop in a server entry and validate).
-    mode: EditMode,
+    pub(crate) mode: EditMode,
     /// The raw-paste buffer, seeded from the form on entry.
-    paste: String,
+    pub(crate) paste: String,
 }
 
 impl Wizard {
@@ -99,7 +101,7 @@ impl Wizard {
     }
 
     /// Seed the paste buffer from the current form (a `{name: config}` entry).
-    fn sync_paste_from_form(&mut self) {
+    pub(crate) fn sync_paste_from_form(&mut self) {
         if self.name.trim().is_empty() {
             self.paste = "{\n  \"my-server\": {\n    \"type\": \"stdio\",\n    \
                           \"command\": \"npx\",\n    \"args\": [\"-y\", \"some-mcp-server\"]\n  }\n}"
@@ -116,7 +118,7 @@ impl Wizard {
     }
 
     /// Parse the paste buffer back into the form fields (the syntax check).
-    fn apply_paste(&mut self) -> Result<(), String> {
+    pub(crate) fn apply_paste(&mut self) -> Result<(), String> {
         let p = parse_paste(&self.paste)?;
         validate_name(&p.name)?;
         self.name = p.name;
@@ -191,7 +193,7 @@ fn build_config(w: &Wizard) -> Value {
 
 /// Validate the fields; mirrors Code Puppy's registry validation so the user
 /// hears about problems before the op crosses the wire.
-fn validate_fields(w: &Wizard) -> Result<(), String> {
+pub(crate) fn validate_fields(w: &Wizard) -> Result<(), String> {
     validate_name(&w.name)?;
     match w.transport {
         Transport::Stdio => {
