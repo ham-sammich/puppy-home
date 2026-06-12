@@ -390,7 +390,7 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       browser URL, MCP/Skills/Agent wizard fields, theme-editor hex
       fields. No surface overrides run colors locally (containers'
       text_color only ever styled labels). Probed dark + light themes.
-      `<hash3>`
+      `68e7a00`
 
 - [x] B13.3 REDUX model chip still clipped (user screenshot): the previous
       fix left the 180px max-width ALWAYS on, so wide cards with free
