@@ -651,12 +651,19 @@ Dashboard
       + re-auth methods.
 
 Den
-- [ ] "Join Den" should also CREATE a den (run `cargo run -p puppy-relay`
+- [x] "Join Den" should also CREATE a den (run `cargo run -p puppy-relay`
       for the user); multi-den hosting/joining; self-host instructions.
+      (QW6 — Host a Den on the join screen: binary-next-to-exe first,
+      cargo-run dev fallback; auto-join + LAN share line + Stop hosting;
+      PUPPY_RELAY_WATCH_PID watchdog so SIGKILLed apps can't orphan the
+      relay; docs/DEN_HOSTING.md for servers. LEDGER: multi-den stays
+      future — DenConn/PackClient are single-connection by design.)
 
 Agents
-- [ ] "Create Agent with Agent Creator" button — spawns a session using
+- [x] "Create Agent with Agent Creator" button — spawns a session using
       code-puppy's agent-creator agent inside the agent builder.
+      (QW7 — Agents-manager header button: fresh $HOME workspace +
+      set_agent("agent-creator") down the spawn pipe, lands in chat.)
 
 Managers
 - [x] Manage code-puppy config. (QW5 — puppy.cfg settings list,
@@ -668,7 +675,13 @@ Managers
       secrets never surfaced)
 
 Identity / setup
-- [ ] User PFP + Puppy PFP (emoji defaults).
+- [x] User PFP + Puppy PFP (emoji defaults). (QW8 — toolbar identity
+      chip -> Avatars panel: You/Puppy targets, 40-emoji grid + any-
+      emoji input; persisted as session.json user_avatar/puppy_avatar.
+      SYNC QUEUE: session.rs gained the two shared serde fields +
+      dock_layout carry-over — port the egui pickers next sync batch.
+      LEDGER: avatar-in-den-roster needs a relay protocol slot
+      (RoomAgentInfo has none); not extending the wire for this.)
 - [ ] Initial setup guide: install code-puppy if absent, run setup,
       tutorial, puppy name; theme select (dark/light/system/custom,
       possibly importing code-puppy's themes); models setup + auth;
@@ -678,8 +691,13 @@ Git
 - [ ] Create PRs (can use /generate-pr-description); view PRs if possible.
 
 Composer
-- [ ] Pop button (/pop command).
-- [ ] Context size/usage/status + context-related commands.
+- [x] Pop button (/pop command). (QW9 — in the /cmds status-line pill;
+      /pop sends the exact typed path, /pop N seeds the input. /pop
+      verified in source: pops last N MESSAGES, system prompt kept.)
+- [x] Context size/usage/status + context-related commands. (QW9 —
+      'ctx N%' chip when ctx_pct known (calm/warn/alarm; unknown draws
+      nothing) + /cmds popover: /pop, /compact, /truncate N,
+      /dump_context, /clear — the set code_puppy actually ships.)
 
 More views
 - [ ] Goals/Judges: goal panel, judges' reviews panel, manage judges +
