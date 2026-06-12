@@ -600,6 +600,34 @@ impl Workspace {
         false
     }
 
+    /// Adopt a sidecar-announced working-directory change (`/cd`): swap the
+    /// root, retitle, rebind the git handle (local workspaces) and drop the
+    /// now-stale git state — the regular status poll repopulates it. The
+    /// file tree reads `root` live, so it follows on the next frame.
+    /// Remote workspaces keep their old git binding (the ssh runner is
+    /// root-bound; rebind is a documented PARITY gap).
+    pub(crate) fn set_root(&mut self, new_root: PathBuf) {
+        if new_root.as_os_str().is_empty() || new_root == self.root {
+            return;
+        }
+        self.name = new_root
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| new_root.to_string_lossy().into_owned());
+        if self.remote_label.is_none() {
+            self.git = Arc::new(crate::git::LocalGit::new(new_root.clone()));
+        }
+        self.root = new_root;
+        self.git_repo = self.git.is_repo();
+        self.git_changes.clear();
+        self.git_rx = None;
+        self.git_view = None;
+        self.transcript.push(Entry::Note(format!(
+            "\u{1f4c2} Working directory: {}",
+            self.root.display()
+        )));
+    }
+
     /// One-shot: the sidecar asked to open the sessions browser (`/resume`).
     pub(crate) fn wants_sessions(&mut self) -> bool {
         std::mem::take(&mut self.show_sessions)

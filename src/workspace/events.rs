@@ -68,6 +68,10 @@ impl Workspace {
             }
             UiEvent::Message(msg) => self.on_message(msg),
             UiEvent::Commands(items) => self.commands = items,
+            UiEvent::Cwd(path) => {
+                self.cwd = path.clone();
+                self.set_root(std::path::PathBuf::from(path));
+            }
             UiEvent::Agents { items, open } => {
                 if let Some(cur) = items.iter().find(|a| a.current) {
                     self.agent = cur.name.clone();

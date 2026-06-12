@@ -303,6 +303,8 @@ pub enum UiEvent {
     Message(BackendMessage),
     /// The catalog of available slash commands.
     Commands(Vec<CommandInfo>),
+    /// The sidecar's working directory changed (`/cd` — workspaces follow).
+    Cwd(String),
     /// The catalog of available agents.
     Agents { items: Vec<AgentInfo>, open: bool },
     /// The catalog of available models.
@@ -432,6 +434,11 @@ enum Wire {
     Commands {
         #[serde(default)]
         items: Vec<CommandInfo>,
+    },
+    /// The sidecar's working directory changed (`/cd`).
+    Cwd {
+        #[serde(default)]
+        path: String,
     },
     Agents {
         #[serde(default)]
@@ -619,6 +626,7 @@ impl From<Wire> for UiEvent {
                 payload,
             }),
             Wire::Commands { items } => UiEvent::Commands(items),
+            Wire::Cwd { path } => UiEvent::Cwd(path),
             Wire::Agents { items, open } => UiEvent::Agents { items, open },
             Wire::Models { items, open } => UiEvent::Models { items, open },
             Wire::Completions { id, items } => UiEvent::Completions { id, items },

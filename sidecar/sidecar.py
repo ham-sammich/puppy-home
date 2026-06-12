@@ -46,6 +46,7 @@ Protocol (newline-delimited JSON, UTF-8):
     {"event": "completions",  "id": <int>, "items": [{"text","start_position","display","meta"}]}
     {"event": "result",       "id": <int>, "output": "..."}
     {"event": "command_done", "id": <int>, "handled": true}
+    {"event": "cwd", "path": "..."}  # a command changed the working directory
     {"event": "error",        "id": <int|null>, "message": "..."}
     {"event": "log",          "text": "..."}
     {"event": "mcp_servers",  "items": [{"id","name","type","enabled","state","summary","error"}]}
@@ -1800,6 +1801,7 @@ class Bridge:
                     self.emit_models(open_picker=True)
                     send({"event": "command_done", "id": msg_id, "handled": True})
                     return
+            cwd_before = os.getcwd()
             try:
                 from code_puppy.command_line.command_handler import handle_command
                 result = handle_command(text)
@@ -1808,6 +1810,11 @@ class Bridge:
                       "message": f"command failed: {type(exc).__name__}: {exc}"})
                 log(traceback.format_exc())
                 return
+            # /cd (or any handler that chdirs) silently moves the process —
+            # announce it so workspaces can follow (tree/title/git).
+            cwd_after = os.getcwd()
+            if cwd_after != cwd_before:
+                send({"event": "cwd", "path": cwd_after})
             if result == "__AUTOSAVE_LOAD__":
                 # /autosave_load (/resume): the CLI opens a TTY picker — instead
                 # surface our GUI session browser.
