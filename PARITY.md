@@ -634,11 +634,19 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
    yet; sequencing happens outside this ledger)
 
 Version + updates
-- [ ] Show Code Puppy version; check for updates; run updates.
+- [x] Show Code Puppy version; check for updates; run updates. (QW1)
+      Toolbar v{cp_version} chip (wire already carried it) -> About
+      panel: PyPI check via curl (offline-safe), Update = uv
+      --refresh-package cache bust (the honest mechanism for our
+      'uv run --with code-puppy' spawns) + 'restart workspaces to
+      apply'. Both legs live-verified (PyPI 0.0.561 == uv resolution).
 
 Dashboard
-- [ ] Whistle button: create a new code-puppy instance at the home dir.
-- [ ] "New Chat" next to Open Folder (same home-dir spawn).
+- [x] Whistle button: create a new code-puppy instance at the home dir.
+      (QW2 — pack-header button beside the H1)
+- [x] "New Chat" next to Open Folder (same home-dir spawn). (QW3 —
+      toolbar, jumps straight into the new chat; shared
+      DashAction::OpenHome{to_chat})
 - [ ] Auth status (Claude/GPT/Copilot/any model with surfaceable auth)
       + re-auth methods.
 
@@ -651,8 +659,13 @@ Agents
       code-puppy's agent-creator agent inside the agent builder.
 
 Managers
-- [ ] Manage code-puppy config.
-- [ ] Manage Models (a manager like skills/agents/mcps).
+- [x] Manage code-puppy config. (QW5 — puppy.cfg settings list,
+      line-level INI edits preserving comments/sections, secret keys
+      masked+locked, priority ordering, works sidecar-less)
+- [x] Manage Models (a manager like skills/agents/mcps). (QW4 —
+      catalog + extra_models.json overlay editor w/ syntect JSON,
+      set-active via set_model, custom-entry remove; OAuth file
+      secrets never surfaced)
 
 Identity / setup
 - [ ] User PFP + Puppy PFP (emoji defaults).
