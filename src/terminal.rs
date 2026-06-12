@@ -62,8 +62,39 @@ fn shell() -> (String, Vec<String>) {
 }
 
 impl Terminal {
-    /// Spawn a shell on a fresh PTY rooted at `cwd`. `waker` wakes the UI on output.
+    /// Spawn a local shell on a fresh PTY rooted at `cwd`. `waker` wakes the
+    /// UI on output.
     pub fn spawn(cwd: &Path, waker: Arc<dyn UiWaker>) -> Result<Self, String> {
+        let (exe, args) = shell();
+        let mut cmd = CommandBuilder::new(&exe);
+        for a in &args {
+            cmd.arg(a);
+        }
+        cmd.cwd(cwd);
+        Self::spawn_cmd(cmd, waker)
+    }
+
+    /// Spawn a shell on the REMOTE host of an SSH workspace: interactive
+    /// `ssh -t` runs inside the local PTY, lands in `remote_root`, and execs
+    /// the login shell there (B13.7). The vt100/render stack is transport
+    /// agnostic — ssh just carries the bytes, so auth prompts (password,
+    /// 2FA) appear in the terminal like in any other ssh session, and an
+    /// ssh exit surfaces as the regular dead-shell notice.
+    pub fn spawn_remote(
+        target: &crate::backend::ssh::SshTarget,
+        remote_root: &str,
+        waker: Arc<dyn UiWaker>,
+    ) -> Result<Self, String> {
+        let mut cmd = CommandBuilder::new("ssh");
+        for a in target.terminal_args(remote_root) {
+            cmd.arg(a);
+        }
+        Self::spawn_cmd(cmd, waker)
+    }
+
+    /// Shared PTY plumbing: open the pair, run `cmd` on the slave, wire the
+    /// reader thread (vt100 + query replies + wake throttle).
+    fn spawn_cmd(mut cmd: CommandBuilder, waker: Arc<dyn UiWaker>) -> Result<Self, String> {
         let (rows, cols) = (24u16, 80u16);
         let pty = native_pty_system();
         let pair = pty
@@ -75,12 +106,6 @@ impl Terminal {
             })
             .map_err(|e| e.to_string())?;
 
-        let (exe, args) = shell();
-        let mut cmd = CommandBuilder::new(&exe);
-        for a in &args {
-            cmd.arg(a);
-        }
-        cmd.cwd(cwd);
         cmd.env("TERM", "xterm-256color");
         let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
 

@@ -38,6 +38,9 @@ pub(super) struct RemotePending {
     pub(super) root: PathBuf,
     /// `user@host` for display.
     pub(super) label: String,
+    /// The full target — kept so the workspace can open further ssh
+    /// channels (the embedded terminal, B13.7).
+    pub(super) target: SshTarget,
 }
 
 impl PuppyApp {
@@ -56,8 +59,9 @@ impl PuppyApp {
         let (tx, rx) = std::sync::mpsc::channel();
         let waker = crate::waker::egui_waker(ctx);
         let path = remote_path.clone();
+        let worker_target = target.clone();
         std::thread::spawn(move || {
-            let result = CodePuppy::spawn_remote(waker.clone(), &target, Some(&path));
+            let result = CodePuppy::spawn_remote(waker.clone(), &worker_target, Some(&path));
             let _ = tx.send(result);
             waker.wake();
         });
@@ -65,6 +69,7 @@ impl PuppyApp {
             rx,
             root: PathBuf::from(remote_path),
             label,
+            target,
         });
     }
 
@@ -84,9 +89,17 @@ impl PuppyApp {
         let pending = self.remote_pending.take().expect("pending present");
         match result {
             Ok((backend, ev_rx, fs, git)) => {
-                let id = self
-                    .sup
-                    .adopt(pending.root, Some(pending.label), fs, git, backend, ev_rx);
+                let id = self.sup.adopt(
+                    pending.root,
+                    Some(crate::workspace::RemoteInfo {
+                        label: pending.label,
+                        target: pending.target,
+                    }),
+                    fs,
+                    git,
+                    backend,
+                    ev_rx,
+                );
                 if let Some(dock) = self.dock.as_mut() {
                     dock.push_to_focused_leaf(Tab::Chat(id));
                 }

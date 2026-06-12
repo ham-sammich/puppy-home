@@ -200,10 +200,11 @@ pub struct Workspace {
     /// remote impl routes these over the sidecar protocol. The tree + editor
     /// go through this instead of calling `std::fs` directly.
     fs: Arc<dyn fs::WorkspaceFs>,
-    /// `Some("user@host")` when this workspace's sidecar runs on a remote host
-    /// over SSH. The chat works today; the file tree + git stay local-only
-    /// until the remote fs/git impls land, so we show a placeholder instead.
-    remote_label: Option<String>,
+    /// Present when this workspace's sidecar runs on a remote host over SSH:
+    /// the display label plus the full target (port/identity included), so
+    /// later transport channels — the embedded terminal — can be opened
+    /// against the same destination (B13.7).
+    remote: Option<RemoteInfo>,
     show_tree: bool,
     open_files: BTreeMap<PathBuf, FileBuffer>,
     editor_open: Vec<EditorItem>,
@@ -249,11 +250,36 @@ pub struct Workspace {
     show_terminal: bool,
 }
 
+/// A remote workspace's SSH origin: display label + the full target
+/// (port/identity included) for opening further channels (the terminal).
+#[derive(Debug, Clone)]
+pub struct RemoteInfo {
+    pub label: String,
+    pub target: crate::backend::ssh::SshTarget,
+}
+
 impl Workspace {
+    /// Spawn this workspace's shell: a local PTY shell, or — for remote
+    /// workspaces — interactive ssh into the remote root (B13.7). Shared by
+    /// both shells' terminal toggles.
+    pub(crate) fn spawn_shell(
+        &self,
+        waker: Arc<dyn crate::waker::UiWaker>,
+    ) -> Result<crate::terminal::Terminal, String> {
+        match &self.remote {
+            Some(r) => crate::terminal::Terminal::spawn_remote(
+                &r.target,
+                &self.root.to_string_lossy(),
+                waker,
+            ),
+            None => crate::terminal::Terminal::spawn(&self.root, waker),
+        }
+    }
+
     pub fn new(
         id: WorkspaceId,
         root: PathBuf,
-        remote_label: Option<String>,
+        remote: Option<RemoteInfo>,
         fs: Arc<dyn fs::WorkspaceFs>,
         git: Arc<dyn crate::git::WorkspaceGit>,
         backend: CodePuppy,
@@ -348,7 +374,7 @@ impl Workspace {
             git_repo: is_git_repo,
             git,
             fs,
-            remote_label,
+            remote,
             git_changes: Vec::new(),
             git_rx: None,
             git_refresh_at: Instant::now(),
@@ -384,7 +410,12 @@ impl Workspace {
     /// Number of file changes recorded so far (for tab badges).
     /// Is this workspace on a remote host (fs/git/sidecar over SSH)?
     pub fn is_remote(&self) -> bool {
-        self.remote_label.is_some()
+        self.remote.is_some()
+    }
+
+    /// The remote's display label (`user@host`), when remote.
+    pub fn remote_label(&self) -> Option<&str> {
+        self.remote.as_ref().map(|r| r.label.as_str())
     }
 
     pub fn diff_count(&self) -> usize {
@@ -614,7 +645,7 @@ impl Workspace {
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| new_root.to_string_lossy().into_owned());
-        if self.remote_label.is_none() {
+        if self.remote.is_none() {
             self.git = Arc::new(crate::git::LocalGit::new(new_root.clone()));
         }
         self.root = new_root;
@@ -669,7 +700,7 @@ impl Workspace {
         waker: &Arc<dyn crate::waker::UiWaker>,
     ) {
         if on && self.terminal.is_none() {
-            match crate::terminal::Terminal::spawn(&self.root, waker.clone()) {
+            match self.spawn_shell(waker.clone()) {
                 Ok(t) => self.terminal = Some(t),
                 Err(e) => {
                     self.transcript

@@ -47,6 +47,9 @@ pub(crate) struct RemotePending {
     root: PathBuf,
     /// `user@host` for display.
     label: String,
+    /// The full target — kept so the workspace can open further ssh
+    /// channels (the embedded terminal, B13.7).
+    target: SshTarget,
 }
 
 /// The remote folder browser, when open (egui `DirBrowser`).
@@ -207,8 +210,9 @@ impl RootView {
         let (tx, rx) = std::sync::mpsc::channel();
         let waker = self.waker.clone();
         let path = remote_path.clone();
+        let worker_target = target.clone();
         std::thread::spawn(move || {
-            let result = CodePuppy::spawn_remote(waker.clone(), &target, Some(&path));
+            let result = CodePuppy::spawn_remote(waker.clone(), &worker_target, Some(&path));
             let _ = tx.send(result);
             waker.wake();
         });
@@ -216,6 +220,7 @@ impl RootView {
             rx,
             root: PathBuf::from(remote_path),
             label,
+            target,
         });
     }
 
@@ -258,7 +263,10 @@ impl RootView {
                 let accent = self.tokens.accent;
                 let id = self.supervisor.adopt(
                     pending.root,
-                    Some(pending.label.clone()),
+                    Some(crate::workspace::RemoteInfo {
+                        label: pending.label.clone(),
+                        target: pending.target.clone(),
+                    }),
                     fs,
                     git,
                     backend,

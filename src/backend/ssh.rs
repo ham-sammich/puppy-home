@@ -125,6 +125,40 @@ impl SshTarget {
         cmd
     }
 
+    /// Argv (after `ssh`) for an INTERACTIVE terminal session on this target,
+    /// landing in `remote_root` and exec'ing the login shell (the remote
+    /// workspace's embedded terminal, B13.7).
+    ///
+    /// Deliberately NOT `base_ssh` conventions: the terminal runs on a real
+    /// PTY, so `-t` allocates a remote tty and there is no `BatchMode=yes` —
+    /// password/2FA prompts can flow through the terminal, unlike the
+    /// protocol channels which must fail fast instead of hanging.
+    /// Host-key and timeout conventions match the sidecar connection.
+    pub fn terminal_args(&self, remote_root: &str) -> Vec<String> {
+        let mut args = vec![
+            "-t".to_string(),
+            "-o".to_string(),
+            "ConnectTimeout=10".to_string(),
+            "-o".to_string(),
+            "StrictHostKeyChecking=accept-new".to_string(),
+        ];
+        if let Some(port) = self.port {
+            args.push("-p".to_string());
+            args.push(port.to_string());
+        }
+        if let Some(id) = &self.identity {
+            args.push("-i".to_string());
+            args.push(id.to_string_lossy().into_owned());
+        }
+        args.push(self.destination());
+        args.push("--".to_string());
+        args.push(format!(
+            "cd {} && exec \"${{SHELL:-/bin/sh}}\" -l",
+            sh_quote(remote_root)
+        ));
+        args
+    }
+
     /// The `ssh` call that lists a remote directory for the folder picker.
     /// `dir` of `None` means the login home. stdout is [`parse_listing`]-shaped.
     pub fn list_dir_command(&self, dir: Option<&str>) -> Command {
@@ -450,6 +484,42 @@ mod tests {
     fn launch_line_without_cwd() {
         let line = remote_launch_line(None, "python3");
         assert_eq!(line, "exec python3 \"$HOME/.cache/puppy-home/sidecar.py\"");
+    }
+
+    #[test]
+    fn terminal_args_interactive_shape() {
+        let mut t = SshTarget::parse("alice@host:2222").unwrap();
+        t.identity = Some(PathBuf::from("/keys/id_ed25519"));
+        let a = t.terminal_args("/srv/my repo");
+        // Interactive: tty forced, NO BatchMode (the PTY can take a password).
+        assert_eq!(a[0], "-t");
+        assert!(!a.iter().any(|s| s.contains("BatchMode")));
+        // Sidecar-matching conventions.
+        assert!(
+            a.windows(2)
+                .any(|w| w == ["-o", "StrictHostKeyChecking=accept-new"])
+        );
+        assert!(a.windows(2).any(|w| w == ["-o", "ConnectTimeout=10"]));
+        assert!(a.windows(2).any(|w| w == ["-p", "2222"]));
+        assert!(a.windows(2).any(|w| w == ["-i", "/keys/id_ed25519"]));
+        // Destination then the remote line: quoted cd + login-shell exec.
+        let di = a.iter().position(|s| s == "alice@host").unwrap();
+        assert_eq!(a[di + 1], "--");
+        assert_eq!(
+            a[di + 2],
+            "cd '/srv/my repo' && exec \"${SHELL:-/bin/sh}\" -l"
+        );
+    }
+
+    #[test]
+    fn terminal_args_minimal_target() {
+        let a = SshTarget::parse("devbox").unwrap().terminal_args("/srv");
+        assert!(!a.iter().any(|s| s == "-p" || s == "-i"));
+        assert!(a.contains(&"devbox".to_string()));
+        assert_eq!(
+            a.last().unwrap(),
+            "cd '/srv' && exec \"${SHELL:-/bin/sh}\" -l"
+        );
     }
 
     #[test]

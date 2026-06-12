@@ -331,12 +331,35 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       toolbar into the dashboard body (right-aligned above the fleet).
       `075ae57`
 
+- [x] B13.7 remote workspace terminal opened a LOCAL shell (BOTH shells —
+      egui's spawn_terminal had the identical `Terminal::spawn(&self.root)`
+      gap, no remote gating anywhere). Fixed in the shared layer:
+      Workspace::spawn_shell picks local PTY shell vs interactive
+      `ssh -t <dest> -- cd '<root>' && exec "${SHELL:-/bin/sh}" -l`
+      (SshTarget::terminal_args: sidecar host-key/timeout conventions,
+      port/identity flags, deliberately NO BatchMode — the PTY can take
+      password/2FA prompts; ssh exit = the normal dead-shell notice).
+      Root cause beyond the spawn: adopt only kept `user@host` for
+      display — port/identity were dropped; Workspace now stores
+      RemoteInfo { label, target } and both connect flows pass it
+      through. VALIDATION: arg-shape unit tests + local-terminal probe
+      green; real remote terminal needs a reachable host — flagged for
+      human QA alongside E4. `<hash below>`
+
       SYNC QUEUE (phase-end batch): sidecar/sidecar.py (picker
       intercepts + cwd event + open flags), backend/mod.rs (Wire/UiEvent
       Agents/Models open + Cwd), workspace/events.rs + mod.rs
       (show_agent_picker/show_model_picker one-shots, set_root).
       egui-side consumption of the new one-shots is egui UI work, not
       queued here.
+      B13.7 additions: terminal.rs (spawn_cmd split + spawn_remote),
+      backend/ssh.rs (terminal_args + tests), workspace/mod.rs
+      (RemoteInfo, spawn_shell, remote_label()), workspace/view.rs +
+      supervisor.rs (adopt signature) — NOTE supervisor.rs and the
+      egui branch's own app/remote.rs are in the known-divergent set:
+      the redesign/egui port of the RemoteInfo passthrough is a small
+      manual patch at sync time, not a blind file copy. Chose to queue
+      rather than sync immediately for that reason.
 
       DOCUMENTED GAPS: remote workspaces keep their root-bound ssh git
       runner after a remote /cd (tree/title follow; git rebind needs a
