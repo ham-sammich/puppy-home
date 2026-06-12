@@ -17,6 +17,8 @@ pub enum InstanceStatus {
     Thinking,
     ToolCalling,
     WaitingForInput,
+    /// Mid-turn hold: the PauseController gate is closed (resume to continue).
+    Paused,
     Dead,
 }
 
@@ -29,6 +31,7 @@ impl InstanceStatus {
             InstanceStatus::Thinking => "thinking",
             InstanceStatus::ToolCalling => "tool",
             InstanceStatus::WaitingForInput => "waiting for input",
+            InstanceStatus::Paused => "paused",
             InstanceStatus::Dead => "dead",
         }
     }
@@ -41,6 +44,7 @@ impl InstanceStatus {
             InstanceStatus::Thinking => egui::Color32::from_rgb(116, 208, 216),
             InstanceStatus::ToolCalling => egui::Color32::from_rgb(232, 192, 106),
             InstanceStatus::WaitingForInput => egui::Color32::from_rgb(215, 156, 220),
+            InstanceStatus::Paused => egui::Color32::from_rgb(220, 190, 110),
             InstanceStatus::Dead => egui::Color32::from_rgb(240, 128, 128),
         }
     }

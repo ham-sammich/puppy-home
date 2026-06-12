@@ -336,6 +336,13 @@ class Bridge:
         self.pending_asks: dict = {}
         # The currently-running agent turn (for cancellation).
         self.current_run = None
+        # Control-surface bookkeeping surfaced in `status` payloads (drives the
+        # redesign's agent cards): the last user prompt + cumulative REAL
+        # provider-reported token usage (accumulated per turn from
+        # result.usage()). Code Puppy has no $-cost ledger, so dollars stay
+        # None until the library grows one — see emit_status.
+        self.last_prompt = ""
+        self.total_tokens = 0
         self._stop = threading.Event()
 
     # --- initialization ----------------------------------------------------
@@ -474,9 +481,10 @@ class Bridge:
         self.emit_models()
 
     def emit_status(self) -> None:
-        """Snapshot live run metrics: conversation stats + concurrent sub-agents.
+        """Snapshot live run metrics: conversation stats, concurrent sub-agents,
+        and the control surface (paused / queued steers / last prompt / tokens).
 
-        Both sources are best-effort — Code Puppy only tracks sub-agents that
+        Every source is best-effort — Code Puppy only tracks sub-agents that
         were spawned via ``invoke_agent``; an idle session reports neither.
         """
         stats = ""
@@ -491,6 +499,24 @@ class Bridge:
         try:
             from code_puppy import status_display
             token_rate = float(getattr(status_display, "CURRENT_TOKEN_RATE", 0.0) or 0.0)
+        except Exception:
+            pass
+
+        # Control surface: pause flag + queued-steer count from the live
+        # PauseController. There is no public count accessor (only has_pending
+        # booleans), so peek at the queues under the controller's own lock and
+        # fall back to a 0/1 from the boolean API if the internals ever move.
+        paused = False
+        queued = 0
+        try:
+            from code_puppy.messaging.pause_controller import get_pause_controller
+            pc = get_pause_controller()
+            paused = bool(pc.is_paused())
+            try:
+                with pc._lock:
+                    queued = len(pc._steer_queue_now) + len(pc._steer_queue_queued)
+            except Exception:
+                queued = 1 if pc.has_pending_steer() else 0
         except Exception:
             pass
 
@@ -515,6 +541,14 @@ class Bridge:
             "stats": stats,
             "token_rate": token_rate,
             "sub_agents": sub_agents,
+            "paused": paused,
+            "queued": queued,
+            "last_prompt": self.last_prompt,
+            "total_tokens": self.total_tokens,
+            # Honest gap: Code Puppy exposes no offline per-model pricing or
+            # cost ledger (models.dev pricing needs a network fetch), so we
+            # don't fabricate dollars. null = "unknown", not "free".
+            "cost": None,
         })
 
     # --- MCP servers (Code Puppy's MCPManager) ------------------------------
@@ -1580,6 +1614,7 @@ class Bridge:
 
     async def handle_prompt(self, msg_id: int, text: str, images=None) -> None:
         self.current_run = asyncio.current_task()
+        self.last_prompt = text
         try:
             self._sanitize_history()  # never send an orphaned tool_use/result pair
             notes = [n for n in (self._pack_context(), self._browser_context(text)) if n]
@@ -1601,6 +1636,7 @@ class Bridge:
             output = getattr(result, "output", None)
             if output is None:
                 output = str(result)
+            self._accumulate_usage(result)
             send({"event": "result", "id": msg_id, "output": output})
         except asyncio.CancelledError:
             send({"event": "error", "id": msg_id, "message": "cancelled by user"})
@@ -1615,6 +1651,28 @@ class Bridge:
             self.current_run = None
             # Save the conversation after every turn (success or cancel), like the CLI.
             self._autosave()
+
+    def _accumulate_usage(self, result) -> None:
+        """Fold a finished turn's provider-reported token usage into the
+        cumulative total. Field names vary across pydantic-ai versions
+        (request/response vs input/output), so probe both. Best-effort."""
+        try:
+            usage_fn = getattr(result, "usage", None)
+            usage = usage_fn() if callable(usage_fn) else None
+            if usage is None:
+                return
+            total = getattr(usage, "total_tokens", None)
+            if total is None:
+                inp = getattr(usage, "input_tokens", None)
+                if inp is None:
+                    inp = getattr(usage, "request_tokens", 0)
+                out = getattr(usage, "output_tokens", None)
+                if out is None:
+                    out = getattr(usage, "response_tokens", 0)
+                total = (inp or 0) + (out or 0)
+            self.total_tokens += int(total or 0)
+        except Exception:
+            log("usage accounting failed:\n" + traceback.format_exc())
 
     def run_slash_command(self, msg_id: int, text: str) -> None:
         """Run a Code Puppy slash command via its dispatcher, off the loop.

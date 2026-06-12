@@ -339,6 +339,17 @@ pub enum UiEvent {
         stats: String,
         token_rate: f64,
         sub_agents: Vec<SubAgentInfo>,
+        /// The running turn is held at the PauseController gate.
+        paused: bool,
+        /// Steering messages waiting to be drained (now + queue mode).
+        queued: u64,
+        /// The last user prompt sent to the agent (for the redesign's cards).
+        last_prompt: String,
+        /// Cumulative provider-reported tokens across all turns this session.
+        total_tokens: u64,
+        /// Cumulative $ cost — `None` until Code Puppy grows a cost ledger
+        /// (it exposes no offline pricing today; null means unknown, not free).
+        cost: Option<f64>,
     },
     /// The running turn was paused (`true`) or resumed (`false`).
     Paused(bool),
@@ -466,6 +477,16 @@ enum Wire {
         token_rate: f64,
         #[serde(default)]
         sub_agents: Vec<SubAgentInfo>,
+        #[serde(default)]
+        paused: bool,
+        #[serde(default)]
+        queued: u64,
+        #[serde(default)]
+        last_prompt: String,
+        #[serde(default)]
+        total_tokens: u64,
+        #[serde(default)]
+        cost: Option<f64>,
     },
     Paused {
         #[serde(default)]
@@ -595,10 +616,20 @@ impl From<Wire> for UiEvent {
                 stats,
                 token_rate,
                 sub_agents,
+                paused,
+                queued,
+                last_prompt,
+                total_tokens,
+                cost,
             } => UiEvent::Status {
                 stats,
                 token_rate,
                 sub_agents,
+                paused,
+                queued,
+                last_prompt,
+                total_tokens,
+                cost,
             },
             Wire::Paused { paused } => UiEvent::Paused(paused),
             Wire::Sessions {
@@ -1268,11 +1299,46 @@ mod tests {
                 stats,
                 token_rate,
                 sub_agents,
+                // A pre-control-surface sidecar omits these: defaults apply.
+                paused,
+                queued,
+                last_prompt,
+                total_tokens,
+                cost,
             } => {
                 assert_eq!(stats, "3 msgs");
                 assert!((token_rate - 12.5).abs() < f64::EPSILON);
                 assert_eq!(sub_agents.len(), 1);
                 assert_eq!(sub_agents[0].agent_name, "helper");
+                assert!(!paused);
+                assert_eq!(queued, 0);
+                assert_eq!(last_prompt, "");
+                assert_eq!(total_tokens, 0);
+                assert_eq!(cost, None);
+            }
+            other => panic!("expected Status, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn status_event_with_control_surface_fields() {
+        let ev = decode(
+            r#"{"event":"status","stats":"","token_rate":0.0,"sub_agents":[],"paused":true,"queued":2,"last_prompt":"fix the tests","total_tokens":12345,"cost":null}"#,
+        );
+        match ev {
+            UiEvent::Status {
+                paused,
+                queued,
+                last_prompt,
+                total_tokens,
+                cost,
+                ..
+            } => {
+                assert!(paused);
+                assert_eq!(queued, 2);
+                assert_eq!(last_prompt, "fix the tests");
+                assert_eq!(total_tokens, 12345);
+                assert_eq!(cost, None);
             }
             other => panic!("expected Status, got {other:?}"),
         }

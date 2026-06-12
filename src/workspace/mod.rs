@@ -131,6 +131,14 @@ pub struct Workspace {
     pub run_stats: String,
     pub token_rate: f64,
     pub sub_agents: Vec<crate::backend::SubAgentInfo>,
+    /// The last user prompt sent this session (for the redesign's agent cards).
+    pub last_prompt: String,
+    /// Steering messages queued sidecar-side, waiting to be drained.
+    pub queued_steers: u64,
+    /// Cumulative provider-reported tokens across all turns this session.
+    pub total_tokens: u64,
+    /// Cumulative $ cost; `None` until Code Puppy exposes a cost ledger.
+    pub cost: Option<f64>,
     /// MCP server catalog (global Code Puppy config, fetched via this
     /// workspace's sidecar). `None` until the first `mcp_servers` event.
     pub mcp_servers: Option<Vec<crate::backend::McpServerInfo>>,
@@ -296,6 +304,10 @@ impl Workspace {
             run_stats: String::new(),
             token_rate: 0.0,
             sub_agents: Vec::new(),
+            last_prompt: String::new(),
+            queued_steers: 0,
+            total_tokens: 0,
+            cost: None,
             mcp_servers: None,
             mcp_generation: 0,
             skills: None,
@@ -359,6 +371,13 @@ impl Workspace {
     /// Whether the sidecar has announced `ready` (and hasn't died since).
     pub fn is_ready(&self) -> bool {
         self.ready && self.status != InstanceStatus::Dead
+    }
+
+    /// Whether the running turn is held at the pause gate. Mirrors the private
+    /// flag for views outside this module (the redesign's dashboard cards).
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn is_paused(&self) -> bool {
+        self.paused
     }
 
     /// Resolve a (possibly relative) diff path against the workspace root.

@@ -140,12 +140,22 @@ impl Workspace {
                 stats,
                 token_rate,
                 sub_agents,
+                paused,
+                queued,
+                last_prompt,
+                total_tokens,
+                cost,
             } => {
                 self.run_stats = stats;
                 self.token_rate = token_rate;
                 self.sub_agents = sub_agents;
+                self.queued_steers = queued;
+                self.last_prompt = last_prompt;
+                self.total_tokens = total_tokens;
+                self.cost = cost;
+                self.sync_paused(paused);
             }
-            UiEvent::Paused(paused) => self.paused = paused,
+            UiEvent::Paused(paused) => self.sync_paused(paused),
             UiEvent::Sessions {
                 items,
                 current,
@@ -231,6 +241,18 @@ impl Workspace {
     pub(crate) fn set_status(&mut self, status: InstanceStatus) {
         if self.status != InstanceStatus::Dead {
             self.status = status;
+        }
+    }
+
+    /// Fold a confirmed pause/resume signal into state: the flag plus the
+    /// derived status — `Paused` only while a turn is actually running, and
+    /// resuming restores `Running` (the next stream event refines it).
+    pub(crate) fn sync_paused(&mut self, paused: bool) {
+        self.paused = paused;
+        if paused && self.running {
+            self.set_status(InstanceStatus::Paused);
+        } else if !paused && self.status == InstanceStatus::Paused {
+            self.set_status(InstanceStatus::Running);
         }
     }
 
