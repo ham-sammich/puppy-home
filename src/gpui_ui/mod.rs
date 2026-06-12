@@ -15,6 +15,7 @@ pub mod actions;
 pub mod assets;
 pub mod chat;
 pub mod dashboard;
+pub mod den;
 pub mod input;
 pub mod markdown;
 pub mod tokens;
@@ -35,13 +36,23 @@ use gpui::{
 
 use crate::session::{self, ComposerStyle, DashboardViewMode};
 use crate::supervisor::Supervisor;
+use crate::waker::UiWaker;
 use crate::workspace::WorkspaceId;
 pub use actions::{ChatPop, DashAction};
 use dashboard::CardInput;
+use den::{DenConn, DenPop, DenSeg, TaskTarget};
 use input::{ChatInput, InputEvent};
 use tokens::Tokens;
 use waker::GpuiWaker;
 use widgets::{Toast, alpha};
+
+/// Which top-level screen the window shows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Screen {
+    Dashboard,
+    Chat(WorkspaceId),
+    Den,
+}
 
 /// Drain cadence while at least one workspace is mid-turn.
 const DRAIN_BUSY: Duration = Duration::from_millis(250);
@@ -85,8 +96,7 @@ pub struct RootView {
     model_popover: Option<WorkspaceId>,
     input_focus: FocusHandle,
     // -- chat state --
-    /// `None` = Dashboard; `Some(id)` = that workspace's chat.
-    screen: Option<WorkspaceId>,
+    screen: Screen,
     composer_style: ComposerStyle,
     chat_inputs: HashMap<WorkspaceId, Entity<ChatInput>>,
     chat_subs: Vec<gpui::Subscription>,
@@ -107,12 +117,33 @@ pub struct RootView {
     answer_input: Option<Entity<ChatInput>>,
     /// Which (workspace, ask-question) the answer input currently feeds.
     other_target: Option<(WorkspaceId, usize)>,
+    // -- den state --
+    /// Shared waker (PackClient connections need it).
+    waker: std::sync::Arc<dyn UiWaker>,
+    den: Option<DenConn>,
+    den_seg: DenSeg,
+    den_pop: Option<DenPop>,
+    den_feed_input: Option<Entity<ChatInput>>,
+    den_task_input: Option<Entity<ChatInput>>,
+    den_task_target: Option<TaskTarget>,
+    den_show_all_feed: bool,
+    den_join_addr: Option<Entity<ChatInput>>,
+    den_join_room: Option<Entity<ChatInput>>,
+    den_join_user: Option<Entity<ChatInput>>,
+    den_join_error: Option<String>,
+    den_roster_at: Option<Instant>,
+    den_roster_last: String,
+    /// Presence heuristic inputs (unfocused OR >5min since interaction).
+    window_active: bool,
+    last_interaction: Instant,
+    presence_idle: bool,
 }
 
 impl RootView {
     fn new(cx: &mut Context<Self>) -> Self {
         let (waker, wake_rx) = GpuiWaker::new();
-        let mut supervisor = Supervisor::new(waker);
+        let waker: std::sync::Arc<dyn UiWaker> = waker;
+        let mut supervisor = Supervisor::new(waker.clone());
         let mut last_error = None;
 
         if let Some(root) = std::env::var_os("PUPPY_GPUI_OPEN") {
@@ -136,7 +167,7 @@ impl RootView {
             card_input: None,
             model_popover: None,
             input_focus: cx.focus_handle(),
-            screen: None,
+            screen: Screen::Dashboard,
             composer_style: saved.composer_style,
             chat_inputs: HashMap::new(),
             chat_subs: Vec::new(),
@@ -149,6 +180,23 @@ impl RootView {
             probe_chat_screen: std::env::var("PUPPY_GPUI_SCREEN").as_deref() == Ok("chat"),
             answer_input: None,
             other_target: None,
+            waker,
+            den: None,
+            den_seg: DenSeg::default(),
+            den_pop: None,
+            den_feed_input: None,
+            den_task_input: None,
+            den_task_target: None,
+            den_show_all_feed: false,
+            den_join_addr: None,
+            den_join_room: None,
+            den_join_user: None,
+            den_join_error: None,
+            den_roster_at: None,
+            den_roster_last: String::new(),
+            window_active: true,
+            last_interaction: Instant::now(),
+            presence_idle: false,
         }
     }
 
@@ -235,6 +283,8 @@ impl RootView {
             loop {
                 let Ok(busy) = this.update(cx, |root, cx| {
                     root.supervisor.drain();
+                    root.pump_den();
+                    root.maybe_probe_den(cx);
                     root.maybe_send_probe_prompt();
                     root.maybe_probe_chat_screen(cx);
                     root.ensure_answer_input_if_needed(cx);
@@ -325,10 +375,23 @@ impl RootView {
 
     /// One-line fleet summary for the PUPPY_GPUI_PROBE log.
     fn probe_line(&self) -> String {
+        let den_part = self.den.as_ref().map(|d| {
+            format!(
+                "den[{} alive={} members={} roster={} feed={} tasks={} plans={}]",
+                d.room,
+                d.alive,
+                d.state.members.len(),
+                d.state.roster.len(),
+                d.state.feed.len(),
+                d.state.tasks.len(),
+                d.state.plans.len()
+            )
+        });
         if self.supervisor.is_empty() {
-            return "no workspaces".to_string();
+            return den_part.unwrap_or_else(|| "no workspaces".to_string());
         }
-        self.supervisor
+        let mut line = self
+            .supervisor
             .iter()
             .map(|w| {
                 format!(
@@ -341,7 +404,12 @@ impl RootView {
                 )
             })
             .collect::<Vec<_>>()
-            .join(" | ")
+            .join(" | ");
+        if let Some(d) = den_part {
+            line.push_str(" | ");
+            line.push_str(&d);
+        }
+        line
     }
 
     /// Native folder picker → spawn a sidecar for the chosen root.
@@ -414,6 +482,27 @@ impl RootView {
             .child(
                 widgets::btn(
                     t,
+                    &if let Some(den_conn) = &self.den {
+                        format!(
+                            "\u{1f43e} {} \u{b7} {}",
+                            crate::pack::DEN_LABEL,
+                            den_conn.room
+                        )
+                    } else {
+                        format!("\u{1f43e} Join {}", crate::pack::DEN_LABEL)
+                    },
+                )
+                .id("den-toolbar")
+                .when(self.den.is_some(), |d| {
+                    d.border_color(alpha(self.tokens.run, 0.6))
+                })
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.dispatch(DashAction::Den(den::DenAction::Show), cx)
+                })),
+            )
+            .child(
+                widgets::btn(
+                    t,
                     if self.reduce_motion {
                         "Motion: off"
                     } else {
@@ -438,6 +527,9 @@ impl Render for RootView {
         let entity = cx.entity();
         let puppy = self.puppy_name();
 
+        // Presence heuristic input: is the window focused right now?
+        self.window_active = window.is_window_active();
+
         // One-shot: focus the composer when a chat was just opened.
         if let Some(id) = self.pending_focus.take()
             && let Some(input) = self.chat_inputs.get(&id)
@@ -446,10 +538,10 @@ impl Render for RootView {
         }
 
         // A closed workspace can leave `screen` dangling — fall back to dash.
-        if let Some(id) = self.screen
+        if let Screen::Chat(id) = self.screen
             && self.supervisor.get(id).is_none()
         {
-            self.screen = None;
+            self.screen = Screen::Dashboard;
         }
 
         let tabs: Vec<(WorkspaceId, String, Rgba)> = self
@@ -463,10 +555,22 @@ impl Render for RootView {
                 )
             })
             .collect();
-        let strip = chat::tab_strip(&t, tabs, self.screen, &entity);
+        let active_chat = match self.screen {
+            Screen::Chat(id) => Some(id),
+            _ => None,
+        };
+        let strip = chat::tab_strip(
+            &t,
+            tabs,
+            active_chat,
+            self.den.as_ref().map(|d| (d.room.clone(), d.alive)),
+            self.screen == Screen::Den,
+            &entity,
+        );
 
         let body: gpui::AnyElement = match self.screen {
-            Some(id) => {
+            Screen::Den => self.den_body(cx),
+            Screen::Chat(id) => {
                 let ws = self.supervisor.get(id).expect("validated above");
                 let input = self.chat_inputs.get(&id).expect("created on open").clone();
                 chat::chat_screen(&chat::ChatArgs {
@@ -489,7 +593,7 @@ impl Render for RootView {
                         .map(|(_, qi)| qi),
                 })
             }
-            None => self.dashboard_body(cx),
+            Screen::Dashboard => self.dashboard_body(cx),
         };
 
         div()

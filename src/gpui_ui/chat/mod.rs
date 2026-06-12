@@ -292,14 +292,17 @@ fn changes_panel(args: &ChatArgs) -> AnyElement {
         .into_any_element()
 }
 
-/// The tab strip: Dashboard + one tab per workspace (status dot, name, close).
+/// The tab strip: Dashboard + one tab per workspace (status dot, name,
+/// close) + the Den tab while joined.
 pub fn tab_strip(
     t: &Tokens,
     tabs: Vec<(crate::workspace::WorkspaceId, String, gpui::Rgba)>,
     active_chat: Option<crate::workspace::WorkspaceId>,
+    den: Option<(String, bool)>,
+    den_active: bool,
     root: &Entity<RootView>,
 ) -> AnyElement {
-    let on_dash = active_chat.is_none();
+    let on_dash = active_chat.is_none() && !den_active;
     let dash_tab = {
         let root = root.clone();
         div()
@@ -367,6 +370,58 @@ pub fn tab_strip(
                 )
                 .on_click(move |_, _, cx| {
                     root_open.update(cx, |r, cx| r.dispatch(DashAction::Open(id), cx));
+                })
+        }))
+        .children(den.map(|(room, alive)| {
+            let root_show = root.clone();
+            let root_leave = root.clone();
+            div()
+                .id("tab-den")
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .px_2p5()
+                .py_1()
+                .rounded(px(8.))
+                .text_size(px(12.))
+                .cursor_pointer()
+                .when(den_active, |d| {
+                    d.bg(t.card)
+                        .text_color(t.text)
+                        .border_1()
+                        .border_color(t.line_soft)
+                })
+                .when(!den_active, |d| d.text_color(t.weak))
+                .child(
+                    div()
+                        .size(px(7.))
+                        .rounded_full()
+                        .bg(if alive { t.run } else { t.error }),
+                )
+                .child(format!(
+                    "\u{1f43e} {} \u{b7} {room}",
+                    crate::pack::DEN_LABEL
+                ))
+                .child(
+                    div()
+                        .id("tab-den-close")
+                        .px_0p5()
+                        .text_color(t.dim)
+                        .hover(|d| d.text_color(t.error))
+                        .child("\u{2715}")
+                        .on_click(move |_, _, cx| {
+                            root_leave.update(cx, |r, cx| {
+                                r.dispatch(
+                                    DashAction::Den(crate::gpui_ui::den::DenAction::Leave),
+                                    cx,
+                                )
+                            });
+                        }),
+                )
+                .on_click(move |_, _, cx| {
+                    root_show.update(cx, |r, cx| {
+                        r.dispatch(DashAction::Den(crate::gpui_ui::den::DenAction::Show), cx)
+                    });
                 })
         }))
         .into_any_element()

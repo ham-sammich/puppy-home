@@ -294,6 +294,61 @@ are chrome around the ONE ChatInput entity; the gear popover persists
   is ignored.
 - No soft wrap in the input (above).
 
+## Task 2.4 — Needs-you answers + The Den
+
+### Answer UI (the 2.3 carry-over)
+One answer pipeline, both frontends: `ask_submit`/`ask_cancel` were
+extracted out of the egui modal into frontend-agnostic `Workspace` methods
+(the egui render path now calls them), plus accessors/mutators for both
+blocking shapes — `ask_user_question` (`ask_state` / `ask_toggle_option` /
+`ask_set_other`) and plain input/confirm/select prompts (`pending_request` /
+`pending_choose` / `pending_answer_text`). The GPUI side renders an answer
+panel between transcript and composer (wait-pink frame): option chips with
+radio/checkbox semantics, a free-text Other row sharing ONE `ChatInput`,
+Submit/Cancel; input prompts get a text row (Enter sends); confirm/select
+are click-to-answer. Dashboard `Answer \u{2192}` routes to the chat where the
+panel sits above the composer.
+
+### Den architecture
+- **`DenConn`** on the root: `PackClient` + event receiver + the shared
+  `DenState` mirror (`src/pack.rs`, untouched) + locally-derived per-
+  `(user, dir)` tok/s `SparkRing`s fed by successive roster broadcasts
+  (pruned when members leave — bounded memory).
+- **Pump + broadcasts ride the drain loop**: `pump_den()` folds relay
+  events each tick, then (a) roster broadcast every 2.5s, **change-gated**
+  (`format!("{agents:?}")` signature compare — exact egui `pack_sync`
+  parity), (b) presence = window unfocused (`window.is_window_active()`
+  captured in render) OR >5min since the last `dispatch` — **sent only on
+  state flips**. PackClient's reader thread wakes the UI through the same
+  `GpuiWaker`, so relay traffic renders event-driven.
+- **Screen routing** grew an enum: `Screen::{Dashboard, Chat(id), Den}`;
+  the Den tab appears in the strip while joined (green/red liveness dot,
+  \u{2715} = Leave), and the toolbar button doubles as Join/Show.
+- **UI**: join form (3 ChatInputs, relay defaulting to `$PUPPY_RELAY` or
+  `127.0.0.1:9220`), header (motion-gated 1.6s LIVE blink, room-code chip
+  click=copy+toast, "N people \u{b7} M puppies \u{b7} working {project} together"
+  where {project} = most-common roster dir, mono relay host, Invite copies
+  a shareable line, Leave), Roster/Board segmented, roster member groups
+  (owner-colored avatars, you/host tags, presence dots, compact RoomAgent
+  cards with sparkline + Open-own / Nudge\u{2192}`puppy_msg`), Board = shared-
+  plans strip (checklist parse `- [ ]`/`- [x]`, struck done rows, Share
+  picker over open workspace roots containing plans.md, Unshare) above the
+  4-column kanban (\u{ff0b} add per column, \u{22ef} menu \u{2192} Move/Assign-me/Unassign/
+  Retitle/Delete via typed ops — no drag-drop, like egui), feed (340px,
+  human/puppy-with-review-badge/system, owner colors, `flex_col_reverse`
+  bottom-pin, 150-entry tail + show older, ChatInput composer).
+- Probe: `PUPPY_GPUI_DEN=addr,room,user` joins at startup; the probe line
+  logs `den[room alive members roster feed tasks plans]` counts.
+
+### Den gaps vs the egui branch (honest)
+- No legacy `Activity` status broadcast (the egui app also feeds the old
+  member-list strings); GPUI sends roster + presence only.
+- No `.puppy/pack.json` breadcrumb sync (Tier-2 "[pack context]" prompt
+  injection) — egui-only for now; the relay protocol side is identical.
+- Plan cards render the first 8 checklist rows (no scroll-within-card).
+- Kanban id collisions possible in element ids if two cards share a dir
+  length (cosmetic hover-state only; relay ids are authoritative).
+
 ## Status (Task 2.1)
 
 - [x] Branch `redesign/gpui` forked from `0f00eed`.

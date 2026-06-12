@@ -11,7 +11,7 @@ use crate::session::{ComposerStyle, DashboardViewMode};
 use crate::workspace::WorkspaceId;
 
 use super::dashboard::{CardInput, InputKind};
-use super::{RootView, chat};
+use super::{RootView, Screen, chat, den};
 
 /// Which open chat popover (agent / model switcher, composer style gear).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,6 +69,8 @@ pub enum DashAction {
     PendingText(WorkspaceId),
     /// Enter pressed inside the shared answer input.
     AnswerEnter,
+    /// Den interactions (join/leave/feed/kanban/plans/...).
+    Den(den::DenAction),
 }
 
 impl RootView {
@@ -78,6 +80,8 @@ impl RootView {
 
     /// The single mutation funnel for every dashboard interaction.
     pub fn dispatch(&mut self, action: DashAction, cx: &mut Context<Self>) {
+        // Every dispatch is a user interaction (presence heuristic input).
+        self.last_interaction = std::time::Instant::now();
         let accent = self.tokens.accent;
         let (run, paused_c, error_c) = (self.tokens.run, self.tokens.paused, self.tokens.error);
         match action {
@@ -132,13 +136,13 @@ impl RootView {
             DashAction::ClosePopover => self.model_popover = None,
             DashAction::Open(id) => {
                 self.ensure_chat_input(id, cx);
-                self.screen = Some(id);
+                self.screen = Screen::Chat(id);
                 self.pending_focus = Some(id);
                 self.chat_pop = None;
             }
             DashAction::Changes(id) => {
                 self.ensure_chat_input(id, cx);
-                self.screen = Some(id);
+                self.screen = Screen::Chat(id);
                 self.pending_focus = Some(id);
                 self.toast(
                     "Changes are in the transcript chips \u{2014} a dedicated diff view is egui-only for now".to_string(),
@@ -146,15 +150,15 @@ impl RootView {
                 );
             }
             DashAction::ShowDashboard => {
-                self.screen = None;
+                self.screen = Screen::Dashboard;
                 self.chat_pop = None;
             }
             DashAction::CloseWorkspace(id) => {
                 let name = self.ws_name(id);
                 self.supervisor.close(id);
                 self.chat_inputs.remove(&id);
-                if self.screen == Some(id) {
-                    self.screen = None;
+                if self.screen == Screen::Chat(id) {
+                    self.screen = Screen::Dashboard;
                 }
                 self.toast(format!("Closed {name}"), accent);
             }
@@ -286,10 +290,14 @@ impl RootView {
                     input.update(cx, |i, cx| i.clear(cx));
                 }
             }
+            DashAction::Den(den_action) => {
+                self.dispatch_den(den_action, cx);
+                return;
+            }
             DashAction::AnswerEnter => {
                 // Route Enter in the answer input: input prompts submit
                 // directly; ask "Other" rows wait for the explicit Submit.
-                if let Some(id) = self.screen {
+                if let Screen::Chat(id) = self.screen {
                     let is_input_prompt = self
                         .supervisor
                         .get(id)

@@ -72,7 +72,8 @@ impl Tokens {
 
 /// Palette hex (`#rrggbb`) → gpui color, through the SAME lenient parser the
 /// egui side uses (mid-gray fallback; a theme typo must never crash the app).
-fn hex(s: &str) -> Rgba {
+/// Also used for the Den's relay-assigned owner colors.
+pub(crate) fn hex(s: &str) -> Rgba {
     let c = parse_hex(s).unwrap_or(eframe::egui::Color32::GRAY);
     gpui::rgb(((c.r() as u32) << 16) | ((c.g() as u32) << 8) | c.b() as u32)
 }
