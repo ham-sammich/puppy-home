@@ -347,9 +347,14 @@ pub enum UiEvent {
         last_prompt: String,
         /// Cumulative provider-reported tokens across all turns this session.
         total_tokens: u64,
-        /// Cumulative $ cost — `None` until Code Puppy grows a cost ledger
-        /// (it exposes no offline pricing today; null means unknown, not free).
+        /// Context-window utilization 0–100 (the sidecar delegates to Code
+        /// Puppy's own /context estimator); `None` when unknowable.
+        ctx_pct: Option<f64>,
+        /// Cumulative $ cost — priced from the library's bundled models.dev
+        /// snapshot; `None` means unknown (e.g. subscription models), not free.
         cost: Option<f64>,
+        /// `cost` is an estimate (dated snapshot, cache discounts unmodeled).
+        cost_estimated: bool,
     },
     /// The running turn was paused (`true`) or resumed (`false`).
     Paused(bool),
@@ -486,7 +491,11 @@ enum Wire {
         #[serde(default)]
         total_tokens: u64,
         #[serde(default)]
+        ctx_pct: Option<f64>,
+        #[serde(default)]
         cost: Option<f64>,
+        #[serde(default)]
+        cost_estimated: bool,
     },
     Paused {
         #[serde(default)]
@@ -620,7 +629,9 @@ impl From<Wire> for UiEvent {
                 queued,
                 last_prompt,
                 total_tokens,
+                ctx_pct,
                 cost,
+                cost_estimated,
             } => UiEvent::Status {
                 stats,
                 token_rate,
@@ -629,7 +640,9 @@ impl From<Wire> for UiEvent {
                 queued,
                 last_prompt,
                 total_tokens,
+                ctx_pct,
                 cost,
+                cost_estimated,
             },
             Wire::Paused { paused } => UiEvent::Paused(paused),
             Wire::Sessions {
@@ -1304,7 +1317,9 @@ mod tests {
                 queued,
                 last_prompt,
                 total_tokens,
+                ctx_pct,
                 cost,
+                cost_estimated,
             } => {
                 assert_eq!(stats, "3 msgs");
                 assert!((token_rate - 12.5).abs() < f64::EPSILON);
@@ -1314,7 +1329,10 @@ mod tests {
                 assert_eq!(queued, 0);
                 assert_eq!(last_prompt, "");
                 assert_eq!(total_tokens, 0);
+                // Phase-F fields also default cleanly on old payloads.
+                assert_eq!(ctx_pct, None);
                 assert_eq!(cost, None);
+                assert!(!cost_estimated);
             }
             other => panic!("expected Status, got {other:?}"),
         }
@@ -1339,6 +1357,49 @@ mod tests {
                 assert_eq!(last_prompt, "fix the tests");
                 assert_eq!(total_tokens, 12345);
                 assert_eq!(cost, None);
+            }
+            other => panic!("expected Status, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn status_event_with_ctx_and_estimated_cost() {
+        // Phase-F sidecar: ctx-% present, cost priced from the bundled
+        // models.dev snapshot with the estimate flag riding along.
+        let ev = decode(
+            r#"{"event":"status","stats":"","token_rate":0.0,"sub_agents":[],"total_tokens":50000,"ctx_pct":37.5,"cost":0.1234,"cost_estimated":true}"#,
+        );
+        match ev {
+            UiEvent::Status {
+                ctx_pct,
+                cost,
+                cost_estimated,
+                ..
+            } => {
+                assert_eq!(ctx_pct, Some(37.5));
+                assert_eq!(cost, Some(0.1234));
+                assert!(cost_estimated);
+            }
+            other => panic!("expected Status, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn status_event_ctx_pct_null_is_unknown_not_zero() {
+        // null must survive as None — a 0% bar would be a lie.
+        let ev = decode(
+            r#"{"event":"status","stats":"","token_rate":0.0,"sub_agents":[],"ctx_pct":null,"cost":null,"cost_estimated":true}"#,
+        );
+        match ev {
+            UiEvent::Status {
+                ctx_pct,
+                cost,
+                cost_estimated,
+                ..
+            } => {
+                assert_eq!(ctx_pct, None);
+                assert_eq!(cost, None);
+                assert!(cost_estimated);
             }
             other => panic!("expected Status, got {other:?}"),
         }

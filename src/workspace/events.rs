@@ -151,7 +151,9 @@ impl Workspace {
                 queued,
                 last_prompt,
                 total_tokens,
+                ctx_pct,
                 cost,
+                cost_estimated,
             } => {
                 self.run_stats = stats;
                 self.token_rate = token_rate;
@@ -160,7 +162,9 @@ impl Workspace {
                 self.queued_steers = queued;
                 self.last_prompt = last_prompt;
                 self.total_tokens = total_tokens;
+                self.ctx_pct = ctx_pct;
                 self.cost = cost;
+                self.cost_estimated = cost_estimated;
                 self.sync_paused(paused);
             }
             UiEvent::Paused(paused) => self.sync_paused(paused),
