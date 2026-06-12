@@ -55,8 +55,57 @@ pub(crate) fn overlay(
     inputs: &[Entity<ChatInput>],
     target_text: &str,
     path_text: &str,
+    push_busy: bool,
 ) -> AnyElement {
     let ready = !target_text.trim().is_empty() && !path_text.trim().is_empty();
+    let has_target = !target_text.trim().is_empty();
+
+    // "puppush": send local auth + model config to the host — usable
+    // before/with Connect. Two-step confirm (credentials), worker runs on
+    // a thread, result arrives as a toast.
+    let push_section: AnyElement = if push_busy {
+        small(&t, "Pushing auth + models\u{2026}", t.weak).into_any_element()
+    } else if st.push_confirm {
+        div()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .child(small(
+                &t,
+                format!(
+                    "Send your auth tokens + model config to {}?",
+                    target_text.trim()
+                ),
+                t.text,
+            ))
+            .child(
+                widgets::primary_btn(&t, "Push now")
+                    .id("remote-push-confirm")
+                    .on_click(ract(root, RemoteAction::PushCreds)),
+            )
+            .child(
+                widgets::btn(&t, "Cancel")
+                    .id("remote-push-cancel")
+                    .on_click(ract(root, RemoteAction::PushCredsCancel)),
+            )
+            .into_any_element()
+    } else {
+        div()
+            .child(if has_target {
+                widgets::btn(&t, "Push my auth + models to this host\u{2026}")
+                    .id("remote-push")
+                    .tooltip(widgets::text_tip(
+                        "Copy local code-puppy OAuth tokens (chmod 600) and model \
+                         config to the host's ~/.code_puppy"
+                            .into(),
+                    ))
+                    .on_click(ract(root, RemoteAction::PushCreds))
+                    .into_any_element()
+            } else {
+                disabled_btn(&t, "Push my auth + models to this host\u{2026}").into_any_element()
+            })
+            .into_any_element()
+    };
 
     // Hosts from ~/.ssh/config (clicking one fills the target field).
     let hosts: AnyElement = if st.hosts.is_empty() {
@@ -200,6 +249,7 @@ pub(crate) fn overlay(
             inputs.first(),
         ))
         .child(path_section)
+        .child(push_section)
         .children(st.error.clone().map(|e| small(&t, e, t.error)))
         .child(footer);
 

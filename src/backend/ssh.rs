@@ -125,6 +125,28 @@ impl SshTarget {
         cmd
     }
 
+    /// The `ssh` call that receives ONE pushed credential/config file on
+    /// stdin into the remote `~/.code_puppy` (the "puppush" feature; see
+    /// `backend::creds_push`). Same pipe-over-stdin convention as sidecar
+    /// provisioning; `BatchMode=yes` from `base_ssh` is right here — no
+    /// PTY, fail fast. Sensitive files get `chmod 600`, matching what
+    /// code_puppy's own auth plugins set locally.
+    pub fn push_file_command(&self, file_name: &str, sensitive: bool) -> Command {
+        debug_assert!(
+            !file_name.contains(['/', '\'', '"', ' ']),
+            "manifest names are static and shell-safe"
+        );
+        let dir = "\"$HOME/.code_puppy\"";
+        let dest = format!("\"$HOME/.code_puppy/{file_name}\"");
+        let mut line = format!("mkdir -p {dir} && cat > {dest}");
+        if sensitive {
+            line.push_str(&format!(" && chmod 600 {dest}"));
+        }
+        let mut cmd = self.base_ssh();
+        cmd.arg("--").arg(line);
+        cmd
+    }
+
     /// Argv (after `ssh`) for an INTERACTIVE terminal session on this target,
     /// landing in `remote_root` and exec'ing the login shell (the remote
     /// workspace's embedded terminal, B13.7).
@@ -484,6 +506,26 @@ mod tests {
     fn launch_line_without_cwd() {
         let line = remote_launch_line(None, "python3");
         assert_eq!(line, "exec python3 \"$HOME/.cache/puppy-home/sidecar.py\"");
+    }
+
+    #[test]
+    fn push_file_command_pipes_and_chmods_sensitive() {
+        let t = SshTarget::parse("devbox").unwrap();
+        let a = args(&t.push_file_command("claude_code_oauth.json", true));
+        // Protocol-channel conventions: BatchMode fail-fast (no PTY here).
+        assert!(a.windows(2).any(|w| w == ["-o", "BatchMode=yes"]));
+        let remote = a.last().unwrap();
+        assert_eq!(
+            remote,
+            "mkdir -p \"$HOME/.code_puppy\" \
+             && cat > \"$HOME/.code_puppy/claude_code_oauth.json\" \
+             && chmod 600 \"$HOME/.code_puppy/claude_code_oauth.json\""
+        );
+        // Plain config: no chmod.
+        let a = args(&t.push_file_command("claude_models.json", false));
+        let remote = a.last().unwrap();
+        assert!(remote.ends_with("cat > \"$HOME/.code_puppy/claude_models.json\""));
+        assert!(!remote.contains("chmod"));
     }
 
     #[test]

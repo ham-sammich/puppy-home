@@ -85,6 +85,9 @@ pub enum DashAction {
     RemoveImage(WorkspaceId, usize),
     /// `+ New chat`: /clear machinery (transcript wipe + fresh session).
     NewChat(WorkspaceId),
+    /// Workspace-toolbar "push creds" for a REMOTE workspace: push local
+    /// auth + model config to its host (two-step armed confirm).
+    PushCreds(WorkspaceId),
     ToggleLogs(WorkspaceId),
     OpenSessions(WorkspaceId),
     CloseSessions,
@@ -465,6 +468,28 @@ impl RootView {
                 if !self.logs_open.remove(&id) {
                     self.logs_open.insert(id);
                 }
+            }
+            DashAction::PushCreds(id) => {
+                if self.creds_pending.is_some() {
+                    return; // one push at a time
+                }
+                // Two-step: first click arms, second sends (credentials).
+                if self.creds_confirm != Some(id) {
+                    self.creds_confirm = Some(id);
+                    return;
+                }
+                self.creds_confirm = None;
+                let Some(ws) = self.supervisor.get(id) else {
+                    return;
+                };
+                let Some(target) = ws.remote_target() else {
+                    return; // local workspace: button isn't rendered anyway
+                };
+                self.creds_pending = Some(crate::gpui_ui::remote::CredsPush {
+                    label: target.destination(),
+                    ws: Some(id),
+                    rx: crate::gpui_ui::remote::spawn_push(self.waker.clone(), target),
+                });
             }
             DashAction::OpenSessions(id) => {
                 self.ensure_sessions_filter_input(cx);

@@ -70,6 +70,9 @@ pub(crate) struct RemoteState {
     pub(crate) error: Option<String>,
     pub(crate) connecting: bool,
     pub(crate) browser: Option<DirBrowser>,
+    /// Armed "really send credentials?" confirm for the dialog's puppush
+    /// button (two-step, like the tree-delete confirm).
+    pub(crate) push_confirm: bool,
 }
 
 /// Remote-connect interactions, nested under `DashAction::Remote`.
@@ -80,12 +83,38 @@ pub enum RemoteAction {
     /// Click a config host: seed the target field.
     HostPick(String),
     Connect,
+    /// "Push my auth + models to this host" — first dispatch arms the
+    /// confirm, the second actually sends (it's credentials).
+    PushCreds,
+    PushCredsCancel,
     BrowseOpen,
     BrowseUp,
     BrowseEnter(String),
     /// "Use this folder" — current browser dir into the path field.
     BrowsePick,
     BrowseCancel,
+}
+
+/// An in-flight "puppush": auth + model config going to a remote host
+/// (`backend::creds_push`). `ws` is set when launched from a workspace
+/// toolbar so per-file results also land in that transcript.
+pub(crate) struct CredsPush {
+    pub(crate) label: String,
+    pub(crate) ws: Option<crate::workspace::WorkspaceId>,
+    pub(crate) rx: Receiver<Vec<(&'static str, crate::backend::creds_push::PushOutcome)>>,
+}
+
+/// Run the blocking push on a worker thread, waking the drain loop when done.
+pub(crate) fn spawn_push(
+    waker: Arc<dyn crate::waker::UiWaker>,
+    target: SshTarget,
+) -> Receiver<Vec<(&'static str, crate::backend::creds_push::PushOutcome)>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(crate::backend::creds_push::push_creds_blocking(&target));
+        waker.wake();
+    });
+    rx
 }
 
 /// List a remote directory off-thread, waking the drain loop when done.
@@ -117,6 +146,7 @@ impl RootView {
                     error: None,
                     connecting: false,
                     browser: None,
+                    push_confirm: false,
                 });
             }
             RemoteAction::Close => {
@@ -140,6 +170,35 @@ impl RootView {
                         self.begin_remote_connect(target, path);
                     }
                     Err(e) => st.error = Some(e),
+                }
+            }
+            RemoteAction::PushCreds => {
+                if self.creds_pending.is_some() {
+                    return; // one push at a time
+                }
+                let target_text = self.remote_text(0, cx);
+                let waker = self.waker.clone();
+                let Some(st) = &mut self.remote else { return };
+                match SshTarget::parse(target_text.trim()) {
+                    Ok(target) => {
+                        st.error = None;
+                        if !st.push_confirm {
+                            st.push_confirm = true; // arm: it's credentials
+                            return;
+                        }
+                        st.push_confirm = false;
+                        self.creds_pending = Some(CredsPush {
+                            label: target.destination(),
+                            ws: None,
+                            rx: spawn_push(waker, target),
+                        });
+                    }
+                    Err(e) => st.error = Some(e),
+                }
+            }
+            RemoteAction::PushCredsCancel => {
+                if let Some(st) = &mut self.remote {
+                    st.push_confirm = false;
                 }
             }
             RemoteAction::BrowseOpen => {
@@ -226,7 +285,49 @@ impl RootView {
 
     /// Drain-loop upkeep: poll the in-flight listing + connection threads
     /// (egui's per-frame `try_recv` + `poll_remote`).
+    /// Poll the in-flight creds push: toast the summary, and when launched
+    /// from a workspace also leave the per-file detail in its transcript
+    /// (file NAMES and outcomes only — contents are never logged).
+    fn creds_upkeep(&mut self) {
+        use crate::backend::creds_push::PushOutcome;
+        let Some(p) = &self.creds_pending else { return };
+        let results = match p.rx.try_recv() {
+            Ok(r) => r,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => {
+                self.creds_pending = None;
+                return;
+            }
+        };
+        let p = self.creds_pending.take().expect("checked above");
+        let summary = crate::backend::creds_push::summarize(&results);
+        let failed = results
+            .iter()
+            .any(|(_, o)| matches!(o, PushOutcome::Failed(_)));
+        let color = if failed {
+            self.tokens.error
+        } else {
+            self.tokens.accent
+        };
+        self.toast(format!("Creds \u{2192} {}: {summary}", p.label), color);
+        if let Some(id) = p.ws
+            && let Some(ws) = self.supervisor.get_mut(id)
+        {
+            let mut lines = vec![format!("Pushed auth + models to {}:", p.label)];
+            for (name, o) in &results {
+                let what = match o {
+                    PushOutcome::Pushed => "pushed".to_string(),
+                    PushOutcome::Missing => "skipped (not present locally)".to_string(),
+                    PushOutcome::Failed(e) => format!("FAILED: {e}"),
+                };
+                lines.push(format!("  {name}: {what}"));
+            }
+            ws.push_note(lines.join("\n"));
+        }
+    }
+
     pub(crate) fn remote_upkeep(&mut self, cx: &mut gpui::Context<Self>) {
+        self.creds_upkeep();
         // Folder-browser listing result.
         if let Some(b) = self.remote.as_mut().and_then(|s| s.browser.as_mut())
             && let Some(rx) = &b.pending

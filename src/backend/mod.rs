@@ -22,6 +22,7 @@ use serde_json::Value;
 
 use crate::waker::UiWaker;
 
+pub mod creds_push;
 mod protocol;
 pub mod remote;
 pub mod ssh;

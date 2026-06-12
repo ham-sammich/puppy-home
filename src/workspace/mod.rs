@@ -418,6 +418,12 @@ impl Workspace {
         self.remote.as_ref().map(|r| r.label.as_str())
     }
 
+    /// The remote's full ssh target (for opening further channels), when remote.
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn remote_target(&self) -> Option<crate::backend::ssh::SshTarget> {
+        self.remote.as_ref().map(|r| r.target.clone())
+    }
+
     pub fn diff_count(&self) -> usize {
         self.diffs.len()
     }
@@ -710,6 +716,13 @@ impl Workspace {
             }
         }
         self.show_terminal = on;
+    }
+
+    /// Append a plain note to the transcript (UI-initiated events that
+    /// should leave a trace, e.g. creds-push results).
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub(crate) fn push_note(&mut self, text: String) {
+        self.transcript.push(Entry::Note(text));
     }
 
     #[allow(dead_code)] // consumed by the redesign UI branches

@@ -220,6 +220,10 @@ pub struct RootView {
     pub(crate) remote_pending: Option<remote::RemotePending>,
     /// [0] = SSH target, [1] = remote path.
     pub(crate) remote_inputs: Vec<Entity<ChatInput>>,
+    /// In-flight "puppush" (auth + models to a remote host); one at a time.
+    pub(crate) creds_pending: Option<remote::CredsPush>,
+    /// Armed two-step confirm for a workspace-toolbar creds push.
+    pub(crate) creds_confirm: Option<WorkspaceId>,
     // -- theme state --
     pub(crate) theme: Theme,
     /// The saved custom-theme library (themes.json).
@@ -377,6 +381,8 @@ impl RootView {
             agent_delete_confirm: None,
             remote: None,
             remote_pending: None,
+            creds_pending: None,
+            creds_confirm: None,
             remote_inputs: Vec::new(),
             theme,
             themes,
@@ -1314,6 +1320,11 @@ impl Render for RootView {
                     style: self.composer_style,
                     pop: self.chat_pop.as_ref(),
                     puppy: ws_name.clone(),
+                    creds_armed: self.creds_confirm == Some(id),
+                    creds_busy: self
+                        .creds_pending
+                        .as_ref()
+                        .is_some_and(|p| p.ws == Some(id)),
                     show_all: self.show_all_chat.contains(&id),
                     expanded: &self.expanded_entries,
                     reduce_motion: self.reduce_motion,
@@ -1456,6 +1467,8 @@ impl Render for RootView {
                         .get(1)
                         .map(|i| i.read(cx).text().to_string())
                         .unwrap_or_default(),
+                    // Dialog-initiated pushes have no workspace attached.
+                    self.creds_pending.as_ref().is_some_and(|p| p.ws.is_none()),
                 )
             }))
             .children(self.theme_editor_open.then(|| {

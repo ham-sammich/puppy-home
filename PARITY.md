@@ -369,6 +369,42 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       E2E vs a real remote needs human QA (standing E4 limitation).
       `5df2868`
 
+- [x] B13.3 REDUX model chip still clipped (user screenshot): the previous
+      fix left the 180px max-width ALWAYS on, so wide cards with free
+      header space still truncated long ids. Now: no fixed cap — the pill
+      is content-sized (full id whenever the row has room) and ellipsizes
+      only when genuinely tight; a 62%-of-row fractional max on the row
+      child wrapper (fractions don't resolve on the auto-sized inner pill)
+      keeps pathological ids from squeezing the title to nothing. Focus
+      view shares the card, so it inherits the fix. List view keeps its
+      fixed table column by design (already ellipsized, no bleed) and
+      gains a full-id hover tooltip. Verify vs the longest real id at
+      grid/focus/narrow widths = human QA (visual). `<hash2>`
+
+- [x] FEATURE "puppush" built in (user's ~/.code_puppy/puppush script,
+      generalized to all OAuth providers): push local code-puppy auth +
+      model config to a remote host's ~/.code_puppy. Manifest derived
+      from the code_puppy SOURCE (config.py + auth plugins), defined once
+      in backend/creds_push.rs: SENSITIVE chmod 600 (claude_code_oauth,
+      chatgpt_oauth, copilot_session, copilot_device_tokens .json) +
+      plain model config (models, extra_models, claude/chatgpt/copilot/
+      gemini_models .json). EXCLUDED deliberately: puppy.cfg (remote
+      keeps its identity per B13.8 — AND plain API keys ride in it, so
+      API-key providers are NOT covered; documented), mcp_servers.json
+      (machine-specific), agents/skills/contexts/caches/history/terminal
+      sessions (machine state). Transfer = sidecar-provisioning
+      convention: per-file `mkdir -p && cat > file` over ssh stdin,
+      BatchMode=yes (no PTY → fail fast), contents never logged. UI:
+      Connect-Remote dialog button ("Push my auth + models to this
+      host…", two-step confirm, works pre-connect) + "push creds" in the
+      remote workspace's chat toolbar (two-step confirm; summary toast +
+      per-file transcript note). Local-dir resolution mirrors
+      code_puppy's XDG rule (env set → XDG, else ~/.code_puppy); the
+      REMOTE side targets legacy ~/.code_puppy only (XDG-configured
+      remotes not handled — noted). Unit tests: manifest classification,
+      XDG mirror, command shape, summary. Live push vs the human's now
+      working remote = human QA. `<hash2>`
+
       SYNC QUEUE (phase-end batch): sidecar/sidecar.py (picker
       intercepts + cwd event + open flags), backend/mod.rs (Wire/UiEvent
       Agents/Models open + Cwd), workspace/events.rs + mod.rs

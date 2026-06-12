@@ -29,10 +29,14 @@ pub fn model_pill(
         .text_color(t.weak)
         .cursor_pointer()
         .hover(|st| st.border_color(alpha(t.accent, 0.6)).text_color(t.text))
-        // Long model ids (claude-code-claude-opus-4-8…) must ellipsize,
-        // not clip: cap at 180 but allow shrinking below it inside a tight
-        // header row, and surface the full id on hover (B13.3).
-        .max_w(px(180.))
+        // Long model ids (claude-code-claude-opus-4-…) use whatever space
+        // the header row actually has: no fixed cap here — the pill is
+        // content-sized and only ellipsizes when the row is genuinely out
+        // of room (B13.3 redux; the old always-on 180px cap truncated ids
+        // on wide cards with abundant free space). The width limit lives
+        // on the row-child wrapper below as a fraction of the row, so a
+        // pathological id can't squeeze the title block to nothing; hover
+        // still surfaces the full id.
         .min_w_0()
         .overflow_hidden()
         .text_ellipsis()
@@ -47,7 +51,7 @@ pub fn model_pill(
         });
 
     let Some(catalog) = &s.catalog else {
-        return div().min_w_0().flex_shrink().child(pill).into_any_element();
+        return pill_wrap().child(pill).into_any_element();
     };
 
     // Popover: deferred so it paints above sibling cards.
@@ -150,11 +154,20 @@ pub fn model_pill(
                 .collect()
         });
 
+    pill_wrap()
+        .child(pill)
+        .child(gpui::deferred(panel).with_priority(100))
+        .into_any_element()
+}
+
+/// The pill's row-child wrapper: shrinkable, and capped at a FRACTION of the
+/// header row (resolves against the row's definite width — a percentage on
+/// the pill itself would resolve against this auto-sized wrapper and be
+/// ignored). 62% leaves the title block usable against pathological ids.
+fn pill_wrap() -> gpui::Div {
     div()
         .relative()
         .min_w_0()
         .flex_shrink()
-        .child(pill)
-        .child(gpui::deferred(panel).with_priority(100))
-        .into_any_element()
+        .max_w(gpui::relative(0.62))
 }

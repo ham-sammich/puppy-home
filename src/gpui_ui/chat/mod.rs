@@ -42,6 +42,9 @@ pub struct ChatArgs<'a> {
     pub steer_queue: bool,
     /// Logs panel visibility.
     pub logs_open: bool,
+    /// Remote-workspace creds push: toolbar confirm armed / push in flight.
+    pub creds_armed: bool,
+    pub creds_busy: bool,
     /// Thinking folds the user/auto-collapse has closed.
     pub collapsed_thinking: &'a HashSet<(u64, usize)>,
     /// Sessions browser overlay state (open when Some).
@@ -229,6 +232,42 @@ fn ws_toolbar(args: &ChatArgs) -> AnyElement {
                 root.update(cx, |r, cx| r.dispatch(DashAction::ShowGit(id), cx));
             })
     };
+    // Remote workspace only: push local auth + models to its host
+    // (two-step confirm — it's credentials; results land as a transcript
+    // note + toast).
+    let creds_btn = |args: &ChatArgs| {
+        let root = args.root.clone();
+        let t = args.t;
+        let host = args.ws.remote_label().unwrap_or_default().to_string();
+        let (label, color) = if args.creds_busy {
+            ("pushing creds\u{2026}".to_string(), t.weak)
+        } else if args.creds_armed {
+            (format!("send creds to {host}?"), t.accent)
+        } else {
+            ("push creds".to_string(), t.weak)
+        };
+        let busy = args.creds_busy;
+        div()
+            .id(("ws-push-creds", id.0))
+            .px_2()
+            .py_0p5()
+            .rounded(px(7.))
+            .text_size(px(11.5))
+            .text_color(color)
+            .cursor_pointer()
+            .hover(|d| d.bg(t.well))
+            .tooltip(crate::gpui_ui::widgets::text_tip(format!(
+                "Push local code-puppy auth + model config to {host} \
+                 (oauth tokens chmod 600; nothing is logged)"
+            )))
+            .child(label)
+            .on_click(move |_, _, cx| {
+                if busy {
+                    return;
+                }
+                root.update(cx, |r, cx| r.dispatch(DashAction::PushCreds(id), cx));
+            })
+    };
     let logs_btn = {
         let root = args.root.clone();
         let on = args.logs_open;
@@ -256,6 +295,7 @@ fn ws_toolbar(args: &ChatArgs) -> AnyElement {
         .border_color(t.line_soft)
         .child(new_chat)
         .child(sessions_btn)
+        .children(args.ws.is_remote().then(|| creds_btn(args)))
         .children(args.ws.is_git_repo().then_some(git_btn))
         .child(crate::gpui_ui::terminal::terminal_toggle_btn(
             &t,

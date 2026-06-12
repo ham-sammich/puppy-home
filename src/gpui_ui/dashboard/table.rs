@@ -158,9 +158,13 @@ fn row(t: &Tokens, s: CardSnapshot, root: &Entity<RootView>) -> AnyElement {
                 .child(mono(s.agent.clone(), t.weak)),
         )
         .child(
+            // Fixed column by table design — ellipsizes; full id on hover
+            // (B13.3 redux).
             div()
+                .id(("row-model", s.id.0))
                 .w(px(W_MODEL))
                 .flex_none()
+                .tooltip(widgets::text_tip(s.model.clone()))
                 .child(mono(s.model.clone(), t.text)),
         )
         .child(div().w(px(W_STATE)).flex_none().child(badge))
