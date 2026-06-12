@@ -599,6 +599,39 @@ impl Workspace {
         true
     }
 
+    /// Whether the embedded terminal fills the chat area.
+    pub(crate) fn terminal_visible(&self) -> bool {
+        self.show_terminal
+    }
+
+    /// Toggle the terminal (lazy-spawns the shell on first show, like the
+    /// egui toggle); spawn failures land in the transcript as a note.
+    pub(crate) fn set_terminal_visible(
+        &mut self,
+        on: bool,
+        waker: &Arc<dyn crate::waker::UiWaker>,
+    ) {
+        if on && self.terminal.is_none() {
+            match crate::terminal::Terminal::spawn(&self.root, waker.clone()) {
+                Ok(t) => self.terminal = Some(t),
+                Err(e) => {
+                    self.transcript
+                        .push(Entry::Note(format!("Terminal failed to start: {e}")));
+                    return;
+                }
+            }
+        }
+        self.show_terminal = on;
+    }
+
+    pub(crate) fn terminal_ref(&self) -> Option<&crate::terminal::Terminal> {
+        self.terminal.as_ref()
+    }
+
+    pub(crate) fn terminal_mut(&mut self) -> Option<&mut crate::terminal::Terminal> {
+        self.terminal.as_mut()
+    }
+
     /// Filesystem handle for this workspace (the chat's file explorer).
     pub(crate) fn fs_handle(&self) -> Arc<dyn fs::WorkspaceFs> {
         self.fs.clone()

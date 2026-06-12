@@ -339,13 +339,14 @@ fn classic(args: &ComposerArgs) -> AnyElement {
                 .child(agent_pill(args))
                 .child(model_pill(args))
                 .child(at_file_btn(args))
-                .child(div().flex_1())
-                .child(
-                    div()
-                        .text_size(px(10.5))
-                        .text_color(t.dim)
-                        .child("Terminal: egui branch only (see GPUI_NOTES.md)"),
-                ),
+                .child(crate::gpui_ui::terminal::terminal_toggle_btn(
+                    &t,
+                    args.ws.id,
+                    args.ws.terminal_visible(),
+                    "composer-term",
+                    &args.root,
+                ))
+                .child(div().flex_1()),
         )
         .into_any_element()
 }
@@ -372,6 +373,13 @@ fn unified(args: &ComposerArgs) -> AnyElement {
                 .child(agent_pill(args))
                 .child(model_pill(args))
                 .child(at_file_btn(args))
+                .child(crate::gpui_ui::terminal::terminal_toggle_btn(
+                    &t,
+                    args.ws.id,
+                    args.ws.terminal_visible(),
+                    "unified-term",
+                    &args.root,
+                ))
                 .child(send_btn(args, "Send")),
         )
         .into_any_element()

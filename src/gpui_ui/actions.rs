@@ -137,6 +137,10 @@ pub enum DashAction {
     CredsSubmit(WorkspaceId),
     CredsCancel(WorkspaceId),
     BlameToggle(WorkspaceId, PathBuf),
+    // -- terminal --
+    TermToggle(WorkspaceId),
+    TermInput(WorkspaceId, Vec<u8>),
+    TermScroll(WorkspaceId, i32),
     /// Den interactions (join/leave/feed/kanban/plans/...).
     Den(den::DenAction),
 }
@@ -802,6 +806,27 @@ impl RootView {
             DashAction::BlameToggle(id, path) => {
                 if let Some(ws) = self.supervisor.get_mut(id) {
                     ws.toggle_blame(&path);
+                }
+            }
+            DashAction::TermToggle(id) => {
+                let on = self
+                    .supervisor
+                    .get(id)
+                    .map(|w| w.terminal_visible())
+                    .unwrap_or(false);
+                let waker = self.waker.clone();
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.set_terminal_visible(!on, &waker);
+                }
+            }
+            DashAction::TermInput(id, bytes) => {
+                if let Some(term) = self.supervisor.get_mut(id).and_then(|ws| ws.terminal_mut()) {
+                    term.send_bytes(&bytes);
+                }
+            }
+            DashAction::TermScroll(id, delta) => {
+                if let Some(term) = self.supervisor.get_mut(id).and_then(|ws| ws.terminal_mut()) {
+                    term.scroll_lines(delta);
                 }
             }
             DashAction::AnswerEnter => {

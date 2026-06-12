@@ -99,18 +99,20 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
 
 ## Phase D — terminal
 
-- [ ] D1. Port the embedded terminal as a custom GPUI element: keep
-      `terminal.rs`'s portable-pty + vt100 backend (PTY spawn, reader
-      thread, `pump()`); build a GPUI Element that paints the vt100 grid
-      (shaped mono runs + bg quads, cursor, scrollback) and routes
-      keystrokes/IME via the input.rs patterns. Ref: `terminal.rs`,
-      `theme/terminal.rs` palette.
+- [x] D1. Terminal as a GPUI canvas surface: vt100 grid with coalesced
+      color runs, fg/bg/inverse/underline (egui's exact attribute set),
+      block cursor, wheel scrollback + banner, shared key table + ctrl
+      chords + paste, theme from terminal.json, resize via paint-measured
+      slot, 8ms reader wake throttle. Live-validated: real zsh ran `ls`
+      in-grid. No selection-copy / mouse reporting (egui has neither).
 - [n/a] D2. Zed `terminal`/`terminal_view` crates — REJECTED (dependency
       weight; pulls editor-stack crates). Decision recorded in
       GPUI_NOTES.md.
-- [ ] D3. Slim terminal-mode bar (terminal/sessions toggles + agent/model
-      switchers) when the terminal fills the chat area. Ref: egui
-      `chat_body.rs` `render_bottom_bar`.
+- [x] D3. Terminal toggles in the workspace toolbar + Classic/Unified
+      composer skins; terminal fills the chat area (egui placement). The
+      dedicated slim bar is NOT replicated 1:1 — our toolbar + composer
+      dock already carry its controls (sessions/agent/model/terminal);
+      noted as a layout deviation, not a capability gap.
 
 ## Phase E — app management
 

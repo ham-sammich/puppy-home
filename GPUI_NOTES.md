@@ -294,6 +294,30 @@ are chrome around the ONE ChatInput entity; the gear popover persists
   is ignored.
 - No soft wrap in the input (above).
 
+## Phase D — the terminal element
+
+- **Split**: terminal.rs keeps PTY/vt100/reader-thread (renderer-free
+  surface: with_screen/send_bytes/scroll_lines/resize_to/size) + the ONE
+  key table (`named_key_seq` by gpui key names + `ctrl_byte`) and the
+  shared `ansi_cube`; the egui `ui()` painter stays for the egui-shell
+  feature, its key_seq now an adapter over the shared table.
+- **Painting**: snapshot the vt100 grid per render (cells coalesced into
+  attribute runs per row), paint in ONE canvas: one shaped line per row
+  with multi-color TextRuns, bg/underline quads via x_for_index, block
+  cursor (filled focused / outlined not). vt100 0.16 exposes no damage
+  API; full-grid snapshot+shape per render is bounded by the visible grid
+  (<= ~50 rows) and renders only happen on waker/drain notify. The reader
+  thread wake is throttled to 8ms (output floods like `yes` cap at
+  ~120 wakes/s with gentle PTY backpressure).
+- **Resize**: the canvas measures cell box + bounds, records wanted
+  rows/cols into a shared slot; the root applies it at the START of the
+  next render (elements can't mutate entities mid-paint; one-frame lag).
+- **Keys**: raw `on_key_down` in a "Terminal" key context (no bindings =
+  nothing swallows Tab/arrows/Esc): shared table -> escape sequences,
+  ctrl chords -> control bytes, printables via key_char, cmd-V paste.
+  No mouse selection-copy, no mouse reporting (egui has neither).
+- Theme: terminal.json (shared file) resolved to gpui colors at startup.
+
 ## Phase C run 1 — editor patterns
 
 - **Code-mode input**: same ChatInput entity, `soft_wrap=false` — width =

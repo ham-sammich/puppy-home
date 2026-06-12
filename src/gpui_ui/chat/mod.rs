@@ -68,21 +68,39 @@ pub struct ChatArgs<'a> {
     pub branch_armed: bool,
     pub creds_user_input: Option<&'a Entity<ChatInput>>,
     pub creds_pass_input: Option<&'a Entity<ChatInput>>,
+    pub term_focus: &'a gpui::FocusHandle,
+    pub term_focused: bool,
+    pub term_colors: &'a crate::gpui_ui::terminal::TermColors,
+    pub term_resize: crate::gpui_ui::terminal::ResizeSlot,
 }
 
 /// The whole chat screen body (below the tab strip).
 pub fn chat_screen(args: &ChatArgs) -> AnyElement {
     let t = args.t;
-    let body = transcript::transcript_panel(&transcript::TranscriptArgs {
-        t,
-        ws: args.ws,
-        root: args.root.clone(),
-        puppy: args.puppy.clone(),
-        show_all: args.show_all,
-        expanded: args.expanded,
-        collapsed_thinking: args.collapsed_thinking,
-        reduce_motion: args.reduce_motion,
-    });
+    // Terminal mode: the terminal fills the chat area (egui parity —
+    // chat_body swaps the transcript out entirely while show_terminal).
+    let body = if args.ws.terminal_visible() {
+        crate::gpui_ui::terminal::terminal_panel(&crate::gpui_ui::terminal::TermArgs {
+            t,
+            ws: args.ws,
+            root: args.root.clone(),
+            focus: args.term_focus,
+            focused: args.term_focused,
+            colors: args.term_colors,
+            resize_slot: args.term_resize.clone(),
+        })
+    } else {
+        transcript::transcript_panel(&transcript::TranscriptArgs {
+            t,
+            ws: args.ws,
+            root: args.root.clone(),
+            puppy: args.puppy.clone(),
+            show_all: args.show_all,
+            expanded: args.expanded,
+            collapsed_thinking: args.collapsed_thinking,
+            reduce_motion: args.reduce_motion,
+        })
+    };
     let dock = composer::composer_dock(&composer::ComposerArgs {
         t,
         ws: args.ws,
@@ -239,6 +257,13 @@ fn ws_toolbar(args: &ChatArgs) -> AnyElement {
         .child(new_chat)
         .child(sessions_btn)
         .children(args.ws.is_git_repo().then(|| git_btn))
+        .child(crate::gpui_ui::terminal::terminal_toggle_btn(
+            &t,
+            id,
+            args.ws.terminal_visible(),
+            "ws-term",
+            &args.root,
+        ))
         .child(div().flex_1())
         .child(logs_btn)
         .into_any_element()

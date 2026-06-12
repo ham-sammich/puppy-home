@@ -20,6 +20,7 @@ pub mod editor;
 pub mod gitpanel;
 pub mod input;
 pub mod markdown;
+pub mod terminal;
 pub mod tokens;
 pub mod waker;
 pub mod widgets;
@@ -178,6 +179,12 @@ pub struct RootView {
     pub(crate) branch_target: Option<(WorkspaceId, String)>,
     pub(crate) creds_user_input: Option<Entity<ChatInput>>,
     pub(crate) creds_pass_input: Option<Entity<ChatInput>>,
+    // -- terminal state --
+    term_focus: FocusHandle,
+    term_colors: terminal::TermColors,
+    term_resize: terminal::ResizeSlot,
+    term_probe_stage: u8,
+    term_probe_at: Instant,
 }
 
 /// One pasted image: the wire form + the displayable form.
@@ -283,6 +290,23 @@ impl RootView {
             branch_target: None,
             creds_user_input: None,
             creds_pass_input: None,
+            term_focus: cx.focus_handle(),
+            term_colors: terminal::TermColors::load(),
+            term_resize: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            term_probe_stage: 0,
+            term_probe_at: Instant::now(),
+        }
+    }
+
+    /// Apply the grid size the terminal canvas measured last paint (an
+    /// element can't mutate entities mid-paint; one-frame lag, like egui's
+    /// same-frame resize minus one tick).
+    fn apply_terminal_resize(&mut self) {
+        let Some((id, rows, cols)) = self.term_resize.lock().ok().and_then(|mut s| s.take()) else {
+            return;
+        };
+        if let Some(term) = self.supervisor.get_mut(id).and_then(|ws| ws.terminal_mut()) {
+            term.resize_to(rows, cols);
         }
     }
 
@@ -489,6 +513,41 @@ impl RootView {
         }
     }
 
+    /// Probe: `PUPPY_GPUI_TERM=1` — once the chat is open, toggle the
+    /// terminal, run `ls`, then dump the vt100 grid text to stderr.
+    fn maybe_probe_terminal(&mut self, cx: &mut Context<Self>) {
+        if std::env::var_os("PUPPY_GPUI_TERM").is_none() {
+            return;
+        }
+        let Screen::Chat(id) = self.screen else {
+            return;
+        };
+        match self.term_probe_stage {
+            0 => {
+                self.dispatch(DashAction::TermToggle(id), cx);
+                self.term_probe_stage = 1;
+                self.term_probe_at = Instant::now();
+            }
+            1 => {
+                // Give the shell a moment to print its prompt.
+                if self.term_probe_at.elapsed() > Duration::from_secs(3) {
+                    self.dispatch(DashAction::TermInput(id, b"ls\r".to_vec()), cx);
+                    self.term_probe_stage = 2;
+                    self.term_probe_at = Instant::now();
+                }
+            }
+            2 => {
+                if self.term_probe_at.elapsed() > Duration::from_secs(3)
+                    && let Some(term) = self.supervisor.get(id).and_then(|w| w.terminal_ref())
+                {
+                    eprintln!("[probe] terminal grid:\n{}", term.screen_text());
+                    self.term_probe_stage = 3;
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Probe: jump to the first ready workspace's chat once, if asked to.
     fn maybe_probe_chat_screen(&mut self, cx: &mut Context<Self>) {
         if !self.probe_chat_screen {
@@ -649,6 +708,7 @@ impl RootView {
                     root.maybe_probe_den(cx);
                     root.maybe_send_probe_prompt();
                     root.maybe_probe_chat_screen(cx);
+                    root.maybe_probe_terminal(cx);
                     root.ensure_answer_input_if_needed(cx);
                     root.prune_toasts();
                     cx.notify();
@@ -925,6 +985,7 @@ impl Render for RootView {
 
         // Presence heuristic input: is the window focused right now?
         self.window_active = window.is_window_active();
+        self.apply_terminal_resize();
 
         // One-shot: focus the composer when a chat was just opened.
         if let Some(id) = self.pending_focus.take()
@@ -1030,6 +1091,10 @@ impl Render for RootView {
                     branch_armed: self.branch_target.is_some(),
                     creds_user_input: self.creds_user_input.as_ref(),
                     creds_pass_input: self.creds_pass_input.as_ref(),
+                    term_focus: &self.term_focus,
+                    term_focused: self.term_focus.is_focused(window),
+                    term_colors: &self.term_colors,
+                    term_resize: self.term_resize.clone(),
                     logs_open: self.logs_open.contains(&id),
                     collapsed_thinking: &self.collapsed_thinking,
                     sessions: (self.sessions_open == Some(id)).then(|| {
