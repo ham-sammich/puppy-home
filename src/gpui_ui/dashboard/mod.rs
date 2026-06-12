@@ -124,6 +124,9 @@ pub struct SubSnap {
 pub struct CardSnapshot {
     pub id: WorkspaceId,
     pub name: String,
+    /// The workspace's puppy when it differs from the app headline (a
+    /// remote host's puppy) — shown subtly on the meta line (B13.8).
+    pub puppy: Option<String>,
     pub agent: String,
     pub model: String,
     pub path: String,
@@ -170,7 +173,12 @@ fn sub_status_color(status: &str, t: &Tokens) -> Rgba {
 }
 
 /// Build a render snapshot of one workspace.
-pub fn snapshot(ws: &Workspace, t: &Tokens, with_catalog: bool) -> CardSnapshot {
+pub fn snapshot(
+    ws: &Workspace,
+    t: &Tokens,
+    with_catalog: bool,
+    headline_puppy: &str,
+) -> CardSnapshot {
     let st = card_state(ws.status, t);
     let now = Instant::now();
     let clock = match ws.turn_started {
@@ -178,9 +186,13 @@ pub fn snapshot(ws: &Workspace, t: &Tokens, with_catalog: bool) -> CardSnapshot 
         None => widgets::fmt_ago(now.saturating_duration_since(ws.last_activity).as_secs()),
     };
     let (adds, dels) = ws.diff_totals();
+    let puppy =
+        (!ws.puppy_name.is_empty() && ws.puppy_name != "Puppy" && ws.puppy_name != headline_puppy)
+            .then(|| ws.puppy_name.clone());
     CardSnapshot {
         id: ws.id,
         name: ws.name.clone(),
+        puppy,
         agent: if ws.agent.is_empty() {
             "agent".to_string()
         } else {

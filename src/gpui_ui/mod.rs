@@ -732,7 +732,14 @@ impl RootView {
         if self.chat_inputs.contains_key(&id) {
             return;
         }
-        let puppy = self.puppy_name();
+        // The workspace's OWN puppy (a remote workspace talks to the remote
+        // host's puppy). May still read "Puppy" if the sidecar hasn't
+        // announced yet — the placeholder is fixed at creation; cosmetic.
+        let puppy = self
+            .supervisor
+            .get(id)
+            .map(ws_puppy)
+            .unwrap_or_else(|| "Puppy".to_string());
         let entity = cx.new(|cx| {
             ChatInput::new(
                 format!("Message {puppy}\u{2026}  (enter sends, shift-enter newline)"),
@@ -975,14 +982,17 @@ impl RootView {
         }
     }
 
-    /// The puppy's name as reported by any sidecar ("Puppy" until one is).
+    /// The HEADLINE puppy identity (title chip, dashboard lede, Den): the
+    /// first LOCAL sidecar's announced name. Remote sidecars announce the
+    /// remote host's puppy — that identity belongs to its workspace's own
+    /// surfaces, never the app-global headline (B13.8).
     fn puppy_name(&self) -> String {
-        self.supervisor
-            .iter()
-            .map(|w| w.puppy_name.as_str())
-            .find(|n| !n.is_empty() && *n != "Puppy")
-            .unwrap_or("Puppy")
-            .to_string()
+        headline_puppy(
+            self.supervisor
+                .iter()
+                .map(|w| (w.puppy_name.as_str(), w.is_remote())),
+        )
+        .to_string()
     }
 
     /// Fire the probe prompt once the first sidecar reports ready.
@@ -1219,7 +1229,6 @@ impl Render for RootView {
         let perf_began = self.perf.frame_begin();
         let t = self.tokens;
         let entity = cx.entity();
-        let puppy = self.puppy_name();
 
         // Presence heuristic input: is the window focused right now?
         self.window_active = window.is_window_active();
@@ -1294,6 +1303,9 @@ impl Render for RootView {
                     .get(&id)
                     .expect("guarded by the arm above")
                     .clone();
+                // Chat surfaces speak as THIS workspace's puppy — for a
+                // remote workspace that's the remote host's identity (B13.8).
+                let ws_name = ws_puppy(ws);
                 chat::chat_screen(&chat::ChatArgs {
                     t,
                     ws,
@@ -1301,7 +1313,7 @@ impl Render for RootView {
                     input,
                     style: self.composer_style,
                     pop: self.chat_pop.as_ref(),
-                    puppy: puppy.clone(),
+                    puppy: ws_name.clone(),
                     show_all: self.show_all_chat.contains(&id),
                     expanded: &self.expanded_entries,
                     reduce_motion: self.reduce_motion,
@@ -1373,7 +1385,7 @@ impl Render for RootView {
                                 .map(|i| i.read(cx).text().to_string())
                                 .unwrap_or_default(),
                             selected: self.session_selected.as_ref(),
-                            puppy: puppy.clone(),
+                            puppy: ws_name.clone(),
                         }
                     }),
                 })
@@ -1485,7 +1497,7 @@ impl RootView {
         let cards: Vec<dashboard::CardSnapshot> = self
             .supervisor
             .iter()
-            .map(|ws| dashboard::snapshot(ws, &t, self.model_popover == Some(ws.id)))
+            .map(|ws| dashboard::snapshot(ws, &t, self.model_popover == Some(ws.id), &puppy))
             .collect();
         let waiting: Vec<(WorkspaceId, String, Option<String>)> = self
             .supervisor
@@ -1568,5 +1580,52 @@ impl RootView {
                     ),
             )
             .into_any_element()
+    }
+}
+
+/// A workspace's own puppy display name ("Puppy" until its sidecar
+/// announces). Remote workspaces report the REMOTE host's puppy.
+fn ws_puppy(ws: &crate::workspace::Workspace) -> String {
+    if ws.puppy_name.is_empty() {
+        "Puppy".to_string()
+    } else {
+        ws.puppy_name.clone()
+    }
+}
+
+/// The app-headline puppy: first LOCAL workspace with a real announced name.
+/// Remote announcements never become the headline (B13.8) — pure so the
+/// pinning rule is unit-testable without a supervisor.
+fn headline_puppy<'a>(names: impl Iterator<Item = (&'a str, bool)>) -> &'a str {
+    let mut found = "Puppy";
+    for (name, is_remote) in names {
+        if !is_remote && !name.is_empty() && name != "Puppy" {
+            found = name;
+            break;
+        }
+    }
+    found
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::headline_puppy;
+
+    #[test]
+    fn remote_announcement_never_becomes_the_headline() {
+        // A remote sidecar reports first — the headline must not adopt it.
+        let names = [("Bandit", true), ("Rex", false)];
+        assert_eq!(headline_puppy(names.into_iter()), "Rex");
+        // Only remotes reporting: stay on the default rather than borrow a
+        // remote identity.
+        let only_remote = [("Bandit", true), ("Fido", true)];
+        assert_eq!(headline_puppy(only_remote.into_iter()), "Puppy");
+    }
+
+    #[test]
+    fn local_default_and_empty_names_are_skipped() {
+        let names = [("", false), ("Puppy", false), ("Rex", false)];
+        assert_eq!(headline_puppy(names.into_iter()), "Rex");
+        assert_eq!(headline_puppy(std::iter::empty()), "Puppy");
     }
 }

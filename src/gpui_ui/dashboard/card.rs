@@ -84,7 +84,15 @@ impl AgentCard {
                             .overflow_hidden()
                             .text_ellipsis()
                             .whitespace_nowrap()
-                            .child(format!("{} \u{b7} {}", s.agent, s.path)),
+                            .child(match &s.puppy {
+                                // A foreign (remote-host) puppy: lead the
+                                // meta line with it, subtle — full identity
+                                // theater is reserved for the Den.
+                                Some(p) => {
+                                    format!("\u{1f436} {p} \u{b7} {} \u{b7} {}", s.agent, s.path)
+                                }
+                                None => format!("{} \u{b7} {}", s.agent, s.path),
+                            }),
                     ),
             )
             .child(super::model_pill::model_pill(

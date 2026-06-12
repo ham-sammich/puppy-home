@@ -346,6 +346,29 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       green; real remote terminal needs a reachable host — flagged for
       human QA alongside E4. `2437bf0`
 
+- [x] B13.8 remote workspace showed the LOCAL puppy identity.
+      PROVISIONING VERIFIED SOUND: spawn_remote ships only our protocol
+      shim (sidecar.py) to the remote cache and launches it THERE via
+      `uv run --with code-puppy python` — code_puppy + ~/.code_puppy
+      config (puppy name, agents, models, MCP) are all the REMOTE's.
+      (Nuance: the default launcher resolves code-puppy from the
+      remote's uv environment, not necessarily a remote pre-install;
+      PUPPY_HOME_REMOTE_CP_CMD overrides.) The bug was identity
+      plumbing: RootView::puppy_name() was first-reporter-wins across
+      ALL workspaces, so a remote sidecar could become the app-global
+      headline; and chat surfaces rendered the global name everywhere.
+      FIX: headline pinned to LOCAL workspaces only (headline_puppy,
+      unit-tested); chat who-lines/empty-state/Guided send/composer +
+      sessions overlay speak the WORKSPACE'S own puppy (ws_puppy);
+      dashboard cards lead the meta line with \u{1f436} {name} when a
+      workspace's puppy differs from the headline (subtle, Den-spirit);
+      Den roster already broadcast per-workspace names (verified).
+      egui shell on THIS branch: chat is already per-workspace, no
+      global heuristic exists — nothing to fix here; redesign/egui's
+      own dashboard lede needs the same local-pin at sync time (queued).
+      E2E vs a real remote needs human QA (standing E4 limitation).
+      `<b138hash>`
+
       SYNC QUEUE (phase-end batch): sidecar/sidecar.py (picker
       intercepts + cwd event + open flags), backend/mod.rs (Wire/UiEvent
       Agents/Models open + Cwd), workspace/events.rs + mod.rs
