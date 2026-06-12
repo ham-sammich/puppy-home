@@ -21,6 +21,27 @@ pub struct Session {
     /// run or pre-layout sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<DockState<SavedTab>>,
+    /// The dashboard's fleet view (Grid / List / Focus), remembered per machine.
+    /// Field name shared with redesign/egui so session.json stays portable.
+    #[serde(default)]
+    pub dashboard_view: DashboardViewMode,
+    /// Disable decorative animation app-wide (pulses, ring spins, bobs).
+    #[serde(default)]
+    pub reduce_motion: bool,
+}
+
+/// How the dashboard lays out the fleet. Persisted in `session.json`.
+/// Identical (incl. serde casing) to redesign/egui's enum — one config format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DashboardViewMode {
+    /// Responsive card grid (`minmax(420px, 1fr)`).
+    #[default]
+    Grid,
+    /// Dense table.
+    List,
+    /// Single column, max 880px.
+    Focus,
 }
 
 /// A persistable mirror of `shell::Tab` using stable keys instead of runtime
@@ -187,7 +208,9 @@ mod tests {
                 },
             ],
             theme: Theme::Light,
-            layout: None,
+            dashboard_view: DashboardViewMode::Focus,
+            reduce_motion: true,
+            ..Default::default()
         };
         save(&session);
 
@@ -202,6 +225,8 @@ mod tests {
         );
         assert_eq!(loaded.workspaces[1].agent, None);
         assert_eq!(loaded.theme, Theme::Light);
+        assert_eq!(loaded.dashboard_view, DashboardViewMode::Focus);
+        assert!(loaded.reduce_motion);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -211,6 +236,19 @@ mod tests {
         let s: Session = serde_json::from_str("{}").unwrap();
         assert!(s.workspaces.is_empty());
         assert_eq!(s.theme, Theme::Dark);
+        assert_eq!(s.dashboard_view, DashboardViewMode::Grid);
+        assert!(!s.reduce_motion);
+    }
+
+    #[test]
+    fn dashboard_view_serializes_lowercase_like_egui_branch() {
+        // The two redesign branches share one session.json format.
+        let s = Session {
+            dashboard_view: DashboardViewMode::Focus,
+            ..Default::default()
+        };
+        let j = serde_json::to_string(&s).unwrap();
+        assert!(j.contains("\"dashboard_view\":\"focus\""));
     }
 
     #[test]
@@ -223,9 +261,8 @@ mod tests {
     #[test]
     fn custom_theme_roundtrips_via_serde() {
         let s = Session {
-            workspaces: vec![],
             theme: Theme::Custom("Neon".into()),
-            layout: None,
+            ..Default::default()
         };
         let j = serde_json::to_string(&s).unwrap();
         assert!(j.contains("\"theme\":\"custom:Neon\""));
@@ -238,9 +275,8 @@ mod tests {
         let mut dock = DockState::new(vec![SavedTab::Dashboard, SavedTab::McpManager]);
         normalize_layout_rects(&mut dock); // fresh leaves carry inf rects
         let s = Session {
-            workspaces: vec![],
-            theme: Theme::Dark,
             layout: Some(dock),
+            ..Default::default()
         };
         let j = serde_json::to_string(&s).unwrap();
         let back: Session = serde_json::from_str(&j).unwrap();
@@ -263,9 +299,8 @@ mod tests {
     #[test]
     fn theme_serializes_lowercase() {
         let s = Session {
-            workspaces: vec![],
             theme: Theme::Light,
-            layout: None,
+            ..Default::default()
         };
         let j = serde_json::to_string(&s).unwrap();
         assert!(j.contains("\"theme\":\"light\""));

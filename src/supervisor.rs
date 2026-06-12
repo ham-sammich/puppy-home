@@ -73,6 +73,14 @@ impl Supervisor {
         self.workspaces.remove(&id);
     }
 
+    /// Relaunch a dead workspace's sidecar (the card's "Restart" action).
+    pub fn restart(&mut self, id: WorkspaceId) {
+        let waker = self.waker.clone();
+        if let Some(ws) = self.workspaces.get_mut(&id) {
+            ws.restart(waker);
+        }
+    }
+
     /// Fold each workspace's pending events into its state.
     pub fn drain(&mut self) {
         for ws in self.workspaces.values_mut() {

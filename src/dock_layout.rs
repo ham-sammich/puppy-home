@@ -18,8 +18,14 @@ use crate::supervisor::Supervisor;
 use crate::workspace::WorkspaceId;
 
 /// Snapshot the open workspaces + dock layout as a persistable session.
+/// UI prefs not owned by the egui shell (dashboard_view / reduce_motion are
+/// written by the GPUI dashboard) are carried over from the saved session so
+/// an egui-shell save never clobbers them.
 pub fn current_session(sup: &Supervisor, theme: Theme, dock: Option<&DockState<Tab>>) -> Session {
+    let carry = crate::session::load();
     Session {
+        dashboard_view: carry.dashboard_view,
+        reduce_motion: carry.reduce_motion,
         workspaces: sup
             .iter()
             .map(|w| WorkspaceEntry {

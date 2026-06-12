@@ -384,9 +384,24 @@ impl Workspace {
     }
 
     /// Recent tok/s samples, oldest → newest (this card's sparkline data).
-    #[allow(dead_code)] // consumed by the redesign UI branches
     pub fn spark_history(&self) -> &[f32] {
         self.sparks.samples()
+    }
+
+    /// The model catalog the sidecar announced (the card's model popover).
+    pub fn model_catalog(&self) -> &[crate::backend::ModelInfo] {
+        &self.models
+    }
+
+    /// The question text of an outstanding interactive request, if any (shown
+    /// on waiting cards + the attention banner).
+    pub fn pending_question(&self) -> Option<&str> {
+        use state::PendingKind;
+        self.pending.as_ref().map(|p| match &p.kind {
+            PendingKind::Input { prompt, .. } => prompt.as_str(),
+            PendingKind::Confirm { title, .. } => title.as_str(),
+            PendingKind::Select { prompt, .. } => prompt.as_str(),
+        })
     }
 
     /// Session diff totals: (+lines, −lines) across recorded diff records
