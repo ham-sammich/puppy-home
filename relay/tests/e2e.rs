@@ -21,7 +21,7 @@ impl Client {
         let reader = BufReader::new(stream.try_clone().unwrap());
         let mut c = Client { stream, reader };
         c.send(&format!(
-            r#"{{"op":"join","room":"{room}","user":"{user}","puppy":"{user}-pup","proto":3}}"#
+            r#"{{"op":"join","room":"{room}","user":"{user}","puppy":"{user}-pup","proto":4}}"#
         ));
         c
     }
@@ -64,17 +64,43 @@ fn two_members_chat_through_a_room() {
         joined_b.contains("alice-pup"),
         "roster carries puppy names: {joined_b}"
     );
+    assert!(
+        joined_b.contains(r#""host":true"#) && joined_b.contains(r#""color":"#),
+        "members carry host + relay-assigned colors: {joined_b}"
+    );
 
-    // Alice hears bob arrive (with his puppy).
+    // Alice hears bob arrive (announce + system feed narration).
     let seen = alice.read_line();
     assert!(seen.contains(r#""event":"member_joined""#) && seen.contains("bob"));
     assert!(seen.contains("bob-pup"));
+    let narrated = alice.read_line();
+    assert!(narrated.contains(r#""kind":"system""#) && narrated.contains("joined the den"));
 
-    // Chat reaches both, stamped with the relay-known sender.
-    alice.send(r#"{"op":"chat","text":"hello pack"}"#);
+    // Chat reaches both as a Human feed entry, stamped with the relay-known
+    // sender + a room-monotonic seq.
+    alice.send(r#"{"op":"chat","text":"hello den"}"#);
     for client in [&mut alice, &mut bob] {
         let chat = client.read_line();
-        assert!(chat.contains(r#""from":"alice""#) && chat.contains("hello pack"));
+        assert!(chat.contains(r#""event":"feed""#) && chat.contains(r#""kind":"human""#));
+        assert!(chat.contains(r#""user":"alice""#) && chat.contains("hello den"));
+    }
+
+    // Presence flips fan out both ways.
+    bob.send(r#"{"op":"presence","presence":"idle"}"#);
+    for client in [&mut alice, &mut bob] {
+        let p = client.read_line();
+        assert!(p.contains(r#""event":"presence""#) && p.contains(r#""presence":"idle""#));
+        assert!(p.contains(r#""user":"bob""#));
+    }
+
+    // Roster summaries fan out, stamped with the sender.
+    alice.send(
+        r#"{"op":"roster","agents":[{"puppy":"Rex","agent":"code-puppy","model":"opus","state":"tool","verb":"edit","file":"src/x.rs","dir":"demo","tps":42.0,"added":3,"removed":1}]}"#,
+    );
+    for client in [&mut alice, &mut bob] {
+        let r = client.read_line();
+        assert!(r.contains(r#""event":"roster""#) && r.contains(r#""from":"alice""#));
+        assert!(r.contains("src/x.rs") && r.contains(r#""tps":42.0"#));
     }
 
     // Activity fans out the same way.
@@ -84,10 +110,77 @@ fn two_members_chat_through_a_room() {
         assert!(act.contains(r#""event":"activity""#) && act.contains("edit_file src/x.rs"));
     }
 
-    // Bob leaves; alice is told.
+    // Bob leaves; alice is told (announce + narration).
     bob.send(r#"{"op":"leave"}"#);
     let left = alice.read_line();
     assert!(left.contains(r#""event":"member_left""#) && left.contains("bob"));
+    let narrated = alice.read_line();
+    assert!(narrated.contains(r#""kind":"system""#) && narrated.contains("left the den"));
+}
+
+/// Feed ordering: human + puppy entries interleave with strictly increasing
+/// `seq`, and puppy entries carry their addressing + review badge.
+#[test]
+fn den_feed_orders_and_carries_puppy_messages() {
+    let port = start_relay();
+    let mut alice = Client::join(port, "feed-room", "alice");
+    alice.read_line(); // joined
+
+    alice.send(r#"{"op":"chat","text":"one"}"#);
+    alice.send(
+        r#"{"op":"puppy_msg","puppy":"Rex","to_puppy":"Biscuit","review":true,"text":"dedupe on event.id"}"#,
+    );
+    let first = alice.read_line();
+    let second = alice.read_line();
+    assert!(first.contains(r#""kind":"human""#) && first.contains("one"));
+    assert!(second.contains(r#""kind":"puppy""#) && second.contains(r#""puppy":"Rex""#));
+    assert!(second.contains(r#""to_puppy":"Biscuit""#) && second.contains(r#""review":true"#));
+    let seq = |line: &str| -> u64 {
+        let v: serde_json::Value = serde_json::from_str(line).unwrap();
+        v["entry"]["seq"].as_u64().unwrap()
+    };
+    assert!(seq(&second) > seq(&first), "server ordering is monotonic");
+}
+
+/// Kanban lives on the relay: create/move broadcast the board, and a late
+/// joiner receives the whole den state in their join snapshot.
+#[test]
+fn kanban_and_plans_snapshot_on_late_join() {
+    let port = start_relay();
+    let mut alice = Client::join(port, "board-room", "alice");
+    alice.read_line(); // joined
+
+    alice.send(
+        r#"{"op":"task_create","title":"Webhooks","column":"backlog","owner":"alice","plan":true}"#,
+    );
+    let tasks = alice.read_line();
+    assert!(tasks.contains(r#""event":"tasks""#) && tasks.contains("Webhooks"));
+    alice.send(r#"{"op":"task_move","id":1,"column":"in_progress"}"#);
+    let tasks = alice.read_line();
+    assert!(tasks.contains(r#""in_progress""#));
+
+    alice.send(r#"{"op":"plan_share","puppy":"Rex","markdown":"- [x] verify\n- [ ] refunds"}"#);
+    let plans = alice.read_line();
+    assert!(plans.contains(r#""event":"plans""#) && plans.contains("refunds"));
+    let narrated = alice.read_line();
+    assert!(narrated.contains("shared plans.md"));
+
+    // The late joiner's snapshot has it all: members, board, plans, feed tail.
+    let mut bob = Client::join(port, "board-room", "bob");
+    let joined = bob.read_line();
+    assert!(joined.contains(r#""event":"joined""#));
+    assert!(
+        joined.contains("Webhooks") && joined.contains(r#""in_progress""#),
+        "snapshot carries the board: {joined}"
+    );
+    assert!(
+        joined.contains(r#""puppy":"Rex""#) && joined.contains("refunds"),
+        "snapshot carries shared plans: {joined}"
+    );
+    assert!(
+        joined.contains("shared plans.md"),
+        "snapshot carries the feed tail: {joined}"
+    );
 }
 
 #[test]
@@ -100,7 +193,7 @@ fn rooms_do_not_leak_into_each_other() {
 
     a.send(r#"{"op":"chat","text":"secret"}"#);
     let echo = a.read_line();
-    assert!(echo.contains("secret"));
+    assert!(echo.contains(r#""event":"feed""#) && echo.contains("secret"));
 
     // Bob must hear nothing: send him a chat of his own and assert the FIRST
     // thing he receives is that (not alice's message).

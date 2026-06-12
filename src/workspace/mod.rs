@@ -389,6 +389,19 @@ impl Workspace {
         self.sparks.samples()
     }
 
+    /// Session diff totals: (+lines, −lines) across recorded diff records
+    /// (feeds the den roster's +added/−removed counters).
+    pub fn diff_totals(&self) -> (u64, u64) {
+        self.diffs.iter().fold((0, 0), |(adds, dels), d| {
+            (adds + d.adds as u64, dels + d.dels as u64)
+        })
+    }
+
+    /// The file most recently touched by a recorded diff, if any.
+    pub fn last_file(&self) -> Option<&str> {
+        self.diffs.last().map(|d| d.path.as_str())
+    }
+
     /// Resolve a (possibly relative) diff path against the workspace root.
     pub(crate) fn abs_path(&self, p: &str) -> PathBuf {
         let pb = PathBuf::from(p);

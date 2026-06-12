@@ -47,6 +47,10 @@ pub struct PuppyApp {
     pack: crate::views::pack_panel::PackView,
     /// Last activity summary broadcast to the pack (skip resends of the same).
     pack_activity_last: String,
+    /// Signature of the last den roster broadcast (skip no-op re-sends).
+    den_roster_last: String,
+    /// When the den roster was last broadcast (rate-limit gate).
+    den_roster_at: std::time::Instant,
     /// When the pack activity was last considered (throttle).
     pack_activity_at: std::time::Instant,
     /// Signature of the last `.puppy/pack.json` written (skip no-op rewrites).
@@ -180,6 +184,8 @@ impl PuppyApp {
             mcp: crate::views::mcp_manager::McpManagerView::default(),
             pack: crate::views::pack_panel::PackView::default(),
             pack_activity_last: String::new(),
+            den_roster_last: String::new(),
+            den_roster_at: std::time::Instant::now(),
             pack_activity_at: std::time::Instant::now(),
             pack_breadcrumb_sig: String::new(),
             pack_breadcrumb_at: std::time::Instant::now(),
@@ -380,7 +386,11 @@ impl eframe::App for PuppyApp {
         self.sup.drain();
         self.poll_folder_pick();
         self.poll_remote();
+        // Keep the den mirror fresh even while its tab is closed (the panel
+        // also polls on render; draining twice is harmless).
+        self.pack.poll();
         self.broadcast_pack_activity();
+        self.broadcast_den_roster();
         self.sync_pack_breadcrumb();
 
         // Hand the resolved terminal palette to the embedded terminal renderer
@@ -463,8 +473,8 @@ impl eframe::App for PuppyApp {
                     open_agents = true;
                 }
                 if ui
-                    .button("Pack")
-                    .on_hover_text("Puppy Pack — join a room to chat with teammates")
+                    .button(crate::pack::DEN_LABEL)
+                    .on_hover_text("Puppy Den — join a room to work a project together")
                     .clicked()
                 {
                     open_pack = true;

@@ -5,15 +5,99 @@
 //! incoming lines into [`PackEvent`]s on a channel and wakes the UI -- the same
 //! events-in-over-a-channel pattern every other backend in the app uses.
 
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use puppy_relay::protocol::{ClientMsg, PROTO_VERSION, ServerMsg};
+use puppy_relay::protocol::{
+    ClientMsg, FeedEntry, MemberInfo, PROTO_VERSION, PlanInfo, Presence, RoomAgentInfo, ServerMsg,
+    TaskColumn, TaskInfo,
+};
 
 use crate::waker::UiWaker;
+
+/// The user-facing name for the collaborative room (the redesign renamed
+/// "Pack" → "Den"). The boundary is deliberate: strings a USER sees say Den;
+/// internal identifiers (the `puppy-relay` crate, `PackClient`, `Tab::Pack`,
+/// module/file names) keep "pack" — renaming them is churn without behavior.
+pub const DEN_LABEL: &str = "Den";
+
+/// How many feed entries the client keeps (a live room, not an archive).
+const DEN_FEED_CAP: usize = 500;
+
+/// Client-side den state, folded from relay events — the one structure the
+/// Den UI reads: members, per-member roster cards, the bounded feed ring,
+/// the kanban board, and shared plans. The relay is the source of truth;
+/// this is a faithful mirror.
+#[derive(Default)]
+pub struct DenState {
+    /// Current members (relay-sorted by user; colors/host/presence included).
+    pub members: Vec<MemberInfo>,
+    /// user -> (their latest roster broadcast, relay ts).
+    pub roster: HashMap<String, (Vec<RoomAgentInfo>, u64)>,
+    /// Feed ring, relay-ordered by `seq`, oldest at the front.
+    pub feed: VecDeque<FeedEntry>,
+    pub tasks: Vec<TaskInfo>,
+    pub plans: Vec<PlanInfo>,
+}
+
+impl DenState {
+    /// Fold one relay event into the mirror. Unknown-to-the-den events
+    /// (activity pings, claim replies) are ignored.
+    pub fn apply(&mut self, msg: &ServerMsg) {
+        match msg {
+            ServerMsg::Joined {
+                members,
+                feed,
+                tasks,
+                plans,
+                ..
+            } => {
+                self.members = members.clone();
+                self.feed = feed.iter().cloned().collect();
+                self.tasks = tasks.clone();
+                self.plans = plans.clone();
+                self.roster.clear(); // rosters re-arrive on each member's next tick
+            }
+            ServerMsg::MemberJoined { user, puppy, color } => {
+                if !self.members.iter().any(|m| &m.user == user) {
+                    self.members.push(MemberInfo {
+                        user: user.clone(),
+                        puppy: puppy.clone(),
+                        color: color.clone(),
+                        host: false,
+                        presence: Presence::Active,
+                    });
+                    self.members.sort_by(|a, b| a.user.cmp(&b.user));
+                }
+            }
+            ServerMsg::MemberLeft { user } => {
+                self.members.retain(|m| &m.user != user);
+                self.roster.remove(user);
+            }
+            ServerMsg::Feed { entry } => {
+                self.feed.push_back(entry.clone());
+                while self.feed.len() > DEN_FEED_CAP {
+                    self.feed.pop_front();
+                }
+            }
+            ServerMsg::Presence { user, presence } => {
+                if let Some(m) = self.members.iter_mut().find(|m| &m.user == user) {
+                    m.presence = *presence;
+                }
+            }
+            ServerMsg::Roster { from, agents, ts } => {
+                self.roster.insert(from.clone(), (agents.clone(), *ts));
+            }
+            ServerMsg::Tasks { items } => self.tasks = items.clone(),
+            ServerMsg::Plans { items } => self.plans = items.clone(),
+            _ => {}
+        }
+    }
+}
 
 /// What the reader thread delivers to the UI.
 pub enum PackEvent {
@@ -111,6 +195,86 @@ impl PackClient {
         });
     }
 
+    /// Broadcast this member's compact agent summaries for the den roster.
+    pub fn send_roster(&self, agents: Vec<RoomAgentInfo>) {
+        self.send(&ClientMsg::Roster { agents });
+    }
+
+    /// Announce going active/idle (the roster presence dot).
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn send_presence(&self, presence: Presence) {
+        self.send(&ClientMsg::Presence { presence });
+    }
+
+    /// A puppy speaking into the feed (`to_puppy` empty = the whole room).
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn puppy_msg(&self, puppy: &str, to_puppy: &str, review: bool, text: &str) {
+        self.send(&ClientMsg::PuppyMsg {
+            puppy: puppy.to_string(),
+            to_puppy: to_puppy.to_string(),
+            review,
+            text: text.to_string(),
+        });
+    }
+
+    /// Create a kanban card (the relay assigns the id).
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn task_create(&self, title: &str, column: TaskColumn, owner: &str, plan: bool) {
+        self.send(&ClientMsg::TaskCreate {
+            title: title.to_string(),
+            column,
+            owner: owner.to_string(),
+            plan,
+        });
+    }
+
+    /// Move a kanban card to a column.
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn task_move(&self, id: u64, column: TaskColumn) {
+        self.send(&ClientMsg::TaskMove { id, column });
+    }
+
+    /// Re-assign a kanban card (empty owner = unassign).
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn task_assign(&self, id: u64, owner: &str) {
+        self.send(&ClientMsg::TaskAssign {
+            id,
+            owner: owner.to_string(),
+        });
+    }
+
+    /// Rename a kanban card.
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn task_retitle(&self, id: u64, title: &str) {
+        self.send(&ClientMsg::TaskRetitle {
+            id,
+            title: title.to_string(),
+        });
+    }
+
+    /// Delete a kanban card.
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn task_delete(&self, id: u64) {
+        self.send(&ClientMsg::TaskDelete { id });
+    }
+
+    /// Share (or update) a puppy's plans.md with the den.
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn plan_share(&self, puppy: &str, markdown: &str) {
+        self.send(&ClientMsg::PlanShare {
+            puppy: puppy.to_string(),
+            markdown: markdown.to_string(),
+        });
+    }
+
+    /// Withdraw a previously shared plan.
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn plan_unshare(&self, puppy: &str) {
+        self.send(&ClientMsg::PlanUnshare {
+            puppy: puppy.to_string(),
+        });
+    }
+
     /// Broadcast what this member's puppy is doing right now.
     pub fn activity(&self, kind: &str, detail: &str) {
         self.send(&ClientMsg::Activity {
@@ -148,26 +312,37 @@ mod tests {
         )
         .expect("connect+join");
 
+        let mut den = DenState::default();
         match rx
             .recv_timeout(Duration::from_secs(5))
             .expect("joined event")
         {
-            PackEvent::Msg(ServerMsg::Joined { room, members }) => {
+            PackEvent::Msg(msg @ ServerMsg::Joined { .. }) => {
+                den.apply(&msg);
+                let ServerMsg::Joined { room, .. } = msg else {
+                    unreachable!()
+                };
                 assert_eq!(room, "test-room");
-                assert_eq!(members.len(), 1);
-                assert_eq!(members[0].user, "tester");
-                assert_eq!(members[0].puppy, "Rex");
+                assert_eq!(den.members.len(), 1);
+                assert_eq!(den.members[0].user, "tester");
+                assert_eq!(den.members[0].puppy, "Rex");
+                assert!(den.members[0].host, "sole member is the host");
+                assert!(!den.members[0].color.is_empty());
+                assert_eq!(den.feed.len(), 1, "own join narrated in the snapshot");
             }
             _ => panic!("expected joined first"),
         }
 
         client.chat("woof");
-        match rx.recv_timeout(Duration::from_secs(5)).expect("chat event") {
-            PackEvent::Msg(ServerMsg::Chat { from, text, .. }) => {
-                assert_eq!(from, "tester");
-                assert_eq!(text, "woof");
+        match rx.recv_timeout(Duration::from_secs(5)).expect("feed event") {
+            PackEvent::Msg(msg @ ServerMsg::Feed { .. }) => {
+                den.apply(&msg);
+                let last = den.feed.back().expect("entry in the ring");
+                assert_eq!(last.user, "tester");
+                assert_eq!(last.text, "woof");
+                assert!(matches!(last.kind, puppy_relay::protocol::FeedKind::Human));
             }
-            _ => panic!("expected the chat back"),
+            _ => panic!("expected the chat back as a feed entry"),
         }
     }
 }

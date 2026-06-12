@@ -1,14 +1,16 @@
-//! The Puppy Pack panel: join a relay room, see who's around and what their
-//! puppies are doing, and chat. (Phase B Tier 1 -- presence + chat + activity.)
+//! The Den panel (internally still "pack", see [`crate::pack::DEN_LABEL`]):
+//! join a relay room, see who's around and what their puppies are doing, and
+//! chat. The full Den UI (roster/board/feed) lands on the redesign branches —
+//! this panel renders the classic minimal view over the same [`DenState`].
 
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use eframe::egui;
-use puppy_relay::protocol::{ClaimInfo, MemberInfo, ServerMsg};
+use puppy_relay::protocol::{ClaimInfo, FeedKind, MemberInfo, ServerMsg};
 use serde_json::{Value, json};
 
-use crate::pack::{PackClient, PackEvent};
+use crate::pack::{DEN_LABEL, DenState, PackClient, PackEvent};
 
 /// Keep the feed bounded (it's a live room, not an archive).
 const FEED_CAP: usize = 500;
@@ -38,6 +40,9 @@ struct Conn {
     claims: Vec<ClaimInfo>,
     feed: Vec<FeedItem>,
     input: String,
+    /// The full den mirror (members/roster/feed/kanban/plans) the redesign
+    /// UI reads; folded from the same events as the classic view above.
+    den: DenState,
 }
 
 /// State for the Pack tab (one instance, lives in the app).
@@ -71,6 +76,19 @@ impl PackView {
     /// Is there a live room connection (used to gate activity broadcasts)?
     pub fn connected(&self) -> bool {
         self.conn.is_some()
+    }
+
+    /// The live den mirror, when joined (what the redesign UI renders).
+    #[allow(dead_code)] // consumed by the redesign UI branches
+    pub fn den(&self) -> Option<&DenState> {
+        self.conn.as_ref().map(|c| &c.den)
+    }
+
+    /// Broadcast this member's roster agent summaries, if connected.
+    pub fn send_roster(&self, agents: Vec<puppy_relay::protocol::RoomAgentInfo>) {
+        if let Some(conn) = &self.conn {
+            conn.client.send_roster(agents);
+        }
     }
 
     /// Broadcast an activity ping to the room, if connected.
@@ -134,7 +152,7 @@ impl PackView {
     }
 
     /// Drain relay events into the view state.
-    fn poll(&mut self) {
+    pub(crate) fn poll(&mut self) {
         let Some(conn) = self.conn.as_mut() else {
             return;
         };
@@ -156,21 +174,27 @@ impl PackView {
     }
 }
 
-/// Fold one relay message into the connection state.
+/// Fold one relay message into the connection state: the den mirror first
+/// (it understands every v4 event), then the classic view's bits.
 fn apply(conn: &mut Conn, msg: ServerMsg) {
+    conn.den.apply(&msg);
     match msg {
-        ServerMsg::Joined { room, members } => {
+        ServerMsg::Joined { room, members, .. } => {
             conn.room = room;
             conn.members = members;
         }
-        ServerMsg::MemberJoined { user, puppy } => {
+        ServerMsg::MemberJoined { user, puppy, .. } => {
             let note = if puppy.is_empty() {
                 format!("{user} joined")
             } else {
                 format!("{user} joined with {puppy}")
             };
             if !conn.members.iter().any(|m| m.user == user) {
-                conn.members.push(MemberInfo { user, puppy });
+                conn.members.push(MemberInfo {
+                    user,
+                    puppy,
+                    ..Default::default()
+                });
                 conn.members.sort_by(|a, b| a.user.cmp(&b.user));
             }
             push(conn, FeedItem::Note(note));
@@ -180,13 +204,43 @@ fn apply(conn: &mut Conn, msg: ServerMsg) {
             conn.activity.remove(&user);
             push(conn, FeedItem::Note(format!("{user} left")));
         }
-        ServerMsg::Chat { from, text, .. } => push(conn, FeedItem::Chat { from, text }),
+        ServerMsg::Feed { entry } => match entry.kind {
+            FeedKind::Human => push(
+                conn,
+                FeedItem::Chat {
+                    from: entry.user,
+                    text: entry.text,
+                },
+            ),
+            FeedKind::Puppy => {
+                // "Rex → Biscuit:" when addressed, else just the puppy.
+                let from = if entry.to_puppy.is_empty() {
+                    format!("🐶 {}", entry.puppy)
+                } else {
+                    format!("🐶 {} → {}", entry.puppy, entry.to_puppy)
+                };
+                push(
+                    conn,
+                    FeedItem::Chat {
+                        from,
+                        text: entry.text,
+                    },
+                );
+            }
+            FeedKind::System => push(conn, FeedItem::Note(entry.text)),
+        },
         ServerMsg::Activity {
             from, kind, detail, ..
         } => {
             conn.activity.insert(from, (kind, detail));
         }
         ServerMsg::Claims { items } => conn.claims = items,
+        // Den structure events: the mirror above already folded them; the
+        // classic panel has no surface for them yet (redesign branches do).
+        ServerMsg::Presence { .. }
+        | ServerMsg::Roster { .. }
+        | ServerMsg::Tasks { .. }
+        | ServerMsg::Plans { .. } => {}
         // Replies to coordination ops; the panel doesn't issue those (the
         // agent helper does, over its own one-shot connections).
         ServerMsg::ClaimResult { .. }
@@ -219,10 +273,10 @@ pub fn render(ui: &mut egui::Ui, view: &mut PackView, puppy: &str) {
 
 fn render_join_form(ui: &mut egui::Ui, view: &mut PackView) {
     ui.add_space(8.0);
-    ui.heading("Puppy Pack");
-    ui.label(
-        "Join a pack room to see your teammates and chat. The room code is the shared secret.",
-    );
+    ui.heading(format!("Puppy {DEN_LABEL}"));
+    ui.label(format!(
+        "Join a {DEN_LABEL} to see your teammates and chat. The room code is the shared secret.",
+    ));
     ui.add_space(8.0);
 
     egui::Grid::new("pack-join-grid")
@@ -254,7 +308,7 @@ fn render_join_form(ui: &mut egui::Ui, view: &mut PackView) {
         && !view.room.trim().is_empty()
         && !view.user.trim().is_empty();
     if ui
-        .add_enabled(ready, egui::Button::new("Join pack"))
+        .add_enabled(ready, egui::Button::new(format!("Join {DEN_LABEL}")))
         .clicked()
     {
         match PackClient::connect(
@@ -276,6 +330,7 @@ fn render_join_form(ui: &mut egui::Ui, view: &mut PackView) {
                     claims: Vec::new(),
                     feed: Vec::new(),
                     input: String::new(),
+                    den: DenState::default(),
                 });
             }
             Err(e) => view.error = Some(e),
@@ -293,7 +348,7 @@ fn render_room(ui: &mut egui::Ui, view: &mut PackView) {
 
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(format!("Pack: {}", conn.room)).strong());
+        ui.label(egui::RichText::new(format!("{DEN_LABEL}: {}", conn.room)).strong());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button("Leave").clicked() {
                 leave = true;
@@ -367,7 +422,7 @@ fn render_room(ui: &mut egui::Ui, view: &mut PackView) {
         let field = ui.add(
             egui::TextEdit::singleline(&mut conn.input)
                 .desired_width(ui.available_width() - 70.0)
-                .hint_text("Message the pack…"),
+                .hint_text(format!("Message the {DEN_LABEL}…")),
         );
         let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if (ui.button("Send").clicked() || enter) && !conn.input.trim().is_empty() {

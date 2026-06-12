@@ -70,7 +70,7 @@ impl TabViewer for Shell<'_> {
             Tab::McpManager => "MCP Servers".into(),
             Tab::SkillsManager => "Skills".into(),
             Tab::AgentManager => "Agents".into(),
-            Tab::Pack => "Pack".into(),
+            Tab::Pack => crate::pack::DEN_LABEL.into(),
         }
     }
 

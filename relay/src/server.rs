@@ -121,14 +121,8 @@ fn handle_conn(hub: Arc<Hub>, stream: TcpStream) {
         })
         .ok();
 
-    let (id, members) = hub.join(&room, &user, puppy.trim(), tx.clone());
-    let _ = tx.send(
-        serde_json::to_string(&ServerMsg::Joined {
-            room: room.clone(),
-            members,
-        })
-        .expect("ServerMsg serializes"),
-    );
+    let (id, snapshot) = hub.join(&room, &user, puppy.trim(), tx.clone());
+    let _ = tx.send(serde_json::to_string(&snapshot).expect("ServerMsg serializes"));
 
     for line in lines {
         let Ok(line) = line else { break };
@@ -138,6 +132,32 @@ fn handle_conn(hub: Arc<Hub>, stream: TcpStream) {
         match serde_json::from_str::<ClientMsg>(&line) {
             Ok(ClientMsg::Chat { text }) => hub.chat(id, &text),
             Ok(ClientMsg::Activity { kind, detail }) => hub.activity(id, &kind, &detail),
+            Ok(ClientMsg::Presence { presence }) => hub.presence(id, presence),
+            Ok(ClientMsg::Roster { agents }) => hub.roster(id, agents),
+            Ok(ClientMsg::PuppyMsg {
+                puppy,
+                to_puppy,
+                review,
+                text,
+            }) => hub.puppy_msg(id, &puppy, &to_puppy, review, &text),
+            Ok(ClientMsg::TaskCreate {
+                title,
+                column,
+                owner,
+                plan,
+            }) => hub.task_create(id, title.trim(), column, owner.trim(), plan),
+            Ok(ClientMsg::TaskMove { id: task, column }) => hub.task_move(id, task, column),
+            Ok(ClientMsg::TaskAssign { id: task, owner }) => {
+                hub.task_assign(id, task, owner.trim())
+            }
+            Ok(ClientMsg::TaskRetitle { id: task, title }) => {
+                hub.task_retitle(id, task, title.trim())
+            }
+            Ok(ClientMsg::TaskDelete { id: task }) => hub.task_delete(id, task),
+            Ok(ClientMsg::PlanShare { puppy, markdown }) => {
+                hub.plan_share(id, puppy.trim(), &markdown)
+            }
+            Ok(ClientMsg::PlanUnshare { puppy }) => hub.plan_unshare(id, puppy.trim()),
             Ok(ClientMsg::Leave) => break,
             Ok(ClientMsg::Join { .. }) => {
                 let _ = tx.send(error_line("already joined"));
