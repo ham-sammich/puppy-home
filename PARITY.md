@@ -410,7 +410,7 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       pump); pop-out adds embed.rs `unparent` (SetParent NULL +
       WS_POPUP restore). Flagged for Windows validation pass.
       PUPPY_GPUI_BROWSER_CYCLE=1 staged probe drives the whole cycle
-      headlessly. `<hash6>`
+      headlessly. `1c4209e`
 
 - [x] E8 REDUX browser "does nothing" on macOS in the GPUI shell (user:
       "opens one but there's no browser"). ROOT CAUSE: on embeddable
