@@ -29,10 +29,15 @@ pub fn model_pill(
         .text_color(t.weak)
         .cursor_pointer()
         .hover(|st| st.border_color(alpha(t.accent, 0.6)).text_color(t.text))
+        // Long model ids (claude-code-claude-opus-4-8…) must ellipsize,
+        // not clip: cap at 180 but allow shrinking below it inside a tight
+        // header row, and surface the full id on hover (B13.3).
         .max_w(px(180.))
+        .min_w_0()
         .overflow_hidden()
         .text_ellipsis()
         .whitespace_nowrap()
+        .tooltip(crate::gpui_ui::widgets::text_tip(s.model.clone()))
         .child(s.model.clone())
         .on_click({
             let root = root_entity.clone();
@@ -42,7 +47,7 @@ pub fn model_pill(
         });
 
     let Some(catalog) = &s.catalog else {
-        return div().child(pill).into_any_element();
+        return div().min_w_0().flex_shrink().child(pill).into_any_element();
     };
 
     // Popover: deferred so it paints above sibling cards.
@@ -147,6 +152,8 @@ pub fn model_pill(
 
     div()
         .relative()
+        .min_w_0()
+        .flex_shrink()
         .child(pill)
         .child(gpui::deferred(panel).with_priority(100))
         .into_any_element()
