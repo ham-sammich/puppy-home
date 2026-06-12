@@ -220,20 +220,9 @@ impl Workspace {
             return;
         }
         self.record_history(&text);
-        let mode = if self.steer_queue_mode {
-            "queue"
-        } else {
-            "now"
-        };
-        if let Some(backend) = &self.backend {
-            backend.steer(&text, mode);
+        let queue = self.steer_queue_mode;
+        if self.steer_text(&text, queue) {
             self.input.clear();
-            let tag = if self.steer_queue_mode {
-                "📨 steer (queued)"
-            } else {
-                "🎯 steer"
-            };
-            self.transcript.push(Entry::User(format!("{tag}: {text}")));
         }
     }
 

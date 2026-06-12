@@ -279,6 +279,38 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       /cmds+ctx, version/update; stats refreshed (clean release 1m53s,
       12 MB binary, 970 deps unchanged, 223 tests, +29,675/-393 over 69
       commits); deviations appendix updated (old composer items obsolete).
+- [x] G-DRIFT. The long-flagged egui<->shared divergence reconciliation
+      (session.rs / supervisor.rs / shell / app). Hunk inventory across
+      the trio: ~6 shared-logic drifts, ~12 frontend-specific, 1 dead
+      duplicate, 0 rot in shared's app/ (fn-name intersection with
+      workspace/ = only `new`). RECONCILED to shared-backend:
+      dashboard_view/composer_style/reduce_motion Session fields +
+      ComposerStyle/DashboardViewMode enums (canonical there, identical
+      copies on both UI branches, docs say so); current_session now
+      carries all prefs losslessly (avatar-carry pattern); chat.rs
+      steer() deduped on shared+gpui to delegate to steer_text()
+      (deletes the one dead duplicate — old inline body with literal
+      emojis); egui's steer_text emoji literals re-escaped per repo
+      rule. BOUNDED: egui-only avatars()+UiPrefs moved under an
+      explicit EGUI-SHELL-ONLY banner in egui's session.rs.
+      RESIDUAL-DRIFT LEDGER (deliberate, not debt):
+      * #[allow(dead_code)] present only on shared — each branch keeps
+        allows for accessors its UI doesn't consume (by design).
+      * ShellAction (egui) vs gpui action funnel — parallel dispatch BY
+        DESIGN; verified both are thin (handlers only call shared
+        Workspace/Supervisor methods; no logic inside either).
+      * shared's app/ + views/ + workspace render files = the frozen
+        ORIGINAL egui UI, consumed by shared's own binary — not rot.
+      * current_session signature: (theme) on shared vs (UiPrefs) on
+        egui — egui-only aggregation; both carry non-owned fields.
+      * egui's events.rs "asked:" note renders session::avatars() (QW8
+        choice); shared/gpui keep the static \u{1f436} (frontend-spec).
+      * submit()/steer() sit at different file positions on egui vs
+        shared/gpui (egui hoisted them in its composer rework) — same
+        bodies, placement-only.
+      * Legacy-shell micro-delta accepted: steer() now optimistically
+        bumps queued_steers on queued steers (egui's shipped behavior;
+        next status poll corrects it anyway).
 - [ ] G3. **WINDOWS SMOKE GATE (required before merge)**: gpui pin must
       build + run on Windows (DirectX backend; `runtime_shaders` is a
       macOS-only concern). App smoke: open folder, prompt, terminal, den.

@@ -21,19 +21,20 @@ pub struct Session {
     /// run or pre-layout sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<DockState<SavedTab>>,
-    /// The dashboard's fleet view (Grid / List / Focus), remembered per machine.
-    /// Field name shared with redesign/egui so session.json stays portable.
+    /// The dashboard's fleet view (Grid / List / Focus), remembered per
+    /// machine. Canonical on redesign/shared-backend (drift reconciliation);
+    /// this is an identical copy so session.json stays portable.
     #[serde(default)]
     pub dashboard_view: DashboardViewMode,
+    /// The chat composer style (a user preference, applies to all workspaces).
+    #[serde(default)]
+    pub composer_style: ComposerStyle,
     /// Disable decorative animation app-wide (pulses, ring spins, bobs).
     #[serde(default)]
     pub reduce_motion: bool,
-    /// The chat composer style (a user preference, applies to all workspaces).
-    /// Field name shared with redesign/egui so session.json stays portable.
-    #[serde(default)]
-    pub composer_style: ComposerStyle,
     /// Your avatar emoji in transcripts (empty = the \u{1f9d1} default).
-    /// QW8; field shared with redesign/egui (sync queued).
+    /// Owned by the redesign shells' pickers (QW8); present here so
+    /// session.json round-trips losslessly across all branches.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub user_avatar: String,
     /// Your puppy's avatar emoji (empty = the \u{1f436} default).
@@ -43,7 +44,8 @@ pub struct Session {
 
 /// Which composer skin the chat dock renders. One shared input state
 /// underneath; this only picks the layout. Persisted per machine.
-/// Identical (incl. serde casing) to redesign/egui's enum.
+/// Canonical on redesign/shared-backend; identical copy here
+/// (incl. serde casing) so session.json stays portable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ComposerStyle {
@@ -86,7 +88,7 @@ impl ComposerStyle {
 }
 
 /// How the dashboard lays out the fleet. Persisted in `session.json`.
-/// Identical (incl. serde casing) to redesign/egui's enum — one config format.
+/// Canonical on redesign/shared-backend; identical copy here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DashboardViewMode {
