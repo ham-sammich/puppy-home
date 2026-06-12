@@ -344,7 +344,7 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       RemoteInfo { label, target } and both connect flows pass it
       through. VALIDATION: arg-shape unit tests + local-terminal probe
       green; real remote terminal needs a reachable host — flagged for
-      human QA alongside E4. `<hash below>`
+      human QA alongside E4. `2437bf0`
 
       SYNC QUEUE (phase-end batch): sidecar/sidecar.py (picker
       intercepts + cwd event + open flags), backend/mod.rs (Wire/UiEvent
