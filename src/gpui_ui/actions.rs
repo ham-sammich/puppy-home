@@ -58,6 +58,17 @@ pub enum DashAction {
     ToggleTree(WorkspaceId),
     ToggleDir(WorkspaceId, PathBuf),
     StarterPrompt(WorkspaceId, String),
+    // -- needs-you answers --
+    AskToggle(WorkspaceId, usize, usize),
+    /// Open/close the free-text "Other" row for an ask question.
+    AskOther(WorkspaceId, usize),
+    AskSubmit(WorkspaceId),
+    AskCancel(WorkspaceId),
+    PendingChoose(WorkspaceId, usize),
+    /// Send the answer input's text to a pending input prompt.
+    PendingText(WorkspaceId),
+    /// Enter pressed inside the shared answer input.
+    AnswerEnter,
 }
 
 impl RootView {
@@ -206,6 +217,89 @@ impl RootView {
             DashAction::StarterPrompt(id, text) => {
                 if let Some(input) = self.chat_inputs.get(&id) {
                     input.update(cx, |i, cx| i.set_text(text, cx));
+                }
+            }
+            DashAction::AskToggle(id, qi, oi) => {
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.ask_toggle_option(qi, oi);
+                }
+            }
+            DashAction::AskOther(id, qi) => {
+                self.ensure_answer_input(cx);
+                self.other_target = if self.other_target == Some((id, qi)) {
+                    None
+                } else {
+                    Some((id, qi))
+                };
+                if let Some(input) = &self.answer_input {
+                    input.update(cx, |i, cx| i.clear(cx));
+                }
+            }
+            DashAction::AskSubmit(id) => {
+                // Flush the Other row into its question before submitting.
+                if let Some((tid, qi)) = self.other_target.take()
+                    && tid == id
+                    && let Some(input) = &self.answer_input
+                {
+                    let text = input.read(cx).text().to_string();
+                    if let Some(ws) = self.supervisor.get_mut(id) {
+                        ws.ask_set_other(qi, text);
+                    }
+                    input.update(cx, |i, cx| i.clear(cx));
+                }
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.ask_submit();
+                    let name = ws.name.clone();
+                    self.toast(format!("Answered {name}"), accent);
+                }
+            }
+            DashAction::AskCancel(id) => {
+                self.other_target = None;
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.ask_cancel();
+                    let name = ws.name.clone();
+                    self.toast(format!("Declined {name}'s question"), accent);
+                }
+            }
+            DashAction::PendingChoose(id, i) => {
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.pending_choose(i);
+                    let name = ws.name.clone();
+                    self.toast(format!("Answered {name}"), accent);
+                }
+            }
+            DashAction::PendingText(id) => {
+                let text = self
+                    .answer_input
+                    .as_ref()
+                    .map(|i| i.read(cx).text().trim().to_string())
+                    .unwrap_or_default();
+                if text.is_empty() {
+                    return;
+                }
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.pending_answer_text(&text);
+                    let name = ws.name.clone();
+                    self.toast(format!("Answered {name}"), accent);
+                }
+                if let Some(input) = &self.answer_input {
+                    input.update(cx, |i, cx| i.clear(cx));
+                }
+            }
+            DashAction::AnswerEnter => {
+                // Route Enter in the answer input: input prompts submit
+                // directly; ask "Other" rows wait for the explicit Submit.
+                if let Some(id) = self.screen {
+                    let is_input_prompt = self
+                        .supervisor
+                        .get(id)
+                        .and_then(|w| w.pending_request())
+                        .is_some_and(|p| {
+                            matches!(p.kind, crate::workspace::PendingKind::Input { .. })
+                        });
+                    if is_input_prompt {
+                        self.dispatch(DashAction::PendingText(id), cx);
+                    }
                 }
             }
             DashAction::SetView(mode) => {

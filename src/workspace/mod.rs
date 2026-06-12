@@ -38,12 +38,12 @@ mod state;
 mod tree_ops;
 mod view;
 
-pub(crate) use state::Entry;
+pub(crate) use ask::AskState;
+pub(crate) use state::{Entry, Pending, PendingKind};
 pub use state::{InstanceStatus, SPARK_SAMPLES, SparkRing};
 
-use ask::AskState;
 use diff::DiffRecord;
-use state::{EditorItem, FileBuffer, GitView, Pending};
+use state::{EditorItem, FileBuffer, GitView};
 
 /// Stable, never-reused identity for a workspace.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -460,6 +460,29 @@ impl Workspace {
     /// Filesystem handle for this workspace (the chat's file explorer).
     pub(crate) fn fs_handle(&self) -> Arc<dyn fs::WorkspaceFs> {
         self.fs.clone()
+    }
+
+    /// The outstanding input/confirm/select request, if any (frontends
+    /// render it; answers go through [`Self::pending_choose`] /
+    /// [`Self::pending_answer_text`]).
+    pub(crate) fn pending_request(&self) -> Option<&Pending> {
+        self.pending.as_ref()
+    }
+
+    /// Answer a confirm/select request by picking option `i`.
+    pub(crate) fn pending_choose(&mut self, i: usize) {
+        if let Some(p) = self.pending.as_mut() {
+            p.selection = i;
+            self.answer_pending();
+        }
+    }
+
+    /// Answer an input request with typed text.
+    pub(crate) fn pending_answer_text(&mut self, text: &str) {
+        if let Some(p) = self.pending.as_mut() {
+            p.text = text.to_string();
+            self.answer_pending();
+        }
     }
 
     /// The question text of an outstanding interactive request, if any (shown

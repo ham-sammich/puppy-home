@@ -103,6 +103,10 @@ pub struct RootView {
     /// `PUPPY_GPUI_SCREEN=chat`: auto-open the first ready workspace's chat
     /// (probe instrumentation, like PUPPY_GPUI_PROMPT).
     probe_chat_screen: bool,
+    /// Shared single-line answer input (ask Other rows + input prompts).
+    answer_input: Option<Entity<ChatInput>>,
+    /// Which (workspace, ask-question) the answer input currently feeds.
+    other_target: Option<(WorkspaceId, usize)>,
 }
 
 impl RootView {
@@ -143,6 +147,41 @@ impl RootView {
             expanded_dirs: HashSet::new(),
             pending_focus: None,
             probe_chat_screen: std::env::var("PUPPY_GPUI_SCREEN").as_deref() == Ok("chat"),
+            answer_input: None,
+            other_target: None,
+        }
+    }
+
+    /// Create the shared answer input on demand (ask Other / input prompts).
+    pub(crate) fn ensure_answer_input(&mut self, cx: &mut Context<Self>) {
+        if self.answer_input.is_some() {
+            return;
+        }
+        let entity = cx.new(|cx| ChatInput::new("Type your answer\u{2026}", cx));
+        let sub = cx.subscribe(&entity, |this, _, event: &InputEvent, cx| {
+            if *event == InputEvent::Submitted {
+                this.dispatch(DashAction::AnswerEnter, cx);
+            }
+        });
+        self.answer_input = Some(entity);
+        self.chat_subs.push(sub);
+    }
+
+    /// Eagerly create the answer input once something needs answering, so
+    /// the panel can render it (entities aren't created during render).
+    fn ensure_answer_input_if_needed(&mut self, cx: &mut Context<Self>) {
+        if self.answer_input.is_some() {
+            return;
+        }
+        let needed = self.supervisor.iter().any(|w| {
+            w.ask_state().is_some()
+                || matches!(
+                    w.pending_request().map(|p| &p.kind),
+                    Some(crate::workspace::PendingKind::Input { .. })
+                )
+        });
+        if needed {
+            self.ensure_answer_input(cx);
         }
     }
 
@@ -198,6 +237,7 @@ impl RootView {
                     root.supervisor.drain();
                     root.maybe_send_probe_prompt();
                     root.maybe_probe_chat_screen(cx);
+                    root.ensure_answer_input_if_needed(cx);
                     root.prune_toasts();
                     cx.notify();
                     if probe {
@@ -442,6 +482,11 @@ impl Render for RootView {
                     reduce_motion: self.reduce_motion,
                     tree_open: !self.tree_closed.contains(&id),
                     expanded_dirs: &self.expanded_dirs,
+                    answer_input: self.answer_input.as_ref(),
+                    other_target: self
+                        .other_target
+                        .filter(|(tid, _)| *tid == id)
+                        .map(|(_, qi)| qi),
                 })
             }
             None => self.dashboard_body(cx),

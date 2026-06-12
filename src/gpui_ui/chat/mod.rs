@@ -2,6 +2,7 @@
 //! the WorkspaceFs trait + the session Changes list) beside the chat column
 //! (transcript + composer dock).
 
+pub mod ask;
 pub mod composer;
 pub mod transcript;
 
@@ -28,6 +29,10 @@ pub struct ChatArgs<'a> {
     pub reduce_motion: bool,
     pub tree_open: bool,
     pub expanded_dirs: &'a HashSet<(u64, PathBuf)>,
+    /// Shared answer input (ask Other / pending input prompts).
+    pub answer_input: Option<&'a Entity<ChatInput>>,
+    /// The ask question index the answer input is bound to, if any.
+    pub other_target: Option<usize>,
 }
 
 /// The whole chat screen body (below the tab strip).
@@ -52,6 +57,14 @@ pub fn chat_screen(args: &ChatArgs) -> AnyElement {
         puppy: args.puppy.clone(),
     });
 
+    let answer = ask::ask_panel(&ask::AskArgs {
+        t,
+        ws: args.ws,
+        root: args.root.clone(),
+        answer_input: args.answer_input,
+        other_target: args.other_target,
+    });
+
     div()
         .flex_1()
         .min_h_0()
@@ -69,6 +82,7 @@ pub fn chat_screen(args: &ChatArgs) -> AnyElement {
                 .bg(t.card)
                 .overflow_hidden()
                 .child(body)
+                .child(answer)
                 .child(dock),
         )
         .into_any_element()
