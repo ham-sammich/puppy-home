@@ -464,7 +464,7 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       egui safety net: maps RemoteError to text, no offer flow (queued
       for redesign/egui along with the rest). E2E vs a real uv-less
       host = human QA (delete uv from PATH on the test box, connect).
-      `<hash4>`
+      `34978da`
 
       SYNC QUEUE (phase-end batch): sidecar/sidecar.py (picker
       intercepts + cwd event + open flags), backend/mod.rs (Wire/UiEvent
