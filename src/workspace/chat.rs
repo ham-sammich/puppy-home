@@ -54,13 +54,24 @@ impl Workspace {
         self.history_stash.clear();
     }
 
-    /// Frontend-agnostic prompt entry: stage `text` as if typed and submit it
-    /// as a user turn (transcript, history, `running`, status polling — the
-    /// whole state machine). The GPUI frontend drives turns through this.
-    #[allow(dead_code)] // no caller on the shared base; the UI branches drive it
-    pub(crate) fn send_user_prompt(&mut self, text: &str) {
-        self.input = text.to_string();
-        self.submit();
+    /// The one prompt-sending path (composer submit + dashboard "New prompt"):
+    /// records the turn in the transcript and starts turn tracking. Signature
+    /// converged across BOTH UI branches (text + images superset) — keep all
+    /// three trees identical here or cherry-picks will trip (again).
+    pub(crate) fn send_user_prompt(&mut self, text: String, images: Vec<String>) {
+        let Some(backend) = &self.backend else { return };
+        self.transcript.push(Entry::User(text.clone()));
+        if !images.is_empty() {
+            self.transcript.push(Entry::Note(format!(
+                "Sent {} image(s) with this message.",
+                images.len()
+            )));
+        }
+        backend.send_prompt(&text, &images);
+        // Optimistic: cards show the prompt immediately; the next status poll
+        // confirms it from the sidecar.
+        self.last_prompt = text;
+        self.begin_turn();
     }
 
     pub(crate) fn submit(&mut self) {
@@ -72,22 +83,14 @@ impl Workspace {
         self.record_history(&text);
         if text.starts_with('/') {
             self.dispatch_command(&text);
-        } else if let Some(backend) = &self.backend {
+        } else {
             let images: Vec<String> = self
                 .pending_images
                 .iter()
                 .map(|p| p.png_base64.clone())
                 .collect();
-            self.transcript.push(Entry::User(text.clone()));
-            if !images.is_empty() {
-                self.transcript.push(Entry::Note(format!(
-                    "Sent {} image(s) with this message.",
-                    images.len()
-                )));
-            }
-            backend.send_prompt(&text, &images);
             self.pending_images.clear();
-            self.begin_turn();
+            self.send_user_prompt(text, images);
         }
     }
 
