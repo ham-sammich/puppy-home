@@ -125,15 +125,29 @@ impl SshTarget {
         cmd
     }
 
-    /// The `ssh` call that checks whether the remote can HOST a sidecar:
-    /// `command -v <argv0-of-launcher>`. Run after provisioning succeeds
-    /// (so auth/network are already proven good): exit 0 = hostable,
-    /// exit 1 = launcher missing (the SSH-fallback trigger), exit 255 =
-    /// ssh-level failure (do NOT treat as "can't host").
-    pub fn launcher_probe_command(&self, launcher: &str) -> Command {
+    /// The `ssh` call that preflights a remote workspace. Run after
+    /// provisioning succeeds (auth/network proven good). Distinct exit
+    /// codes keep the verdicts apart:
+    /// * 0 — hostable, path ok
+    /// * 3 — `cwd` doesn't exist (plain error; the old behavior "adopted"
+    ///   a workspace whose sidecar then died on `cd`)
+    /// * 1 — launcher missing (the ONLY SSH-fallback trigger)
+    /// * 255 — ssh-level failure (no verdict at all)
+    ///
+    /// `command test` not bare `test`: rc-file functions shadow verbs
+    /// (the vm840 lesson).
+    pub fn launcher_probe_command(&self, launcher: &str, cwd: Option<&str>) -> Command {
         let argv0 = launcher.split_whitespace().next().unwrap_or("uv");
+        let mut line = String::new();
+        if let Some(cwd) = cwd {
+            line.push_str(&format!("command test -d {} || exit 3; ", sh_quote(cwd)));
+        }
+        line.push_str(&format!(
+            "command -v {} >/dev/null || exit 1",
+            sh_quote(argv0)
+        ));
         let mut cmd = self.base_ssh();
-        cmd.arg("--").arg(format!("command -v {}", sh_quote(argv0)));
+        cmd.arg("--").arg(line);
         cmd
     }
 
@@ -547,13 +561,18 @@ mod tests {
     }
 
     #[test]
-    fn launcher_probe_checks_argv0_only() {
+    fn launcher_probe_checks_argv0_and_optional_cwd() {
         let t = SshTarget::parse("devbox").unwrap();
-        let a = args(&t.launcher_probe_command("uv run --with code-puppy python"));
-        assert_eq!(a.last().unwrap(), "command -v 'uv'");
-        // Custom launcher: still just the first word.
-        let a = args(&t.launcher_probe_command("/opt/py/bin/python3 -u"));
-        assert_eq!(a.last().unwrap(), "command -v '/opt/py/bin/python3'");
+        let a = args(&t.launcher_probe_command("uv run --with code-puppy python", None));
+        assert_eq!(a.last().unwrap(), "command -v 'uv' >/dev/null || exit 1");
+        // Custom launcher: still just the first word; cwd check leads with
+        // its own exit code so the verdicts stay distinguishable.
+        let a = args(&t.launcher_probe_command("/opt/py/bin/python3 -u", Some("/srv/my proj")));
+        assert_eq!(
+            a.last().unwrap(),
+            "command test -d '/srv/my proj' || exit 3; \
+             command -v '/opt/py/bin/python3' >/dev/null || exit 1"
+        );
     }
 
     #[test]

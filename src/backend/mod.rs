@@ -867,22 +867,26 @@ impl CodePuppy {
         let mut prov_child = prov
             .spawn()
             .map_err(|e| format!("starting ssh to provision sidecar: {e}"))?;
-        {
+        let send_err = {
             let mut si = prov_child.stdin.take().ok_or("no stdin pipe (provision)")?;
-            si.write_all(SIDECAR_PY.as_bytes())
-                .map_err(|e| format!("sending sidecar to remote: {e}"))?;
+            si.write_all(SIDECAR_PY.as_bytes()).err()
             // `si` drops here -> EOF, so the remote `cat` finishes.
-        }
+        };
         let prov_out = prov_child
             .wait_with_output()
             .map_err(|e| format!("waiting on remote provisioning: {e}"))?;
-        if !prov_out.status.success() {
+        if !prov_out.status.success() || send_err.is_some() {
+            // Prefer ssh's own stderr ("Could not resolve hostname", auth
+            // refusals) over a raw broken-pipe write error — when ssh dies
+            // early the pipe breaks FIRST, but the reason is on stderr.
             let err = String::from_utf8_lossy(&prov_out.stderr);
             let err = err.trim();
-            return Err(RemoteError::Other(if err.is_empty() {
-                "remote provisioning failed (check the SSH target and auth)".to_string()
-            } else {
+            return Err(RemoteError::Other(if !err.is_empty() {
                 format!("remote provisioning failed: {err}")
+            } else if let Some(e) = send_err {
+                format!("sending sidecar to remote: {e}")
+            } else {
+                "remote provisioning failed (check the SSH target and auth)".to_string()
             }));
         }
 
@@ -891,7 +895,7 @@ impl CodePuppy {
         // launcher missing (CannotHost -> the UI can offer SSH-fallback);
         // exit 255 = ssh-level failure mid-flow (NOT a hosting verdict).
         let launcher = ssh::default_remote_launcher();
-        let mut probe = target.launcher_probe_command(&launcher);
+        let mut probe = target.launcher_probe_command(&launcher, remote_cwd);
         crate::proc::hide_console(&mut probe);
         probe
             .stdin(Stdio::null())
@@ -902,13 +906,20 @@ impl CodePuppy {
             .map_err(|e| format!("probing the remote launcher: {e}"))?;
         if !probe_status.success() {
             let argv0 = launcher.split_whitespace().next().unwrap_or("uv");
-            if probe_status.code() == Some(255) {
-                return Err(RemoteError::Other(
-                    "ssh failed while probing the remote launcher".to_string(),
-                ));
-            }
-            return Err(RemoteError::CannotHost {
-                launcher: argv0.to_string(),
+            return Err(match probe_status.code() {
+                // Exit 3: the requested path doesn't exist — a plain error
+                // on ANY connect mode (previously this "connected" and the
+                // sidecar died on `cd` right after adoption).
+                Some(3) => RemoteError::Other(format!(
+                    "remote path {} doesn't exist",
+                    remote_cwd.unwrap_or("?")
+                )),
+                Some(255) => {
+                    RemoteError::Other("ssh failed while probing the remote launcher".to_string())
+                }
+                _ => RemoteError::CannotHost {
+                    launcher: argv0.to_string(),
+                },
             });
         }
 

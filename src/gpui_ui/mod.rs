@@ -1074,6 +1074,16 @@ impl RootView {
                 .and_then(|s| s.parse().ok())
             {
                 self.probe_prompt_dump = Some((id, Instant::now(), secs));
+                // The drain loop is waker-driven: once the agent's turn
+                // ends there are no events, so a timed dump would never
+                // fire. Tick the waker until past the deadline (+grace).
+                let waker = self.waker.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..(secs + 30) / 2 {
+                        std::thread::sleep(Duration::from_secs(2));
+                        waker.wake();
+                    }
+                });
             }
         }
     }
