@@ -192,8 +192,13 @@ impl gpui::Render for TextTip {
 pub fn text_tip(
     text: String,
 ) -> impl Fn(&mut gpui::Window, &mut gpui::App) -> gpui::AnyView + 'static {
-    let tokens = Tokens::dark();
-    move |_, cx| cx.new(|_| TextTip(text.clone(), tokens)).into()
+    // Tooltips render in their own root — the app's text-color cascade
+    // doesn't reach them; resolve the ACTIVE theme, not a stale dark
+    // constant (B13.2).
+    move |_, cx| {
+        let tokens = Tokens::current();
+        cx.new(|_| TextTip(text.clone(), tokens)).into()
+    }
 }
 
 /// The toast layer (bottom-center, painted above everything).

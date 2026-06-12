@@ -483,7 +483,7 @@ impl RootView {
             .get(id)
             .and_then(|ws| ws.file_view(path).map(|(c, ..)| c.to_string()))
             .unwrap_or_default();
-        let runs = editor::highlight(&content, path);
+        let runs = editor::highlight(&content, path, self.tokens.dark);
         let entity = cx.new(|cx| {
             let mut input = ChatInput::new_code(cx);
             input.set_text(content, cx);
@@ -497,7 +497,7 @@ impl RootView {
                 move |this, input, event: &InputEvent, cx| match event {
                     InputEvent::Edited => {
                         let text = input.read(cx).text().to_string();
-                        let runs = editor::highlight(&text, &path);
+                        let runs = editor::highlight(&text, &path, this.tokens.dark);
                         if let Some(ws) = this.supervisor.get_mut(id) {
                             ws.set_file_content(&path, text);
                         }

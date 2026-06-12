@@ -119,7 +119,7 @@ pub const F_TOOLF: usize = 7; // agent-wizard tool filter
 const POOL: usize = 8;
 
 /// Syntect grammar hook for the shared paste buffer.
-fn paste_file(kind: Option<MgrKind>) -> &'static str {
+pub(crate) fn paste_file(kind: Option<MgrKind>) -> &'static str {
     match kind {
         Some(MgrKind::Skills) => "SKILL.md",
         _ => "x.json",
@@ -157,6 +157,7 @@ impl RootView {
                         let runs = crate::gpui_ui::editor::highlight(
                             &text,
                             std::path::Path::new(paste_file(this.manager_open)),
+                            this.tokens.dark,
                         );
                         input.update(cx, |i, cx| i.set_syntax(runs, cx));
                     }
@@ -194,6 +195,7 @@ impl RootView {
             let runs = crate::gpui_ui::editor::highlight(
                 &text,
                 std::path::Path::new(paste_file(self.manager_open)),
+                self.tokens.dark,
             );
             input.update(cx, |i, cx| {
                 i.set_text(text, cx);

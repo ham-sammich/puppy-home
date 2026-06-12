@@ -32,21 +32,28 @@ fn syntax_set() -> &'static SyntaxSet {
     SET.get_or_init(SyntaxSet::load_defaults_newlines)
 }
 
-fn theme() -> &'static Theme {
-    static THEME: OnceLock<Theme> = OnceLock::new();
-    THEME.get_or_init(|| {
+/// The bundled syntect theme matching the app's light/dark mode. Always
+/// using the dark one painted pastel-on-white in light themes (B13.2).
+fn theme(dark: bool) -> &'static Theme {
+    static DARK: OnceLock<Theme> = OnceLock::new();
+    static LIGHT: OnceLock<Theme> = OnceLock::new();
+    let (slot, names): (&OnceLock<Theme>, [&str; 2]) = if dark {
+        (&DARK, ["base16-eighties.dark", "base16-mocha.dark"])
+    } else {
+        (&LIGHT, ["base16-ocean.light", "InspiredGitHub"])
+    };
+    slot.get_or_init(|| {
         let mut set = ThemeSet::load_defaults();
-        // Closest bundled match to the app's dark palette.
         set.themes
-            .remove("base16-eighties.dark")
-            .or_else(|| set.themes.remove("base16-mocha.dark"))
+            .remove(names[0])
+            .or_else(|| set.themes.remove(names[1]))
             .unwrap_or_default()
     })
 }
 
 /// Compute per-line syntax color runs for a file (None above the size cap
 /// or for unknown languages — the editor then renders plain text).
-pub fn highlight(content: &str, path: &Path) -> Option<SyntaxRuns> {
+pub fn highlight(content: &str, path: &Path, dark: bool) -> Option<SyntaxRuns> {
     if content.len() > HIGHLIGHT_MAX_BYTES {
         return None;
     }
@@ -54,7 +61,7 @@ pub fn highlight(content: &str, path: &Path) -> Option<SyntaxRuns> {
     let syntax = set
         .find_syntax_by_token(language_for(path))
         .or_else(|| set.find_syntax_by_token("txt"))?;
-    let mut hl = HighlightLines::new(syntax, theme());
+    let mut hl = HighlightLines::new(syntax, theme(dark));
     let mut lines = Vec::new();
     for line in content.split('\n') {
         let mut runs: Vec<(usize, gpui::Hsla)> = Vec::new();

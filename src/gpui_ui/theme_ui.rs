@@ -182,11 +182,36 @@ impl RootView {
     /// Apply a palette app-wide: re-resolve the tokens, publish them for
     /// future entities, and push them into every live input.
     pub(crate) fn apply_palette(&mut self, p: &ThemePalette, cx: &mut gpui::Context<Self>) {
+        let was_dark = self.tokens.dark;
         self.tokens = Tokens::from_palette(p);
         Tokens::set_current(self.tokens);
         let inputs = self.all_inputs();
         for input in inputs {
             input.update(cx, |i, cx| i.set_tokens(self.tokens, cx));
+        }
+        // Crossing light<->dark flips the syntect theme: re-run the
+        // highlight pass on every open code surface, or the editor keeps
+        // the wrong-contrast colors until the next edit (B13.2).
+        if was_dark != self.tokens.dark {
+            self.rehighlight_code_inputs(cx);
+        }
+    }
+
+    fn rehighlight_code_inputs(&mut self, cx: &mut gpui::Context<Self>) {
+        let dark = self.tokens.dark;
+        for ((_, path), input) in self.editor_inputs.clone() {
+            let text = input.read(cx).text().to_string();
+            let runs = super::editor::highlight(&text, &path, dark);
+            input.update(cx, |i, cx| i.set_syntax(runs, cx));
+        }
+        if let Some(input) = self.mgr_paste_input.clone() {
+            let text = input.read(cx).text().to_string();
+            let runs = super::editor::highlight(
+                &text,
+                std::path::Path::new(super::managers::paste_file(self.manager_open)),
+                dark,
+            );
+            input.update(cx, |i, cx| i.set_syntax(runs, cx));
         }
     }
 

@@ -17,6 +17,9 @@ use crate::theme::{ThemePalette, parse_hex};
 #[allow(dead_code)] // consumed by the upcoming GPUI chat/den tasks
 #[derive(Clone, Copy)]
 pub struct Tokens {
+    /// Whether the active palette is dark-based (`ThemePalette.dark_mode`)
+    /// — picks the syntect highlight theme, among other light/dark forks.
+    pub dark: bool,
     /// App backdrop behind all panels (`ThemePalette.app_bg`).
     pub bg: Rgba,
     /// Dimmest text, below `weak` (`ThemePalette.dim_text`).
@@ -71,6 +74,7 @@ impl Tokens {
 
     pub fn from_palette(p: &ThemePalette) -> Self {
         Tokens {
+            dark: p.dark_mode,
             bg: hex(&p.app_bg),
             dim: hex(&p.dim_text),
             panel: hex(&p.panel),
@@ -118,6 +122,7 @@ mod tests {
         // The light preset resolves its own backdrop (no dark constant).
         let l = Tokens::from_palette(&ThemePalette::light());
         assert_eq!(l.bg, gpui::rgb(0xe9e9ee));
+        assert!(t.dark && !l.dark);
     }
 
     #[test]
