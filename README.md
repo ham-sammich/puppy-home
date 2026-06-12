@@ -254,3 +254,21 @@ with **syntax highlighting**.
       reloads that history; the transcript is reconstructed). Each workspace stays
       tied to its autosave session, so new turns keep extending it across runs.
 ```
+
+## Troubleshooting
+
+### NVIDIA overlay pops up when puppy-home launches (Windows)
+
+puppy-home renders through the GPU (an OpenGL window via eframe/glow), and
+NVIDIA's in-game overlay auto-attaches to **any** process that creates a GPU
+context — it assumes the app is a game. NVIDIA ships no API for an app to opt
+itself out, so this is controlled on your machine, not in our code:
+
+- **NVIDIA App** (current): Settings → **Overlay** → toggle off — or keep the
+  overlay for games but go to Overlay → Settings and disable **notifications**,
+  which silences the "Press Alt+Z" toast on launch.
+- **GeForce Experience** (legacy): Settings → General → **IN-GAME OVERLAY** →
+  off.
+- The overlay is harmless to puppy-home either way; disabling it only removes
+  the popup/injection. The same applies to Discord/Steam overlays if they ever
+  hook in — disable those per-app in their own settings.
