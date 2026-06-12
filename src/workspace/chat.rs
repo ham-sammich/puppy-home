@@ -54,25 +54,43 @@ impl Workspace {
         self.history_stash.clear();
     }
 
-    /// Frontend-agnostic prompt entry: stage `text` as if typed and submit it
-    /// as a user turn (transcript, history, `running`, status polling — the
-    /// whole state machine). The GPUI frontend drives turns through this.
-    pub(crate) fn send_user_prompt(&mut self, text: &str) {
-        self.input = text.to_string();
-        self.submit();
+    /// The one prompt-sending path (composer submit + dashboard "New prompt"):
+    /// records the turn in the transcript and starts turn tracking. Signature
+    /// converged with redesign/egui (text + images superset).
+    pub(crate) fn send_user_prompt(&mut self, text: String, images: Vec<String>) {
+        let Some(backend) = &self.backend else { return };
+        self.transcript.push(Entry::User(text.clone()));
+        if !images.is_empty() {
+            self.transcript.push(Entry::Note(format!(
+                "Sent {} image(s) with this message.",
+                images.len()
+            )));
+        }
+        backend.send_prompt(&text, &images);
+        // Optimistic: the card shows the prompt immediately; the next status
+        // poll confirms it from the sidecar.
+        self.last_prompt = text;
+        self.begin_turn();
     }
 
-    /// Card action: send a fresh prompt (or slash command). Same guards as the
-    /// composer; mirrors redesign/egui's helper so both dashboards behave alike.
+    /// Card action: send a fresh prompt (or slash command) with no images.
     pub fn send_prompt_text(&mut self, text: &str) {
         let text = text.trim().to_string();
         if text.is_empty() || !self.ready || self.running || self.backend.is_none() {
             return;
         }
-        // Optimistic for the card's quote block; the next status poll confirms
-        // it from the sidecar.
-        self.last_prompt = text.clone();
-        self.send_user_prompt(&text);
+        if text.starts_with('/') {
+            self.dispatch_command(&text);
+        } else {
+            self.send_user_prompt(text, Vec::new());
+        }
+    }
+
+    /// Switch the active agent live (sidecar re-announces via `Ready`).
+    pub fn set_agent_live(&mut self, name: &str) {
+        if let Some(backend) = &self.backend {
+            backend.set_agent(name);
+        }
     }
 
     /// Card action: steer with explicit text + delivery mode. Returns whether
@@ -145,22 +163,14 @@ impl Workspace {
         self.record_history(&text);
         if text.starts_with('/') {
             self.dispatch_command(&text);
-        } else if let Some(backend) = &self.backend {
+        } else if self.backend.is_some() {
             let images: Vec<String> = self
                 .pending_images
                 .iter()
                 .map(|p| p.png_base64.clone())
                 .collect();
-            self.transcript.push(Entry::User(text.clone()));
-            if !images.is_empty() {
-                self.transcript.push(Entry::Note(format!(
-                    "Sent {} image(s) with this message.",
-                    images.len()
-                )));
-            }
-            backend.send_prompt(&text, &images);
             self.pending_images.clear();
-            self.begin_turn();
+            self.send_user_prompt(text, images);
         }
     }
 

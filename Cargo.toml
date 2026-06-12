@@ -36,6 +36,9 @@ gpui = { git = "https://github.com/zed-industries/zed", rev = "00789bf6ee744de8d
 futures = "0.3"
 # gpui's AssetSource trait speaks anyhow::Result; transitively present anyway.
 anyhow = "1"
+# Grapheme-correct cursor movement in the GPUI composer input (same crate the
+# gpui input example uses; tiny, already in the tree transitively).
+unicode-segmentation = "1"
 
 # Native windowed GUI (egui in immediate mode, cross-platform, pure Rust).
 # TEMPORARY on this branch: kept so the egui-coupled modules (workspace UI,

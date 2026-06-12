@@ -22,7 +22,7 @@ mod ask;
 mod chat;
 mod clipboard;
 mod composer;
-mod diff;
+pub(crate) mod diff;
 mod editor;
 mod events;
 mod file_picker;
@@ -38,11 +38,12 @@ mod state;
 mod tree_ops;
 mod view;
 
+pub(crate) use state::Entry;
 pub use state::{InstanceStatus, SPARK_SAMPLES, SparkRing};
 
 use ask::AskState;
 use diff::DiffRecord;
-use state::{EditorItem, Entry, FileBuffer, GitView, Pending};
+use state::{EditorItem, FileBuffer, GitView, Pending};
 
 /// Stable, never-reused identity for a workspace.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -376,6 +377,11 @@ impl Workspace {
         self.ready && self.status != InstanceStatus::Dead
     }
 
+    /// Whether a turn is currently running (composer Enter steers if so).
+    pub(crate) fn is_running_turn(&self) -> bool {
+        self.running
+    }
+
     /// Whether the running turn is held at the pause gate. Mirrors the private
     /// flag for views outside this module (the redesign's dashboard cards).
     #[allow(dead_code)] // consumed by the redesign UI branches
@@ -391,6 +397,69 @@ impl Workspace {
     /// The model catalog the sidecar announced (the card's model popover).
     pub fn model_catalog(&self) -> &[crate::backend::ModelInfo] {
         &self.models
+    }
+
+    /// Transcript entries (the GPUI chat renders a bounded tail of these).
+    pub(crate) fn entries(&self) -> &[Entry] {
+        &self.transcript
+    }
+
+    /// How many oldest entries the ring-buffer cap has dropped (banner text).
+    pub(crate) fn collapsed_count(&self) -> usize {
+        self.transcript_collapsed
+    }
+
+    /// The agent catalog the sidecar announced (composer AgentSwitcher).
+    pub(crate) fn agent_catalog(&self) -> &[AgentInfo] {
+        &self.agents
+    }
+
+    /// The slash-command catalog (composer Commands menu / palette header).
+    #[allow(dead_code)] // palette currently completion-driven; menu lands later
+    pub(crate) fn command_catalog(&self) -> &[CommandInfo] {
+        &self.commands
+    }
+
+    /// Latest sidecar completions (slash palette body) + visibility flag.
+    pub(crate) fn completion_items(&self) -> &[CompletionItem] {
+        &self.completions
+    }
+
+    pub(crate) fn completions_open(&self) -> bool {
+        self.comp_visible
+    }
+
+    /// Ask the sidecar to complete `query` (debounced by equality, exactly
+    /// like the egui composer): only `/`-commands and `@file` paths complete.
+    pub(crate) fn update_completions(&mut self, query: &str) {
+        if query == self.last_query {
+            return;
+        }
+        self.last_query = query.to_string();
+        let completable = query.starts_with('/') || query.contains('@');
+        if !completable {
+            self.comp_visible = false;
+            self.completions.clear();
+            return;
+        }
+        if let Some(backend) = &self.backend {
+            self.comp_request_id = backend.request_completion(query, query.chars().count());
+        }
+    }
+
+    /// Dismiss the completion popover (focus loss / item picked / escape).
+    pub(crate) fn dismiss_completions(&mut self) {
+        self.comp_visible = false;
+    }
+
+    /// File-change records this session (the chat's Changes list).
+    pub(crate) fn diff_records(&self) -> &[diff::DiffRecord] {
+        &self.diffs
+    }
+
+    /// Filesystem handle for this workspace (the chat's file explorer).
+    pub(crate) fn fs_handle(&self) -> Arc<dyn fs::WorkspaceFs> {
+        self.fs.clone()
     }
 
     /// The question text of an outstanding interactive request, if any (shown

@@ -26,6 +26,7 @@ pub fn current_session(sup: &Supervisor, theme: Theme, dock: Option<&DockState<T
     Session {
         dashboard_view: carry.dashboard_view,
         reduce_motion: carry.reduce_motion,
+        composer_style: carry.composer_style,
         workspaces: sup
             .iter()
             .map(|w| WorkspaceEntry {

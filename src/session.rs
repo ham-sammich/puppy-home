@@ -28,6 +28,54 @@ pub struct Session {
     /// Disable decorative animation app-wide (pulses, ring spins, bobs).
     #[serde(default)]
     pub reduce_motion: bool,
+    /// The chat composer style (a user preference, applies to all workspaces).
+    /// Field name shared with redesign/egui so session.json stays portable.
+    #[serde(default)]
+    pub composer_style: ComposerStyle,
+}
+
+/// Which composer skin the chat dock renders. One shared input state
+/// underneath; this only picks the layout. Persisted per machine.
+/// Identical (incl. serde casing) to redesign/egui's enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ComposerStyle {
+    /// Buttons + menus, like today (evolved).
+    #[default]
+    Classic,
+    /// One rounded accent bar with inline chips and switchers.
+    Unified,
+    /// Keyboard / command-first mono prompt.
+    Palette,
+    /// Friendly: starter prompts, drop zone, labeled selectors.
+    Guided,
+}
+
+impl ComposerStyle {
+    pub const ALL: [ComposerStyle; 4] = [
+        ComposerStyle::Classic,
+        ComposerStyle::Unified,
+        ComposerStyle::Palette,
+        ComposerStyle::Guided,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ComposerStyle::Classic => "Classic",
+            ComposerStyle::Unified => "Unified",
+            ComposerStyle::Palette => "Palette",
+            ComposerStyle::Guided => "Guided",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            ComposerStyle::Classic => "Buttons + menu, like today",
+            ComposerStyle::Unified => "One bar, inline chips & switch",
+            ComposerStyle::Palette => "Keyboard / command-first",
+            ComposerStyle::Guided => "Friendly, with starter prompts",
+        }
+    }
 }
 
 /// How the dashboard lays out the fleet. Persisted in `session.json`.
@@ -238,6 +286,21 @@ mod tests {
         assert_eq!(s.theme, Theme::Dark);
         assert_eq!(s.dashboard_view, DashboardViewMode::Grid);
         assert!(!s.reduce_motion);
+    }
+
+    #[test]
+    fn composer_style_serializes_lowercase_like_egui_branch() {
+        let s = Session {
+            composer_style: ComposerStyle::Unified,
+            ..Default::default()
+        };
+        let j = serde_json::to_string(&s).unwrap();
+        assert!(j.contains("\"composer_style\":\"unified\""));
+        let back: Session = serde_json::from_str(&j).unwrap();
+        assert_eq!(back.composer_style, ComposerStyle::Unified);
+        // Absent field -> Classic (legacy session.json loads).
+        let legacy: Session = serde_json::from_str("{}").unwrap();
+        assert_eq!(legacy.composer_style, ComposerStyle::Classic);
     }
 
     #[test]
