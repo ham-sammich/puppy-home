@@ -1211,7 +1211,6 @@ impl RootView {
                     .collect::<Vec<_>>(),
                 self.theme_picker_open,
             ))
-            .child(dashboard::segmented(t, self.dash_mode, &entity))
     }
 }
 
@@ -1541,7 +1540,22 @@ impl RootView {
                                 )
                             })
                             .when(!empty, |d| {
-                                d.child(dashboard::fleet(
+                                // Grid/List/Focus only affects the fleet below —
+                                // it lives with the dashboard, not the global
+                                // toolbar (B13.6; mock: right end of the row
+                                // above the fleet).
+                                d.child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .child(div().flex_1())
+                                        .child(dashboard::segmented(
+                                            &t,
+                                            self.dash_mode,
+                                            &entity,
+                                        )),
+                                )
+                                .child(dashboard::fleet(
                                     &t,
                                     self.dash_mode,
                                     cards,
