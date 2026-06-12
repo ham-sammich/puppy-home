@@ -11,26 +11,34 @@
 //! - **The drain loop** (Task 2.1) stays the only repaint driver: backend
 //!   wakes or the adaptive timer → `Supervisor::drain()` → `cx.notify()`.
 
+pub mod actions;
 pub mod assets;
+pub mod chat;
 pub mod dashboard;
+pub mod input;
+pub mod markdown;
 pub mod tokens;
 pub mod waker;
 pub mod widgets;
 
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui::{
-    App, Application, Bounds, Context, FocusHandle, FontWeight, IntoElement, Keystroke,
-    ParentElement as _, Rgba, SharedString, Styled as _, TitlebarOptions, Window, WindowBounds,
-    WindowOptions, div, prelude::*, px, size,
+    App, Application, Bounds, Context, Entity, FocusHandle, Focusable as _, FontWeight,
+    IntoElement, ParentElement as _, Rgba, SharedString, Styled as _, TitlebarOptions, Window,
+    WindowBounds, WindowOptions, div, prelude::*, px, size,
 };
 
-use crate::session::{self, DashboardViewMode};
+use crate::session::{self, ComposerStyle, DashboardViewMode};
 use crate::supervisor::Supervisor;
 use crate::workspace::WorkspaceId;
-use dashboard::{CardInput, InputKind};
+pub use actions::{ChatPop, DashAction};
+use dashboard::CardInput;
+use input::{ChatInput, InputEvent};
 use tokens::Tokens;
 use waker::GpuiWaker;
 use widgets::{Toast, alpha};
@@ -55,39 +63,11 @@ pub fn run() {
                 }),
                 ..Default::default()
             };
+            input::bind_keys(cx);
             cx.open_window(options, |_, cx| cx.new(RootView::new))
                 .expect("failed to open the main window");
             cx.activate(true);
         });
-}
-
-/// Where a card asked to navigate. The chat / diff views land in Task 2.3;
-/// until then the intent is recorded + surfaced as a toast (honest stub).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NavIntent {
-    Chat(WorkspaceId),
-    Changes(WorkspaceId),
-}
-
-/// Every dashboard interaction, funneled through [`RootView::dispatch`].
-#[derive(Clone, Debug)]
-pub enum DashAction {
-    Pause(WorkspaceId),
-    Resume(WorkspaceId),
-    Stop(WorkspaceId),
-    Restart(WorkspaceId),
-    SetModel(WorkspaceId, String),
-    /// Submit the open inline input (steer / new prompt).
-    SubmitInput,
-    CloseInput,
-    /// Flip the open steer input's delivery mode (false = now, true = queue).
-    SetSteerQueue(bool),
-    TogglePopover(WorkspaceId),
-    ClosePopover,
-    Open(WorkspaceId),
-    Changes(WorkspaceId),
-    SetView(DashboardViewMode),
-    ToggleMotion,
 }
 
 pub struct RootView {
@@ -104,8 +84,25 @@ pub struct RootView {
     card_input: Option<CardInput>,
     model_popover: Option<WorkspaceId>,
     input_focus: FocusHandle,
-    /// Last navigation ask (chat/diff land in 2.3); kept for wiring + tests.
-    pub pending_nav: Option<NavIntent>,
+    // -- chat state --
+    /// `None` = Dashboard; `Some(id)` = that workspace's chat.
+    screen: Option<WorkspaceId>,
+    composer_style: ComposerStyle,
+    chat_inputs: HashMap<WorkspaceId, Entity<ChatInput>>,
+    chat_subs: Vec<gpui::Subscription>,
+    chat_pop: Option<ChatPop>,
+    /// Transcript entries with an opened collapsible body (diff / thinking).
+    expanded_entries: HashSet<(u64, usize)>,
+    /// Workspaces rendering the full transcript ("Show older" clicked).
+    show_all_chat: HashSet<WorkspaceId>,
+    /// Workspaces with the explorer hidden (default = shown).
+    tree_closed: HashSet<WorkspaceId>,
+    expanded_dirs: HashSet<(u64, PathBuf)>,
+    /// Focus the chat input on the next render (set when a chat opens).
+    pending_focus: Option<WorkspaceId>,
+    /// `PUPPY_GPUI_SCREEN=chat`: auto-open the first ready workspace's chat
+    /// (probe instrumentation, like PUPPY_GPUI_PROMPT).
+    probe_chat_screen: bool,
 }
 
 impl RootView {
@@ -135,8 +132,60 @@ impl RootView {
             card_input: None,
             model_popover: None,
             input_focus: cx.focus_handle(),
-            pending_nav: None,
+            screen: None,
+            composer_style: saved.composer_style,
+            chat_inputs: HashMap::new(),
+            chat_subs: Vec::new(),
+            chat_pop: None,
+            expanded_entries: HashSet::new(),
+            show_all_chat: HashSet::new(),
+            tree_closed: HashSet::new(),
+            expanded_dirs: HashSet::new(),
+            pending_focus: None,
+            probe_chat_screen: std::env::var("PUPPY_GPUI_SCREEN").as_deref() == Ok("chat"),
         }
+    }
+
+    /// Probe: jump to the first ready workspace's chat once, if asked to.
+    fn maybe_probe_chat_screen(&mut self, cx: &mut Context<Self>) {
+        if !self.probe_chat_screen {
+            return;
+        }
+        let Some(id) = self.supervisor.iter().find(|w| w.is_ready()).map(|w| w.id) else {
+            return;
+        };
+        self.probe_chat_screen = false;
+        self.dispatch(DashAction::Open(id), cx);
+        eprintln!("[probe] opened chat screen for workspace {}", id.0);
+    }
+
+    /// Lazily create (and subscribe to) the composer input for a workspace.
+    fn ensure_chat_input(&mut self, id: WorkspaceId, cx: &mut Context<Self>) {
+        if self.chat_inputs.contains_key(&id) {
+            return;
+        }
+        let puppy = self.puppy_name();
+        let entity = cx.new(|cx| {
+            ChatInput::new(
+                format!("Message {puppy}\u{2026}  (enter sends, shift-enter newline)"),
+                cx,
+            )
+        });
+        let sub = cx.subscribe(
+            &entity,
+            move |this, input, event: &InputEvent, cx| match event {
+                InputEvent::Edited => {
+                    let text = input.read(cx).text().to_string();
+                    if let Some(ws) = this.supervisor.get_mut(id) {
+                        ws.update_completions(&text);
+                    }
+                    cx.notify();
+                }
+                InputEvent::Submitted => this.dispatch(DashAction::ChatSubmit(id), cx),
+            },
+        );
+        self.chat_inputs.insert(id, entity);
+        self.chat_subs.push(sub);
     }
 
     /// The recurring drain task: wake-driven with an adaptive timer floor.
@@ -148,6 +197,7 @@ impl RootView {
                 let Ok(busy) = this.update(cx, |root, cx| {
                     root.supervisor.drain();
                     root.maybe_send_probe_prompt();
+                    root.maybe_probe_chat_screen(cx);
                     root.prune_toasts();
                     cx.notify();
                     if probe {
@@ -174,180 +224,6 @@ impl RootView {
             }
         })
         .detach();
-    }
-
-    // ------------------------------------------------------------------
-    // Actions
-    // ------------------------------------------------------------------
-
-    /// The single mutation funnel for every dashboard interaction.
-    pub fn dispatch(&mut self, action: DashAction, cx: &mut Context<Self>) {
-        let accent = self.tokens.accent;
-        let (run, paused_c, error_c) = (self.tokens.run, self.tokens.paused, self.tokens.error);
-        match action {
-            DashAction::Pause(id) => {
-                if let Some(ws) = self.supervisor.get_mut(id) {
-                    ws.pause_turn();
-                    let name = ws.name.clone();
-                    self.toast(format!("{name} paused at next safe point"), paused_c);
-                }
-            }
-            DashAction::Resume(id) => {
-                if let Some(ws) = self.supervisor.get_mut(id) {
-                    ws.resume_turn();
-                    let name = ws.name.clone();
-                    self.toast(format!("{name} resumed"), run);
-                }
-            }
-            DashAction::Stop(id) => {
-                if let Some(ws) = self.supervisor.get_mut(id) {
-                    ws.stop_turn();
-                    let name = ws.name.clone();
-                    self.toast(format!("{name} stopped"), error_c);
-                }
-            }
-            DashAction::Restart(id) => {
-                let name = self.ws_name(id);
-                self.supervisor.restart(id);
-                self.toast(format!("Restarting {name}\u{2026}"), run);
-            }
-            DashAction::SetModel(id, model) => {
-                if let Some(ws) = self.supervisor.get_mut(id) {
-                    ws.set_model_live(&model);
-                    let name = ws.name.clone();
-                    self.toast(format!("{name} \u{2192} {model}"), accent);
-                }
-                self.model_popover = None;
-            }
-            DashAction::SubmitInput => self.submit_input(),
-            DashAction::CloseInput => self.card_input = None,
-            DashAction::SetSteerQueue(q) => {
-                if let Some(input) = &mut self.card_input {
-                    input.queue = q;
-                }
-            }
-            DashAction::TogglePopover(id) => {
-                self.model_popover = if self.model_popover == Some(id) {
-                    None
-                } else {
-                    Some(id)
-                };
-            }
-            DashAction::ClosePopover => self.model_popover = None,
-            DashAction::Open(id) => {
-                let name = self.ws_name(id);
-                self.pending_nav = Some(NavIntent::Chat(id));
-                eprintln!("[nav] open chat for workspace {} ({name})", id.0);
-                self.toast(
-                    format!("Opening {name}\u{2026} (chat view lands in Task 2.3)"),
-                    accent,
-                );
-            }
-            DashAction::Changes(id) => {
-                let name = self.ws_name(id);
-                self.pending_nav = Some(NavIntent::Changes(id));
-                eprintln!("[nav] open changes for workspace {} ({name})", id.0);
-                self.toast(
-                    format!("Opening {name} changes\u{2026} (diff view lands in Task 2.3)"),
-                    accent,
-                );
-            }
-            DashAction::SetView(mode) => {
-                self.dash_mode = mode;
-                self.save_prefs();
-            }
-            DashAction::ToggleMotion => {
-                self.reduce_motion = !self.reduce_motion;
-                self.save_prefs();
-                let state = if self.reduce_motion { "off" } else { "on" };
-                self.toast(format!("Decorative motion {state}"), accent);
-            }
-        }
-        cx.notify();
-    }
-
-    /// Toggle a card's inline input (one open card at a time) + focus it.
-    pub fn toggle_input(
-        &mut self,
-        ws: WorkspaceId,
-        kind: InputKind,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let open = matches!(&self.card_input, Some(i) if i.ws == ws && i.kind == kind);
-        self.card_input = if open {
-            None
-        } else {
-            window.focus(&self.input_focus);
-            Some(CardInput {
-                ws,
-                kind,
-                text: String::new(),
-                queue: false,
-            })
-        };
-        cx.notify();
-    }
-
-    /// Minimal inline-input editing: printable chars, backspace, cmd-V paste.
-    /// (The full IME-aware text input arrives with the 2.3 composer.)
-    pub fn edit_input(&mut self, ks: &Keystroke, cx: &mut Context<Self>) {
-        let paste = ks.modifiers.platform && ks.key == "v";
-        let clip = paste
-            .then(|| cx.read_from_clipboard().and_then(|item| item.text()))
-            .flatten();
-        let Some(input) = &mut self.card_input else {
-            return;
-        };
-        if ks.key == "backspace" {
-            input.text.pop();
-        } else if let Some(text) = clip {
-            input.text.push_str(&text);
-        } else if !ks.modifiers.platform
-            && !ks.modifiers.control
-            && let Some(ch) = &ks.key_char
-        {
-            input.text.push_str(ch);
-        } else {
-            return;
-        }
-        cx.notify();
-    }
-
-    fn submit_input(&mut self) {
-        let Some(input) = self.card_input.take() else {
-            return;
-        };
-        let text = input.text.trim().to_string();
-        if text.is_empty() {
-            return;
-        }
-        let accent = self.tokens.accent;
-        let Some(ws) = self.supervisor.get_mut(input.ws) else {
-            return;
-        };
-        let name = ws.name.clone();
-        match input.kind {
-            InputKind::Steer => {
-                if ws.steer_text(&text, input.queue) {
-                    let how = if input.queue {
-                        "(queued \u{1f4e8})"
-                    } else {
-                        "now \u{1f3af}"
-                    };
-                    self.toast(format!("Steered {name} {how}"), accent);
-                } else {
-                    self.toast(
-                        format!("{name} isn't running \u{2014} steer dropped"),
-                        accent,
-                    );
-                }
-            }
-            InputKind::Send => {
-                ws.send_prompt_text(&text);
-                self.toast(format!("Sent {name}"), accent);
-            }
-        }
     }
 
     fn toast(&mut self, msg: String, color: Rgba) {
@@ -377,6 +253,7 @@ impl RootView {
         let mut s = session::load();
         s.dashboard_view = self.dash_mode;
         s.reduce_motion = self.reduce_motion;
+        s.composer_style = self.composer_style;
         session::save(&s);
     }
 
@@ -516,7 +393,86 @@ impl RootView {
 }
 
 impl Render for RootView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = self.tokens;
+        let entity = cx.entity();
+        let puppy = self.puppy_name();
+
+        // One-shot: focus the composer when a chat was just opened.
+        if let Some(id) = self.pending_focus.take()
+            && let Some(input) = self.chat_inputs.get(&id)
+        {
+            window.focus(&input.read(cx).focus_handle(cx));
+        }
+
+        // A closed workspace can leave `screen` dangling — fall back to dash.
+        if let Some(id) = self.screen
+            && self.supervisor.get(id).is_none()
+        {
+            self.screen = None;
+        }
+
+        let tabs: Vec<(WorkspaceId, String, Rgba)> = self
+            .supervisor
+            .iter()
+            .map(|w| {
+                (
+                    w.id,
+                    w.name.clone(),
+                    dashboard::card_state(w.status, &t).color,
+                )
+            })
+            .collect();
+        let strip = chat::tab_strip(&t, tabs, self.screen, &entity);
+
+        let body: gpui::AnyElement = match self.screen {
+            Some(id) => {
+                let ws = self.supervisor.get(id).expect("validated above");
+                let input = self.chat_inputs.get(&id).expect("created on open").clone();
+                chat::chat_screen(&chat::ChatArgs {
+                    t,
+                    ws,
+                    root: entity.clone(),
+                    input,
+                    style: self.composer_style,
+                    pop: self.chat_pop.as_ref(),
+                    puppy: puppy.clone(),
+                    show_all: self.show_all_chat.contains(&id),
+                    expanded: &self.expanded_entries,
+                    reduce_motion: self.reduce_motion,
+                    tree_open: !self.tree_closed.contains(&id),
+                    expanded_dirs: &self.expanded_dirs,
+                })
+            }
+            None => self.dashboard_body(cx),
+        };
+
+        div()
+            .relative()
+            .size_full()
+            .flex()
+            .flex_col()
+            .gap_2p5()
+            .p_4()
+            .bg(t.bg)
+            .text_color(t.text)
+            .text_size(px(13.))
+            .font_family("Space Grotesk")
+            .child(self.toolbar(cx))
+            .child(strip)
+            .children(
+                self.last_error
+                    .clone()
+                    .map(|e| div().text_size(px(12.)).text_color(t.error).child(e)),
+            )
+            .child(body)
+            .child(widgets::toast_layer(&t, &self.toasts))
+    }
+}
+
+impl RootView {
+    /// The dashboard screen body (Task 2.2), extracted from `render`.
+    fn dashboard_body(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let t = self.tokens;
         let entity = cx.entity();
         let puppy = self.puppy_name();
@@ -542,22 +498,9 @@ impl Render for RootView {
         let empty = cards.is_empty();
 
         div()
-            .relative()
             .size_full()
             .flex()
             .flex_col()
-            .gap_3()
-            .p_4()
-            .bg(t.bg)
-            .text_color(t.text)
-            .text_size(px(13.))
-            .font_family("Space Grotesk")
-            .child(self.toolbar(cx))
-            .children(
-                self.last_error
-                    .clone()
-                    .map(|e| div().text_size(px(12.)).text_color(t.error).child(e)),
-            )
             .child(
                 div()
                     .id("dash-scroll")
@@ -596,6 +539,6 @@ impl Render for RootView {
                             }),
                     ),
             )
-            .child(widgets::toast_layer(&t, &self.toasts))
+            .into_any_element()
     }
 }

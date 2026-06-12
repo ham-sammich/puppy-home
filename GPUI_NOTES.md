@@ -232,6 +232,68 @@ resting. Spend prints "—" while the cost ledger is absent — never $0.00.
 - Visual QA was log-based this session (no screen-recording permission for
   `screencapture`); animations confirmed by code-path, not by eyeball.
 
+## Task 2.3 — Workspace Chat decisions
+
+### Markdown: in-house minimal renderer (`gpui_ui/markdown.rs`)
+Evaluated Zed's `markdown` crate at the pin: it depends on `language`
+(tree-sitter + the whole syntax stack), `theme`, `ui`, `sum_tree`,
+`workspace-hack` — adopting it means swallowing half the editor for a chat
+transcript. **Decision: ~250-line in-house subset** (headings, bullet lists,
+inline `code`, **bold**, fenced code blocks with language tag; everything
+else renders as plain text), unit-tested. Revisit only if real transcripts
+demand tables/links.
+
+### Terminal: deferred — "Terminal: egui branch only" (option c)
+Neither porting the vt100 grid (a) nor Zed's terminal crates (b) fit this
+task's budget; the composer input was the schedule risk and won the time.
+The comparison note: the egui branch HAS the embedded terminal; GPUI does
+not (the Classic composer skin says so in-UI). If/when needed, option (a) —
+porting our own `terminal.rs` vt100 grid as a custom-painted Element — is
+the planned route; we own that code and the Element API (see input.rs) has
+everything required (shaped runs + paint_quads).
+
+### The composer input (`gpui_ui/input.rs`) — the 2.2 deferral, paid off
+Full `EntityInputHandler` port of gpui's `examples/input.rs` at the pin:
+IME (marked text + underline), cursor, selection (mouse drag + shift-arrows
++ cmd-A), clipboard, character palette. **Extended to multiline**: content
+keeps real `\n`s; each line is shaped separately (`Vec<ShapedLine>` + line
+start offsets); cursor/selection quads are per-line; mouse maps row-by-y →
+column-by-x. Enter emits `Submitted`, shift-enter inserts a newline; key
+bindings are registered once under the `"ChatInput"` key context.
+Deliberate gaps: **no soft wrap** (long lines clip), no up/down cursor
+movement, no cursor blink. `send_user_prompt` converged to the egui 2-arg
+`(text, images)` superset per the sync note — both branches now share the
+exact prompt path.
+
+### Chat architecture (same shape as 2.2)
+`RootView.screen: Option<WorkspaceId>` routes Dashboard vs Chat; the tab
+strip (Dashboard + per-workspace tabs with status dots + close) drives it
+through the same `dispatch(DashAction)` funnel (`actions.rs` — split out of
+`mod.rs` for size, same impl). Per-workspace `Entity<ChatInput>`s are
+created lazily on first open; subscriptions translate `Edited` →
+`Workspace::update_completions` (the egui composer's exact debounce) and
+`Submitted` → send-or-steer (Enter steers while a turn runs). Transcript
+renders a **120-entry tail** (egui parity) inside a `flex_col_reverse`
+column — children are built newest-first, which pins the scroll to the
+bottom with zero scroll-anchoring code. Diff bodies parse **lazily** (only
+while expanded, capped at 200 rows). Slash palette = sidecar completions
+(click to apply; `apply_completion` honors prompt_toolkit's caret-relative
+`start_position`). All four composer skins (Classic/Unified/Palette/Guided)
+are chrome around the ONE ChatInput entity; the gear popover persists
+`Session.composer_style` (same serde field as redesign/egui).
+
+### Task 2.3 parity gaps (honest list)
+- Interactive asks (`ask_user_question`) have **no answer UI** in GPUI yet —
+  the egui branch's pending-prompt modal didn't make the cut. Waiting cards
+  + banner still surface the question text.
+- No image paste / attachments in the composer (egui has clipboard PNG).
+- No `+ New chat`, no sessions browser, no logs panel, no git view.
+- Explorer: lazy tree + Changes list shipped; **no A/M/D change markers**
+  (needs the private git_changes plumbing) and files don't open (no editor).
+- Thinking entries: manual fold toggle; the turn-end auto-collapse one-shot
+  is ignored.
+- No soft wrap in the input (above).
+
 ## Status (Task 2.1)
 
 - [x] Branch `redesign/gpui` forked from `0f00eed`.
