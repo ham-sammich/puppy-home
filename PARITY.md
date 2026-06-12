@@ -367,6 +367,9 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       global heuristic exists — nothing to fix here; redesign/egui's
       own dashboard lede needs the same local-pin at sync time (queued).
       E2E vs a real remote needs human QA (standing E4 limitation).
+      [RESOLVED during the fallback live E2E: vm840 runs — see the
+      SSH-FALLBACK entry for the full live matrix incl. B13.7 terminal
+      + push-creds-by-consequence.]
       `5df2868`
 
 - [x] E8 REDUX browser "does nothing" on macOS in the GPUI shell (user:
@@ -485,8 +488,34 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       serve the sidecar host's disk = local in fallback) — that's WHY
       SshFs/SshGit exist. CachedFs generalized to Box<dyn WorkspaceFs>.
       egui safety net: maps RemoteError to text, no offer flow (queued
-      for redesign/egui along with the rest). E2E vs a real uv-less
-      host = human QA (delete uv from PATH on the test box, connect).
+      for redesign/egui along with the rest).
+      LIVE E2E DONE (vm840:/storage/weinsteinjcc.yobo.dev, Debian, NFS
+      storage): forced CannotHost via PUPPY_HOME_REMOTE_CP_CMD override
+      -> offer -> accept -> fallback workspace: tree == ssh ls ground
+      truth; CHANGES(32) == remote git status; terminal on root@vm840
+      in project cwd; AGENT listed remote-only files (.claude/,
+      .well-known/, .nfs*) and identified the WordPress project — the
+      local puppy answered from REMOTE content via ssh; ssh-fallback
+      badge + push-creds btn + local identity all visible. Error paths
+      live-verified: bogus host -> ssh resolve error (no offer), bogus
+      path -> 'remote path ... doesn't exist' (no adopt, no offer).
+      NORMAL remote mode also live: fallback=false, `uv run --with
+      code-puppy` sidecar RUNNING ON vm840 (pgrep-verified), prompt +
+      thinking + errors streamed over ssh stdio, sidecar died cleanly
+      with the app (stdin EOF). A model-side flake on the remote
+      code-puppy (output-validation retries) surfaced as a transcript
+      error — transport innocent, rendering correct. Push-creds
+      verified by consequence: ~/.code_puppy/claude_code_oauth.json on
+      vm840 at 600, mtime DURING the run (the pushed creds were
+      authenticating that very sidecar). Remote left clean.
+      BUGS FOUND+FIXED by the live run (separate commits): rc-file
+      function shadowing (`test()` on vm840 printed an IP, exit 0 ->
+      exists() always true; fixed w/ `command` prefix, live #[ignore]
+      regression test `cargo test ssh_fallback_live -- --ignored`);
+      preflight path validation (bad path used to fake-connect then
+      die); provisioning errors now surface ssh's stderr reason.
+      Still unverified: real auth-failure variant (only DNS-failure
+      tested; same code path), Windows-side ssh quoting.
       `34978da`
 
       SYNC QUEUE (phase-end batch): sidecar/sidecar.py (picker
