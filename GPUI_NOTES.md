@@ -294,6 +294,27 @@ are chrome around the ONE ChatInput entity; the gear popover persists
   is ignored.
 - No soft wrap in the input (above).
 
+## Phase C run 1 — editor patterns
+
+- **Code-mode input**: same ChatInput entity, `soft_wrap=false` — width =
+  widest shaped line (parent scrolls both axes), Enter inserts newline,
+  no row cap. One input implementation, two modes.
+- **Layout cache**: entity-held `(generation, wrap_px) -> Arc<WrapLayout>`
+  (RefCell, single-threaded interior mutability). Editors re-render on
+  every drain notify; without the cache a whole-file reshape would run at
+  4Hz. Generation bumps on content/syntax change only.
+- **Highlight pipeline**: syntect (direct dep, the egui_extras pin) runs
+  once per edit in the root's Edited handler -> per-line `(len, color)`
+  SyntaxRuns -> consumed by the cached shaper. 200KB cap. IME marked-text
+  underline is skipped while syntax runs are active (punt).
+- **Tree context ops**: right-click -> inline panel at the top of the
+  explorer (not a positioned popover — simpler, keyboard-free), same
+  shared perform_rename/perform_new/delete_path ops as egui's modals.
+- Extractions queued for sync batch: tree_ops fn visibility (pub(crate)
+  delete_path/perform_rename/perform_new), Workspace::save_file/
+  set_file_content/file_view + editor-tab/changes accessors, EditorItem +
+  language_for re-exports.
+
 ## Phase B — composer patterns (B10/B1/B11/B5)
 
 - **Soft-wrap input**: `shape_text(wrap_width)` per logical line →

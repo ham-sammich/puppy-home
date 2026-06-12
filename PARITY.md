@@ -68,18 +68,20 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
 
 ## Phase C — IDE surfaces
 
-- [ ] C1. Editor tabs with syntect highlighting; click a tree file to open
-      (tree rows are currently inert — ADDED note). syntect becomes a
-      DIRECT dep (NOT via egui_extras). Ref: `workspace/editor.rs`,
-      `workspace/state.rs` (`FileBuffer`, `EditorItem`), egui
-      `editor_area.rs`.
-- [ ] C2. File-tree A/M/D change markers + tree ops (new/rename/delete
-      modals, context menu). Ref: `workspace/tree_ops.rs`, `git.rs`
-      working-tree status plumbing (`git_changes` needs accessors).
-- [ ] C3. Changes diff viewer (ADDED — was missing as its own item):
-      per-file colored diff page; `DashAction::Changes` currently lands on
-      a toast stub. Ref: `workspace/diff.rs` (`render_diffs`,
-      `current_diff`).
+- [x] C1. Editor tabs + syntect (DIRECT dep, 5.3.0/default-fancy = the
+      egui_extras pin; one syntect in the lock). Tree click opens; code-
+      mode input (no wrap, h-scroll), dirty marker, Cmd/Ctrl+S + Save,
+      dirty-close confirm; generation-keyed layout cache + per-edit
+      highlight (200KB cap). Blame toggle deferred to C-run-2 (git
+      cluster). (9246dae)
+- [x] C2. Tree A/M/D/R/? markers (ws.tree_markers, egui colors) +
+      right-click context panel: new file/folder, rename, delete-confirm
+      over the shared perform_* ops. Dir markers not aggregated (file-
+      only — ledger). (9246dae)
+- [x] C3. Changes viewer: editor-area Changes tab; list from git working
+      tree (else Code-Puppy diffs), lazy per-click diff load, colored
+      rows + op/path/+A-D header; wired from dashboard card + explorer.
+      (9246dae)
 - [ ] C4. Git view: staging list, commit box, push/pull/fetch + action
       feedback. Ref: `workspace/git_view.rs`, `git.rs`.
 - [ ] C5. Git graph (all-branches commit DAG + branch dialog). Ref:
