@@ -107,7 +107,8 @@ impl WorkspaceFs for SshFs {
 
     fn write(&self, path: &Path, contents: &[u8]) -> std::io::Result<()> {
         // `cat > file` over stdin: same convention as sidecar provisioning.
-        let line = format!("cat > {}", sh_quote_path(path));
+        // `command` defeats rc-file function shadowing (the vm840 lesson).
+        let line = format!("command cat > {}", sh_quote_path(path));
         let (ok, _, err) = run(self.target.exec_shell(&line), Some(contents));
         if ok {
             Ok(())
@@ -376,6 +377,52 @@ mod tests {
         assert!(text.contains("ssh alice@devbox 'cd /srv/proj"));
         assert!(text.contains("NEVER use your local file read/write/edit tools"));
         assert!(text.contains("SSH-FALLBACK"));
+    }
+
+    /// LIVE E2E against the user's vm840 box (the editor/tree/git code
+    /// paths verbatim). `#[ignore]` — run explicitly:
+    /// `cargo test ssh_fallback_live -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "needs ssh access to vm840"]
+    fn ssh_fallback_live_vm840() {
+        let target = SshTarget::parse("vm840").unwrap();
+        let root = Path::new("/storage/weinsteinjcc.yobo.dev");
+        let fs = SshFs::new(target.clone());
+
+        // Tree: listing matches a few known entries, dirs flagged.
+        let entries = fs.read_dir(root).expect("read_dir");
+        let find = |n: &str| entries.iter().find(|e| e.name == n);
+        assert!(find("README.md").is_some_and(|e| !e.is_dir));
+        assert!(find("wp-content").is_some_and(|e| e.is_dir));
+        assert!(find(".git").is_some_and(|e| e.is_dir));
+
+        // Editor read: contents match `ssh cat` ground truth.
+        let via_fs = fs.read_to_string(&root.join("README.md")).expect("read");
+        let (ok, via_ssh, _) = fs.exec(&["cat", "/storage/weinsteinjcc.yobo.dev/README.md"], None);
+        assert!(ok);
+        assert_eq!(via_fs, via_ssh);
+
+        // Editor write/rename/delete round-trip on a scratch file; the
+        // remote is left CLEAN.
+        let scratch = root.join(".puppy-home-e2e-scratch.txt");
+        let moved = root.join(".puppy-home-e2e-scratch-moved.txt");
+        fs.write(&scratch, b"woof woof e2e\n").expect("write");
+        assert_eq!(
+            fs.read_to_string(&scratch).expect("read back"),
+            "woof woof e2e\n"
+        );
+        fs.rename(&scratch, &moved).expect("rename");
+        assert!(!fs.exists(&scratch));
+        assert!(fs.exists(&moved));
+        fs.remove_file(&moved).expect("remove");
+        assert!(!fs.exists(&moved));
+
+        // Git: the path is a real repo on branch `root` with changes.
+        let git = SshGit::new(target, root.to_string_lossy().into_owned());
+        use crate::git::WorkspaceGit;
+        assert!(git.is_repo());
+        let status = git.status();
+        assert!(!status.is_empty(), "repo had local changes at test time");
     }
 
     #[test]

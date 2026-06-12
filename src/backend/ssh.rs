@@ -147,11 +147,15 @@ impl SshTarget {
 
     /// The `ssh` call that runs ONE argv on the remote (the SSH-fallback
     /// fs/git transport). `argv` is quoted word-by-word; stdin/stdout carry
-    /// the payload.
+    /// the payload. The line is prefixed with `command` so shell FUNCTIONS
+    /// from sourced rc files can't shadow the verb — found live on vm840,
+    /// where a `.bashrc`-sourced rc defined `test()` (printed an IP, exit
+    /// 0), making every `exists()` check return true. Debian bash sources
+    /// rc files for ssh remote commands; quoting stops aliases, not
+    /// functions.
     pub fn exec_command(&self, argv: &[&str]) -> Command {
-        let line = argv
-            .iter()
-            .map(|w| sh_quote(w))
+        let line = std::iter::once("command".to_string())
+            .chain(argv.iter().map(|w| sh_quote(w)))
             .collect::<Vec<_>>()
             .join(" ");
         let mut cmd = self.base_ssh();
@@ -553,10 +557,12 @@ mod tests {
     }
 
     #[test]
-    fn exec_command_quotes_each_word() {
+    fn exec_command_quotes_each_word_and_defeats_shell_functions() {
         let t = SshTarget::parse("devbox").unwrap();
         let a = args(&t.exec_command(&["ls", "-1Ap", "/srv/my repo"]));
-        assert_eq!(a.last().unwrap(), "'ls' '-1Ap' '/srv/my repo'");
+        // `command` prefix: rc-file shell functions (vm840's `test()`)
+        // must not shadow the verb.
+        assert_eq!(a.last().unwrap(), "command 'ls' '-1Ap' '/srv/my repo'");
         assert!(a.windows(2).any(|w| w == ["-o", "BatchMode=yes"]));
     }
 
