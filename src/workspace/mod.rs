@@ -40,12 +40,13 @@ mod view;
 
 pub(crate) use ask::AskState;
 pub(crate) use editor::language_for;
+pub(crate) use git_graph::{EdgeHalf, GraphRow, compute_graph};
 pub(crate) use render::short_session;
-pub(crate) use state::{EditorItem, Entry, Pending, PendingKind};
+pub(crate) use state::{EditorItem, Entry, GitView, Pending, PendingKind};
 pub use state::{InstanceStatus, SPARK_SAMPLES, SparkRing};
 
 use diff::DiffRecord;
-use state::{FileBuffer, GitView};
+use state::FileBuffer;
 
 /// Stable, never-reused identity for a workspace.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]

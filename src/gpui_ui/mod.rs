@@ -17,6 +17,7 @@ pub mod chat;
 pub mod dashboard;
 pub mod den;
 pub mod editor;
+pub mod gitpanel;
 pub mod input;
 pub mod markdown;
 pub mod tokens;
@@ -165,6 +166,18 @@ pub struct RootView {
     pub(crate) tree_op: Option<TreeOp>,
     pub(crate) tree_op_input: Option<Entity<ChatInput>>,
     pub(crate) tree_delete_confirm: Option<(WorkspaceId, PathBuf, bool)>,
+    // -- git surface state --
+    /// Commit-message inputs, one per workspace (height is a CONSTANT in
+    /// gitpanel.rs — never content-derived; the 31a6dcb principle).
+    pub(crate) commit_inputs: HashMap<WorkspaceId, Entity<ChatInput>>,
+    /// Workspaces showing the flat history list (graph is the default).
+    pub(crate) git_list_mode: HashSet<WorkspaceId>,
+    /// Right-clicked graph row: (hash, short, refs).
+    pub(crate) graph_menu: Option<(String, String, Vec<String>)>,
+    pub(crate) branch_input: Option<Entity<ChatInput>>,
+    pub(crate) branch_target: Option<(WorkspaceId, String)>,
+    pub(crate) creds_user_input: Option<Entity<ChatInput>>,
+    pub(crate) creds_pass_input: Option<Entity<ChatInput>>,
 }
 
 /// One pasted image: the wire form + the displayable form.
@@ -263,7 +276,69 @@ impl RootView {
             tree_op: None,
             tree_op_input: None,
             tree_delete_confirm: None,
+            commit_inputs: HashMap::new(),
+            git_list_mode: HashSet::new(),
+            graph_menu: None,
+            branch_input: None,
+            branch_target: None,
+            creds_user_input: None,
+            creds_pass_input: None,
         }
+    }
+
+    /// Commit-message input for a workspace (multiline soft-wrap composer).
+    pub(crate) fn ensure_commit_input(&mut self, id: WorkspaceId, cx: &mut Context<Self>) {
+        if self.commit_inputs.contains_key(&id) {
+            return;
+        }
+        let entity = cx.new(|cx| ChatInput::new("Commit message\u{2026}", cx));
+        // No Submitted wiring: Enter newlines would be nice, but the composer
+        // semantics send on Enter — commits go through the button instead.
+        let sub = cx.subscribe(&entity, |_, _, _: &InputEvent, cx| cx.notify());
+        self.commit_inputs.insert(id, entity);
+        self.chat_subs.push(sub);
+    }
+
+    pub(crate) fn ensure_branch_input(&mut self, cx: &mut Context<Self>) {
+        if self.branch_input.is_some() {
+            return;
+        }
+        let entity = cx.new(|cx| ChatInput::new("new branch name\u{2026}", cx));
+        let sub = cx.subscribe(&entity, |this, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Submitted) {
+                this.dispatch(DashAction::GraphBranchSubmit, cx);
+            }
+        });
+        self.branch_input = Some(entity);
+        self.chat_subs.push(sub);
+    }
+
+    /// Username/password inputs for the git-credentials modal, created when
+    /// a prompt first appears (drain-driven, like the answer input).
+    fn ensure_creds_inputs_if_needed(&mut self, cx: &mut Context<Self>) {
+        if self.creds_user_input.is_some() {
+            return;
+        }
+        let needed = self
+            .supervisor
+            .iter()
+            .any(|w| w.git_creds_prompt().is_some());
+        if !needed {
+            return;
+        }
+        let user = cx.new(|cx| ChatInput::new("username", cx));
+        let pass = cx.new(|cx| ChatInput::new("password / token", cx));
+        let s1 = cx.subscribe(&user, |_, _, _: &InputEvent, cx| cx.notify());
+        let s2 = cx.subscribe(&pass, |this, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Submitted)
+                && let Screen::Chat(id) = this.screen
+            {
+                this.dispatch(DashAction::CredsSubmit(id), cx);
+            }
+        });
+        self.creds_user_input = Some(user);
+        self.creds_pass_input = Some(pass);
+        self.chat_subs.extend([s1, s2]);
     }
 
     /// Create (once) the code-editor input for an open file: seeded from the
@@ -341,6 +416,17 @@ impl RootView {
         let sub = cx.subscribe(&entity, |_, _, _: &InputEvent, cx| cx.notify());
         self.sessions_filter_input = Some(entity);
         self.chat_subs.push(sub);
+    }
+
+    /// Background `git status` for the visible workspace's tree markers /
+    /// Changes list (the egui poll_git, drain-driven; 4s self-gate inside).
+    fn poll_active_git(&mut self) {
+        if let Screen::Chat(id) = self.screen
+            && let Some(ws) = self.supervisor.get_mut(id)
+        {
+            let focused = self.window_active;
+            ws.poll_git_status(focused, &self.waker);
+        }
     }
 
     /// Drain-tick chat upkeep: consume turn-end thinking-collapse signals
@@ -557,6 +643,8 @@ impl RootView {
                     root.save_session_if_changed();
                     root.sync_active_palette(cx);
                     root.chat_upkeep(cx);
+                    root.poll_active_git();
+                    root.ensure_creds_inputs_if_needed(cx);
                     root.pump_den();
                     root.maybe_probe_den(cx);
                     root.maybe_send_probe_prompt();
@@ -935,6 +1023,13 @@ impl Render for RootView {
                         .as_ref()
                         .filter(|(cid, ..)| *cid == id)
                         .map(|(_, p, _)| p.clone()),
+                    commit_input: self.commit_inputs.get(&id),
+                    git_list_mode: self.git_list_mode.contains(&id),
+                    graph_menu: self.graph_menu.as_ref(),
+                    branch_input: self.branch_input.as_ref(),
+                    branch_armed: self.branch_target.is_some(),
+                    creds_user_input: self.creds_user_input.as_ref(),
+                    creds_pass_input: self.creds_pass_input.as_ref(),
                     logs_open: self.logs_open.contains(&id),
                     collapsed_thinking: &self.collapsed_thinking,
                     sessions: (self.sessions_open == Some(id)).then(|| {

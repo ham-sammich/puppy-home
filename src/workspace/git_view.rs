@@ -79,6 +79,169 @@ impl Workspace {
         ctx.request_repaint_after(std::time::Duration::from_secs(4));
     }
 
+    /// Frontend-agnostic git status poll (the egui `poll_git` minus the
+    /// `egui::Context`): receive a finished background `git status`, and
+    /// kick a new one at most every 4s while the window is focused. The
+    /// caller's drain loop provides the cadence; the waker provides the
+    /// repaint when the thread finishes.
+    pub(crate) fn poll_git_status(
+        &mut self,
+        focused: bool,
+        waker: &std::sync::Arc<dyn crate::waker::UiWaker>,
+    ) {
+        if !self.git_repo {
+            return;
+        }
+        if let Some(rx) = &self.git_rx
+            && let Ok(changes) = rx.try_recv()
+        {
+            self.git_changes = changes;
+            self.git_pending = false;
+            self.git_rx = None;
+        }
+        if !self.git_pending && focused && Instant::now() >= self.git_refresh_at {
+            let git = self.git.clone();
+            let waker = waker.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.git_rx = Some(rx);
+            self.git_pending = true;
+            self.git_refresh_at = Instant::now() + std::time::Duration::from_millis(4000);
+            std::thread::spawn(move || {
+                let _ = tx.send(git.status());
+                waker.wake();
+            });
+        }
+    }
+
+    // -- frontend-agnostic git actions (the egui render_git flag tail,
+    //    extracted so the GPUI panel drives the same logic; sync batch) --
+
+    pub(crate) fn git_view_data(&self) -> Option<&GitView> {
+        self.git_view.as_ref()
+    }
+
+    pub(crate) fn git_action_message(&self) -> Option<&(bool, String)> {
+        self.git_action_msg.as_ref()
+    }
+
+    pub(crate) fn graph_commits(&self) -> &[crate::git::Commit] {
+        &self.git_graph_commits
+    }
+
+    pub(crate) fn commit_view_data(&self) -> Option<&(String, DiffRecord)> {
+        self.commit_view.as_ref()
+    }
+
+    pub(crate) fn blame_lines(&self, path: &Path) -> Option<&Vec<crate::git::BlameLine>> {
+        self.blame_cache.get(path)
+    }
+
+    pub(crate) fn blame_enabled(&self, path: &Path) -> bool {
+        self.blame_files.contains(path)
+    }
+
+    pub(crate) fn git_fetch(&mut self) {
+        match self.git.fetch() {
+            Ok(s) => self.git_action(
+                Ok(()),
+                if s.is_empty() {
+                    "Fetched (up to date)"
+                } else {
+                    "Fetched from remotes"
+                },
+            ),
+            Err(e) => self.git_net_error(e, crate::workspace::state::GitAuthOp::Fetch),
+        }
+    }
+
+    pub(crate) fn git_pull(&mut self) {
+        match self.git.pull() {
+            Ok(s) => {
+                let line = s.lines().last().unwrap_or("Pulled").to_string();
+                self.git_action(Ok(()), &format!("Pulled \u{b7} {line}"));
+            }
+            Err(e) => self.git_net_error(e, crate::workspace::state::GitAuthOp::Pull),
+        }
+    }
+
+    pub(crate) fn git_push(&mut self) {
+        match self.git.push() {
+            Ok(_) => self.git_action(Ok(()), "Pushed to upstream"),
+            Err(e) => self.git_net_error(e, crate::workspace::state::GitAuthOp::Push),
+        }
+    }
+
+    pub(crate) fn git_stage_path(&mut self, path: &str) {
+        let r = self.git.stage(path);
+        self.git_action(r, &format!("Staged {}", file_name(path)));
+    }
+
+    pub(crate) fn git_unstage_path(&mut self, path: &str) {
+        let r = self.git.unstage(path);
+        self.git_action(r, &format!("Unstaged {}", file_name(path)));
+    }
+
+    pub(crate) fn git_stage_all(&mut self) {
+        let r = self.git.stage_all();
+        self.git_action(r, "Staged all changes");
+    }
+
+    pub(crate) fn git_unstage_all(&mut self) {
+        let r = self.git.unstage_all();
+        self.git_action(r, "Unstaged all");
+    }
+
+    /// Commit with an explicit message (the GPUI commit box owns its text).
+    /// Returns true on success so the caller can clear its input.
+    pub(crate) fn git_commit_msg(&mut self, msg: &str) -> bool {
+        match self.git.commit(msg) {
+            Ok(summary) => {
+                let line = summary.lines().next().unwrap_or("committed").to_string();
+                self.git_action(Ok(()), &format!("Committed \u{b7} {line}"));
+                true
+            }
+            Err(e) => {
+                self.git_action(Err(e), "");
+                false
+            }
+        }
+    }
+
+    pub(crate) fn git_checkout(&mut self, name: &str) {
+        let r = self.git.checkout(name);
+        self.git_action(r, &format!("Checked out {name}"));
+    }
+
+    pub(crate) fn git_merge(&mut self, target: &str) {
+        match self.git.merge(target) {
+            Ok(s) => {
+                let line = s.lines().next().unwrap_or("merged").to_string();
+                self.git_action(Ok(()), &format!("Merged \u{b7} {line}"));
+            }
+            Err(e) => self.git_action(Err(e), ""),
+        }
+    }
+
+    pub(crate) fn git_create_branch(&mut self, name: &str, at: &str) {
+        let r = self.git.create_branch(name, at);
+        self.git_action(r, &format!("Created branch {name}"));
+    }
+
+    pub(crate) fn git_cherry_pick(&mut self, hash: &str) {
+        let r = self.git.cherry_pick(hash);
+        self.git_action(r, "Cherry-picked");
+    }
+
+    pub(crate) fn git_revert(&mut self, hash: &str) {
+        let r = self.git.revert(hash);
+        self.git_action(r, "Reverted");
+    }
+
+    pub(crate) fn git_reset(&mut self, hash: &str, mode: &str) {
+        let r = self.git.reset(hash, mode);
+        self.git_action(r, &format!("Reset ({mode}) to {hash}"));
+    }
+
     /// Show the diff for a git-tracked change.
     pub(crate) fn load_git_diff(&mut self, path: &str, marker: char) {
         let (lines, adds, dels) = if marker == '?' {

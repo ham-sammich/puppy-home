@@ -111,6 +111,32 @@ pub enum DashAction {
     TreeOpSubmit,
     TreeDelete(WorkspaceId, PathBuf, bool),
     TreeDeleteConfirm,
+    // -- git surface --
+    ShowGit(WorkspaceId),
+    GitRefresh(WorkspaceId),
+    GitFetch(WorkspaceId),
+    GitPull(WorkspaceId),
+    GitPush(WorkspaceId),
+    GitStage(WorkspaceId, String),
+    GitUnstage(WorkspaceId, String),
+    GitStageAll(WorkspaceId),
+    GitUnstageAll(WorkspaceId),
+    GitCommit(WorkspaceId),
+    GitToggleGraph(WorkspaceId),
+    /// Open a commit's patch: (index, from-flat-list?).
+    GitOpenCommit(WorkspaceId, usize, bool),
+    GraphMenu(WorkspaceId, (String, String, Vec<String>)),
+    GraphMenuClose,
+    GraphCheckout(WorkspaceId, String),
+    GraphMerge(WorkspaceId, String),
+    GraphNewBranch(WorkspaceId, String),
+    GraphBranchSubmit,
+    GraphCherryPick(WorkspaceId, String),
+    GraphRevert(WorkspaceId, String),
+    GraphReset(WorkspaceId, String),
+    CredsSubmit(WorkspaceId),
+    CredsCancel(WorkspaceId),
+    BlameToggle(WorkspaceId, PathBuf),
     /// Den interactions (join/leave/feed/kanban/plans/...).
     Den(den::DenAction),
 }
@@ -600,6 +626,183 @@ impl RootView {
                     None => {}
                 }
                 self.chat_pop = None;
+            }
+            DashAction::ShowGit(id) => {
+                self.ensure_chat_input(id, cx);
+                self.ensure_commit_input(id, cx);
+                self.screen = Screen::Chat(id);
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.show_git();
+                }
+            }
+            DashAction::GitRefresh(id) => {
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.refresh_git_view();
+                }
+            }
+            DashAction::GitFetch(id) => {
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.git_fetch();
+                }
+            }
+            DashAction::GitPull(id) => {
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.git_pull();
+                }
+            }
+            DashAction::GitPush(id) => {
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.git_push();
+                }
+            }
+            DashAction::GitStage(id, path) => {
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.git_stage_path(&path);
+                }
+            }
+            DashAction::GitUnstage(id, path) => {
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.git_unstage_path(&path);
+                }
+            }
+            DashAction::GitStageAll(id) => {
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.git_stage_all();
+                }
+            }
+            DashAction::GitUnstageAll(id) => {
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.git_unstage_all();
+                }
+            }
+            DashAction::GitCommit(id) => {
+                let msg = self
+                    .commit_inputs
+                    .get(&id)
+                    .map(|i| i.read(cx).text().trim().to_string())
+                    .unwrap_or_default();
+                let staged = self
+                    .supervisor
+                    .get(id)
+                    .and_then(|w| w.git_view_data().map(|v| !v.staged.is_empty()))
+                    .unwrap_or(false);
+                if msg.is_empty() || !staged {
+                    self.toast("Stage something and write a message first".into(), accent);
+                    return;
+                }
+                let ok = self
+                    .supervisor
+                    .get_mut(id)
+                    .map(|ws| ws.git_commit_msg(&msg))
+                    .unwrap_or(false);
+                if ok && let Some(input) = self.commit_inputs.get(&id) {
+                    input.update(cx, |i, cx| i.clear(cx));
+                }
+            }
+            DashAction::GitToggleGraph(id) => {
+                if !self.git_list_mode.remove(&id) {
+                    self.git_list_mode.insert(id);
+                }
+            }
+            DashAction::GitOpenCommit(id, ix, from_list) => {
+                let commit = self.supervisor.get(id).and_then(|ws| {
+                    if from_list {
+                        ws.git_view_data().and_then(|v| v.log.get(ix).cloned())
+                    } else {
+                        ws.graph_commits().get(ix).cloned()
+                    }
+                });
+                if let (Some(c), Some(ws)) = (commit, self.supervisor.get_mut(id)) {
+                    ws.open_commit(&c);
+                }
+            }
+            DashAction::GraphMenu(id, target) => {
+                let _ = id;
+                self.graph_menu = Some(target);
+            }
+            DashAction::GraphMenuClose => self.graph_menu = None,
+            DashAction::GraphCheckout(id, name) => {
+                self.graph_menu = None;
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.git_checkout(&name);
+                }
+            }
+            DashAction::GraphMerge(id, name) => {
+                self.graph_menu = None;
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.git_merge(&name);
+                }
+            }
+            DashAction::GraphNewBranch(id, at) => {
+                self.ensure_branch_input(cx);
+                self.branch_target = Some((id, at));
+                self.graph_menu = None;
+            }
+            DashAction::GraphBranchSubmit => {
+                let Some((id, at)) = self.branch_target.take() else {
+                    return;
+                };
+                let name = self
+                    .branch_input
+                    .as_ref()
+                    .map(|i| i.read(cx).text().trim().to_string())
+                    .unwrap_or_default();
+                if name.is_empty() {
+                    return;
+                }
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.git_create_branch(&name, &at);
+                }
+                if let Some(input) = &self.branch_input {
+                    input.update(cx, |i, cx| i.clear(cx));
+                }
+            }
+            DashAction::GraphCherryPick(id, hash) => {
+                self.graph_menu = None;
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.git_cherry_pick(&hash);
+                }
+            }
+            DashAction::GraphRevert(id, hash) => {
+                self.graph_menu = None;
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.git_revert(&hash);
+                }
+            }
+            DashAction::GraphReset(id, hash) => {
+                self.graph_menu = None;
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.git_reset(&hash, "--hard");
+                }
+            }
+            DashAction::CredsSubmit(id) => {
+                let user = self
+                    .creds_user_input
+                    .as_ref()
+                    .map(|i| i.read(cx).text().to_string())
+                    .unwrap_or_default();
+                let pass = self
+                    .creds_pass_input
+                    .as_ref()
+                    .map(|i| i.read(cx).text().to_string())
+                    .unwrap_or_default();
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.git_creds_submit(user, pass);
+                }
+                // Clear the password either way; keep the username for retry.
+                if let Some(input) = &self.creds_pass_input {
+                    input.update(cx, |i, cx| i.clear(cx));
+                }
+            }
+            DashAction::CredsCancel(id) => {
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.git_creds_cancel();
+                }
+            }
+            DashAction::BlameToggle(id, path) => {
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.toggle_blame(&path);
+                }
             }
             DashAction::AnswerEnter => {
                 // Route Enter in the answer input: input prompts submit

@@ -28,6 +28,25 @@ impl Workspace {
         }
     }
 
+    /// The outstanding credentials prompt, if any (frontends render it).
+    pub(crate) fn git_creds_prompt(&self) -> Option<&GitCredsPrompt> {
+        self.git_creds.as_ref()
+    }
+
+    /// Submit credentials from a frontend (sets the prompt fields + retries).
+    pub(crate) fn git_creds_submit(&mut self, username: String, password: String) {
+        if let Some(p) = self.git_creds.as_mut() {
+            p.username = username;
+            p.password = password;
+        }
+        self.retry_git_auth();
+    }
+
+    /// Dismiss the prompt without retrying.
+    pub(crate) fn git_creds_cancel(&mut self) {
+        self.git_creds = None;
+    }
+
     /// Retry the modal's op with the entered credentials. On success the modal
     /// closes; on another auth failure it stays open for a second try.
     fn retry_git_auth(&mut self) {

@@ -60,6 +60,14 @@ pub struct ChatArgs<'a> {
     pub tree_op_armed: bool,
     /// Delete awaiting confirmation (path shown in the panel).
     pub tree_delete_pending: Option<PathBuf>,
+    // -- git pass-through --
+    pub commit_input: Option<&'a Entity<ChatInput>>,
+    pub git_list_mode: bool,
+    pub graph_menu: Option<&'a (String, String, Vec<String>)>,
+    pub branch_input: Option<&'a Entity<ChatInput>>,
+    pub branch_armed: bool,
+    pub creds_user_input: Option<&'a Entity<ChatInput>>,
+    pub creds_pass_input: Option<&'a Entity<ChatInput>>,
 }
 
 /// The whole chat screen body (below the tab strip).
@@ -122,6 +130,11 @@ pub fn chat_screen(args: &ChatArgs) -> AnyElement {
                         root: args.root.clone(),
                         active_input: args.editor_input,
                         close_confirm: args.editor_close_confirm,
+                        commit_input: args.commit_input,
+                        git_list_mode: args.git_list_mode,
+                        graph_menu: args.graph_menu,
+                        branch_input: args.branch_input,
+                        branch_armed: args.branch_armed,
                     },
                 ))
                 .child(body)
@@ -130,6 +143,15 @@ pub fn chat_screen(args: &ChatArgs) -> AnyElement {
                 .child(dock),
         )
         .children(args.sessions.as_ref().map(sessions::sessions_overlay))
+        .child(crate::gpui_ui::gitpanel::creds_overlay(
+            &crate::gpui_ui::gitpanel::CredsArgs {
+                t,
+                ws: args.ws,
+                root: args.root.clone(),
+                user_input: args.creds_user_input,
+                pass_input: args.creds_pass_input,
+            },
+        ))
         .into_any_element()
 }
 
@@ -173,6 +195,22 @@ fn ws_toolbar(args: &ChatArgs) -> AnyElement {
                 root.update(cx, |r, cx| r.dispatch(DashAction::OpenSessions(id), cx));
             })
     };
+    let git_btn = {
+        let root = args.root.clone();
+        div()
+            .id(("ws-git", id.0))
+            .px_2()
+            .py_0p5()
+            .rounded(px(7.))
+            .text_size(px(11.5))
+            .text_color(t.text)
+            .cursor_pointer()
+            .hover(|d| d.bg(t.well))
+            .child("\u{2387} Git")
+            .on_click(move |_, _, cx| {
+                root.update(cx, |r, cx| r.dispatch(DashAction::ShowGit(id), cx));
+            })
+    };
     let logs_btn = {
         let root = args.root.clone();
         let on = args.logs_open;
@@ -200,6 +238,7 @@ fn ws_toolbar(args: &ChatArgs) -> AnyElement {
         .border_color(t.line_soft)
         .child(new_chat)
         .child(sessions_btn)
+        .children(args.ws.is_git_repo().then(|| git_btn))
         .child(div().flex_1())
         .child(logs_btn)
         .into_any_element()

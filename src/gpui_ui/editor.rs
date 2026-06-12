@@ -100,6 +100,27 @@ pub struct EditorArgs<'a> {
     pub active_input: Option<&'a Entity<ChatInput>>,
     /// Pending dirty-close confirmation for a tab index.
     pub close_confirm: Option<usize>,
+    // -- git surface pass-through (gitpanel) --
+    pub commit_input: Option<&'a Entity<ChatInput>>,
+    pub git_list_mode: bool,
+    pub graph_menu: Option<&'a (String, String, Vec<String>)>,
+    pub branch_input: Option<&'a Entity<ChatInput>>,
+    pub branch_armed: bool,
+}
+
+impl<'a> EditorArgs<'a> {
+    fn git_args(&self) -> crate::gpui_ui::gitpanel::GitArgs<'a> {
+        crate::gpui_ui::gitpanel::GitArgs {
+            t: self.t,
+            ws: self.ws,
+            root: self.root.clone(),
+            commit_input: self.commit_input,
+            list_mode: self.git_list_mode,
+            graph_menu: self.graph_menu,
+            branch_input: self.branch_input,
+            branch_armed: self.branch_armed,
+        }
+    }
 }
 
 /// The whole editor area (tab bar + active tab content). Empty when no tabs.
@@ -113,14 +134,16 @@ pub fn editor_area(args: &EditorArgs) -> AnyElement {
     let content: AnyElement = match tabs.get(active) {
         Some(EditorItem::File(path)) => file_view(args, path),
         Some(EditorItem::Changes) => changes_viewer(args),
-        Some(EditorItem::Git) | Some(EditorItem::Browser(_)) | Some(EditorItem::Commit { .. }) => {
-            div()
-                .p_3()
-                .text_size(px(12.))
-                .text_color(t.weak)
-                .child("This tab's surface lands in a later parity run.")
-                .into_any_element()
+        Some(EditorItem::Git) => crate::gpui_ui::gitpanel::git_view(&args.git_args()),
+        Some(EditorItem::Commit { hash, .. }) => {
+            crate::gpui_ui::gitpanel::commit_view(&args.git_args(), hash)
         }
+        Some(EditorItem::Browser(_)) => div()
+            .p_3()
+            .text_size(px(12.))
+            .text_color(t.weak)
+            .child("Browser tabs land in Phase E.")
+            .into_any_element(),
         None => div().into_any_element(),
     };
     div()
@@ -242,6 +265,22 @@ fn file_view(args: &EditorArgs, path: &PathBuf) -> AnyElement {
                 .text_color(t.paused)
                 .child("\u{25cf} unsaved")
         }))
+        .children(ws.is_git_repo().then(|| {
+            let on = ws.blame_enabled(path);
+            let root = args.root.clone();
+            let p = path.clone();
+            widgets::btn(&t, "\u{1f50d} Blame")
+                .when(on, |d| {
+                    d.border_color(crate::gpui_ui::widgets::alpha(t.accent, 0.8))
+                })
+                .id(("editor-blame", id.0))
+                .on_click(move |_, _, cx| {
+                    root.update(cx, |r, cx| {
+                        r.dispatch(DashAction::BlameToggle(id, p.clone()), cx)
+                    });
+                })
+                .into_any_element()
+        }))
         .child(
             widgets::btn(&t, "\u{1f4be} Save")
                 .id(("editor-save", id.0))
@@ -256,7 +295,9 @@ fn file_view(args: &EditorArgs, path: &PathBuf) -> AnyElement {
                 }),
         );
 
-    let body: AnyElement = if let Some(err) = load_err {
+    let body: AnyElement = if ws.blame_enabled(path) {
+        crate::gpui_ui::gitpanel::blame_view(&t, ws, path)
+    } else if let Some(err) = load_err {
         div()
             .p_3()
             .text_size(px(12.))
