@@ -27,6 +27,9 @@ pub struct TranscriptArgs<'a> {
     pub ws: &'a Workspace,
     pub root: Entity<RootView>,
     pub puppy: String,
+    /// Chosen avatar emoji (QW8) — RootView resolves the defaults.
+    pub user_avatar: String,
+    pub puppy_avatar: String,
     pub show_all: bool,
     /// `(workspace id, entry index)` pairs whose diff body is open.
     pub expanded: &'a std::collections::HashSet<(u64, usize)>,
@@ -43,7 +46,7 @@ pub fn transcript_panel(args: &TranscriptArgs) -> AnyElement {
     let total = entries.len();
 
     if total == 0 && ws.collapsed_count() == 0 {
-        return empty_state(&args.t, &args.puppy, args.reduce_motion);
+        return empty_state(&args.t, &args.puppy, &args.puppy_avatar, args.reduce_motion);
     }
 
     let start = if args.show_all {
@@ -118,13 +121,13 @@ fn render_entry(args: &TranscriptArgs, idx: usize, entry: &Entry) -> AnyElement 
     match entry {
         Entry::User(text) => turn(
             &t,
-            "\u{1f9d1}",
+            &args.user_avatar,
             who(&t, "you", None),
             markdown_plain(&t, text),
         ),
         Entry::Agent(text) => turn(
             &t,
-            "\u{1f436}",
+            &args.puppy_avatar,
             agent_who(&t, args),
             markdown::render(&t, text),
         ),
@@ -193,7 +196,7 @@ fn render_message(args: &TranscriptArgs, idx: usize, msg: &BackendMessage) -> An
     if msg.category == "agent" {
         return turn(
             &t,
-            "\u{1f436}",
+            &args.puppy_avatar,
             agent_who(&t, args),
             markdown::render(&t, &msg.text),
         );
@@ -463,16 +466,16 @@ fn tool_label(kind: &str) -> String {
 }
 
 /// Centered breathing puppy + zzz + "How can {puppy} help you?".
-fn empty_state(t: &Tokens, puppy: &str, reduce_motion: bool) -> AnyElement {
+fn empty_state(t: &Tokens, puppy: &str, avatar: &str, reduce_motion: bool) -> AnyElement {
     let dog: AnyElement = if reduce_motion {
         div()
             .text_size(px(44.))
-            .child("\u{1f436}")
+            .child(avatar.to_string())
             .into_any_element()
     } else {
         div()
             .text_size(px(44.))
-            .child("\u{1f436}")
+            .child(avatar.to_string())
             .with_animation(
                 "empty-bob",
                 Animation::new(Duration::from_millis(4200))

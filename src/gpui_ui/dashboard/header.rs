@@ -19,6 +19,7 @@ use super::FleetStats;
 pub fn pack_header(
     t: &Tokens,
     puppy: &str,
+    puppy_avatar: &str,
     stats: &FleetStats,
     agg_sparks: Vec<f32>,
     root: &Entity<RootView>,
@@ -30,7 +31,7 @@ pub fn pack_header(
         .gap_1()
         .text_size(px(13.))
         .text_color(t.weak)
-        .child(div().text_size(px(15.)).child("\u{1f436}"))
+        .child(div().text_size(px(15.)).child(puppy_avatar.to_string()))
         .child(
             div()
                 .font_weight(FontWeight::SEMIBOLD)

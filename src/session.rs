@@ -32,6 +32,13 @@ pub struct Session {
     /// Field name shared with redesign/egui so session.json stays portable.
     #[serde(default)]
     pub composer_style: ComposerStyle,
+    /// Your avatar emoji in transcripts (empty = the \u{1f9d1} default).
+    /// QW8; field shared with redesign/egui (sync queued).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub user_avatar: String,
+    /// Your puppy's avatar emoji (empty = the \u{1f436} default).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub puppy_avatar: String,
 }
 
 /// Which composer skin the chat dock renders. One shared input state

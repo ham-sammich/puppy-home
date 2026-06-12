@@ -23,6 +23,8 @@ pub struct AskArgs<'a> {
     /// Which ask-question index the answer input is bound to (Other text).
     pub other_target: Option<usize>,
     pub reduce_motion: bool,
+    /// Chosen puppy avatar emoji (QW8).
+    pub puppy_avatar: String,
 }
 
 /// The whole panel; empty when nothing is blocked.
@@ -30,7 +32,7 @@ pub fn ask_panel(args: &AskArgs) -> AnyElement {
     if let Some(ask) = args.ws.ask_state() {
         return panel_frame(
             &args.t,
-            format!("\u{1f436} {} asks", args.ws.name),
+            format!("{} {} asks", args.puppy_avatar, args.ws.name),
             ask_body(args, ask),
             args.reduce_motion,
         );
@@ -38,7 +40,7 @@ pub fn ask_panel(args: &AskArgs) -> AnyElement {
     if let Some(pending) = args.ws.pending_request() {
         return panel_frame(
             &args.t,
-            format!("\u{1f436} {} needs you", args.ws.name),
+            format!("{} {} needs you", args.puppy_avatar, args.ws.name),
             pending_body(args, pending),
             args.reduce_motion,
         );

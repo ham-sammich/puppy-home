@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+use gpui::prelude::*;
 use gpui::{Context, Keystroke, Window};
 
 use crate::session::{ComposerStyle, DashboardViewMode};
@@ -50,6 +51,8 @@ pub enum DashAction {
     },
     /// About / version panel (toolbar chip).
     About(crate::gpui_ui::about::AboutAction),
+    /// Avatar picker (toolbar identity chip, QW8).
+    Avatar(crate::gpui_ui::avatars::AvatarAction),
     /// Open a workspace's chat focused on changes (diff chips live in the
     /// transcript; a dedicated diff view is still egui-branch-only).
     Changes(WorkspaceId),
@@ -920,6 +923,47 @@ impl RootView {
                     AboutAction::Toggle => self.about.open = !self.about.open,
                     AboutAction::Check => self.about.check(self.waker.clone()),
                     AboutAction::Update => self.about.update(self.waker.clone()),
+                }
+            }
+            DashAction::Avatar(a) => {
+                use crate::gpui_ui::avatars::{AvatarAction, AvatarKind};
+                match a {
+                    AvatarAction::Toggle => {
+                        self.avatar_ui.open = !self.avatar_ui.open;
+                        if self.avatar_ui.open && self.avatar_input.is_none() {
+                            let entity = cx.new(|cx| {
+                                crate::gpui_ui::input::ChatInput::new("any emoji\u{2026}", cx)
+                            });
+                            let sub = cx
+                                .subscribe(&entity, |_, _, _: &crate::gpui_ui::InputEvent, cx| {
+                                    cx.notify()
+                                });
+                            self.avatar_input = Some(entity);
+                            self.chat_subs.push(sub);
+                        }
+                    }
+                    AvatarAction::Target(kind) => self.avatar_ui.target = kind,
+                    AvatarAction::Pick(emoji) => {
+                        match self.avatar_ui.target {
+                            AvatarKind::User => self.user_avatar = emoji,
+                            AvatarKind::Puppy => self.puppy_avatar = emoji,
+                        }
+                        self.save_prefs();
+                    }
+                    AvatarAction::ApplyCustom => {
+                        let text = self
+                            .avatar_input
+                            .as_ref()
+                            .map(|i| i.read(cx).text().trim().to_string())
+                            .unwrap_or_default();
+                        if !text.is_empty() {
+                            match self.avatar_ui.target {
+                                AvatarKind::User => self.user_avatar = text,
+                                AvatarKind::Puppy => self.puppy_avatar = text,
+                            }
+                            self.save_prefs();
+                        }
+                    }
                 }
             }
             DashAction::ToggleMotion => {

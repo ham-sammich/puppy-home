@@ -14,6 +14,7 @@
 pub mod about;
 pub mod actions;
 pub mod assets;
+pub mod avatars;
 pub mod browser_ui;
 pub mod chat;
 pub mod dashboard;
@@ -136,6 +137,11 @@ pub struct RootView {
     toasts: Vec<Toast>,
     /// About / version panel state (QW1).
     pub(crate) about: about::AboutState,
+    /// Avatar picker panel state + chosen emoji (QW8; empty = defaults).
+    pub(crate) avatar_ui: avatars::AvatarUi,
+    pub(crate) user_avatar: String,
+    pub(crate) puppy_avatar: String,
+    pub(crate) avatar_input: Option<Entity<ChatInput>>,
     card_input: Option<CardInput>,
     model_popover: Option<WorkspaceId>,
     input_focus: FocusHandle,
@@ -348,6 +354,10 @@ impl RootView {
             browser_cycle_at: None,
             dash_mode: saved.dashboard_view,
             reduce_motion: saved.reduce_motion,
+            avatar_ui: avatars::AvatarUi::default(),
+            user_avatar: saved.user_avatar.clone(),
+            puppy_avatar: saved.puppy_avatar.clone(),
+            avatar_input: None,
             toasts: Vec::new(),
             about: about::AboutState::default(),
             card_input: None,
@@ -1025,6 +1035,8 @@ impl RootView {
         s.dashboard_view = self.dash_mode;
         s.reduce_motion = self.reduce_motion;
         s.composer_style = self.composer_style;
+        s.user_avatar = self.user_avatar.clone();
+        s.puppy_avatar = self.puppy_avatar.clone();
         s.theme = self.theme.clone();
         s.workspaces = self
             .supervisor
@@ -1332,6 +1344,24 @@ impl RootView {
         line
     }
 
+    /// Your avatar emoji (transcript "you" rows). Empty pref = default.
+    pub(crate) fn user_avatar(&self) -> &str {
+        if self.user_avatar.is_empty() {
+            avatars::USER_DEFAULT
+        } else {
+            &self.user_avatar
+        }
+    }
+
+    /// Your puppy's avatar emoji. Empty pref = default.
+    pub(crate) fn puppy_avatar(&self) -> &str {
+        if self.puppy_avatar.is_empty() {
+            avatars::PUPPY_DEFAULT
+        } else {
+            &self.puppy_avatar
+        }
+    }
+
     /// The installed code_puppy version, from the first sidecar that
     /// announced one (they all resolve the same uv cache locally).
     pub(crate) fn cp_version_label(&self) -> String {
@@ -1396,7 +1426,13 @@ impl RootView {
                     .border_color(t.line_soft)
                     .text_size(px(11.5))
                     .text_color(t.text)
-                    .child(format!("\u{1f436} {}", self.puppy_name())),
+                    .id("tb-identity")
+                    .cursor_pointer()
+                    .tooltip(widgets::text_tip("Pick avatars".into()))
+                    .child(format!("{} {}", self.puppy_avatar(), self.puppy_name()))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.dispatch(DashAction::Avatar(avatars::AvatarAction::Toggle), cx)
+                    })),
             )
             .child(
                 widgets::btn(t, "\u{2795} New Chat")
@@ -1655,6 +1691,8 @@ impl Render for RootView {
                     style: self.composer_style,
                     pop: self.chat_pop.as_ref(),
                     puppy: ws_name.clone(),
+                    user_avatar: self.user_avatar().to_string(),
+                    puppy_avatar: self.puppy_avatar().to_string(),
                     creds_armed: self.creds_confirm == Some(id),
                     creds_busy: self
                         .creds_pending
@@ -1732,6 +1770,7 @@ impl Render for RootView {
                                 .unwrap_or_default(),
                             selected: self.session_selected.as_ref(),
                             puppy: ws_name.clone(),
+                            puppy_avatar: self.puppy_avatar().to_string(),
                         }
                     }),
                 })
@@ -1828,6 +1867,16 @@ impl Render for RootView {
                 let ver = self.cp_version_label();
                 about::panel(&t, &self.about, ver, &entity)
             }))
+            .children(self.avatar_ui.open.then(|| {
+                avatars::panel(
+                    &t,
+                    &self.avatar_ui,
+                    self.user_avatar(),
+                    self.puppy_avatar(),
+                    self.avatar_input.as_ref(),
+                    &entity,
+                )
+            }))
             .children(
                 self.perf
                     .visible
@@ -1881,7 +1930,14 @@ impl RootView {
                             .flex()
                             .flex_col()
                             .gap_3()
-                            .child(dashboard::pack_header(&t, &puppy, &stats, agg, &entity))
+                            .child(dashboard::pack_header(
+                                &t,
+                                &puppy,
+                                self.puppy_avatar(),
+                                &stats,
+                                agg,
+                                &entity,
+                            ))
                             .child(browser_ui::plugins_section(
                                 &t,
                                 &entity,

@@ -24,6 +24,8 @@ pub struct SessionsArgs<'a> {
     /// Currently selected `(name, source)`, if any.
     pub selected: Option<&'a (String, String)>,
     pub puppy: String,
+    /// Chosen puppy avatar emoji (QW8).
+    pub puppy_avatar: String,
 }
 
 /// Full-screen scrim + centered panel (deferred above everything).
@@ -293,7 +295,7 @@ fn preview_pane(args: &SessionsArgs) -> AnyElement {
                             div()
                                 .text_size(px(10.5))
                                 .text_color(t.accent)
-                                .child(format!("\u{1f436} {}", args.puppy)),
+                                .child(format!("{} {}", args.puppy_avatar, args.puppy)),
                         )
                         .child(markdown::render(&t, &e.text))
                         .into_any_element()

@@ -27,6 +27,8 @@ pub fn current_session(sup: &Supervisor, theme: Theme, dock: Option<&DockState<T
         dashboard_view: carry.dashboard_view,
         reduce_motion: carry.reduce_motion,
         composer_style: carry.composer_style,
+        user_avatar: carry.user_avatar,
+        puppy_avatar: carry.puppy_avatar,
         workspaces: sup
             .iter()
             .map(|w| WorkspaceEntry {

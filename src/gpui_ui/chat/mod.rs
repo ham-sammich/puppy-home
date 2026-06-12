@@ -25,6 +25,9 @@ pub struct ChatArgs<'a> {
     pub style: ComposerStyle,
     pub pop: Option<&'a ChatPop>,
     pub puppy: String,
+    /// Chosen avatar emoji (QW8) — RootView resolves the defaults.
+    pub user_avatar: String,
+    pub puppy_avatar: String,
     pub show_all: bool,
     pub expanded: &'a HashSet<(u64, usize)>,
     pub reduce_motion: bool,
@@ -98,6 +101,8 @@ pub fn chat_screen(args: &ChatArgs) -> AnyElement {
             ws: args.ws,
             root: args.root.clone(),
             puppy: args.puppy.clone(),
+            user_avatar: args.user_avatar.clone(),
+            puppy_avatar: args.puppy_avatar.clone(),
             show_all: args.show_all,
             expanded: args.expanded,
             collapsed_thinking: args.collapsed_thinking,
@@ -124,6 +129,7 @@ pub fn chat_screen(args: &ChatArgs) -> AnyElement {
         answer_input: args.answer_input,
         other_target: args.other_target,
         reduce_motion: args.reduce_motion,
+        puppy_avatar: args.puppy_avatar.clone(),
     });
 
     div()
