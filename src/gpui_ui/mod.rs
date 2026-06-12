@@ -1188,7 +1188,14 @@ impl RootView {
                         {
                             self.browser.embed_tab(id, px_rect, parent);
                         }
-                        window.request_animation_frame();
+                        // RAF keeps the child NSWindow glued during window
+                        // drags — but only while WE are the active window
+                        // (drags imply focus; an unfocused app spinning at
+                        // vsync is pure waste — G1 audit). The 1s drain
+                        // notify self-heals the rare Cmd-drag-unfocused case.
+                        if self.window_active {
+                            window.request_animation_frame();
+                        }
                     } else {
                         self.browser.hide_tab(id);
                     }
@@ -1228,7 +1235,10 @@ impl RootView {
                                 (to(x), to(y), to(w), to(h)),
                             );
                         }
-                        window.request_animation_frame();
+                        // Same focus gate as the macOS branch (G1 audit).
+                        if self.window_active {
+                            window.request_animation_frame();
+                        }
                     } else {
                         self.browser.hide_tab(id);
                     }

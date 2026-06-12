@@ -132,8 +132,13 @@ fn fetch_latest() -> Result<String, String> {
 }
 
 /// Refresh uv's cached code-puppy resolution and report what it landed on.
+/// Bounded: a wedged network can stall `uv` indefinitely and
+/// `Command::output` would pin the worker thread (and the "updating"
+/// spinner) forever — so we poll `try_wait` and kill at the deadline
+/// (G1 audit fix).
 fn run_update() -> Result<String, String> {
-    let out = std::process::Command::new("uv")
+    use std::io::Read as _;
+    let mut child = std::process::Command::new("uv")
         .args([
             "run",
             "--refresh-package",
@@ -144,8 +149,53 @@ fn run_update() -> Result<String, String> {
             "-c",
             "import code_puppy; print(code_puppy.__version__)",
         ])
-        .output()
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .map_err(|e| format!("couldn't run uv: {e}"))?;
+    // Drain both pipes on threads (uv's progress chatter can exceed the
+    // 64KB pipe buffer — polling without reading would deadlock us into
+    // the timeout path every time).
+    let read_thread = |pipe: Option<Box<dyn std::io::Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut buf = String::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_string(&mut buf);
+            }
+            buf
+        })
+    };
+    let out_t = read_thread(
+        child
+            .stdout
+            .take()
+            .map(|s| Box::new(s) as Box<dyn std::io::Read + Send>),
+    );
+    let err_t = read_thread(
+        child
+            .stderr
+            .take()
+            .map(|s| Box::new(s) as Box<dyn std::io::Read + Send>),
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("uv refresh timed out after 5 minutes".to_string());
+            }
+            Ok(None) => std::thread::sleep(std::time::Duration::from_millis(250)),
+            Err(e) => return Err(format!("uv wait failed: {e}")),
+        }
+    };
+    let out = std::process::Output {
+        status,
+        stdout: out_t.join().unwrap_or_default().into_bytes(),
+        stderr: err_t.join().unwrap_or_default().into_bytes(),
+    };
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         return Err(format!(
