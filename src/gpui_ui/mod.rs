@@ -167,6 +167,8 @@ pub struct RootView {
     /// Shared waker (PackClient connections need it).
     waker: std::sync::Arc<dyn UiWaker>,
     den: Option<DenConn>,
+    /// Set while WE run the relay (QW6) — killed on stop/leave/app exit.
+    den_host: Option<den::host::DenHost>,
     den_seg: DenSeg,
     den_pop: Option<DenPop>,
     den_feed_input: Option<Entity<ChatInput>>,
@@ -366,6 +368,7 @@ impl RootView {
             other_target: None,
             waker,
             den: None,
+            den_host: None,
             den_seg: DenSeg::default(),
             den_pop: None,
             den_feed_input: None,

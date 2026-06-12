@@ -7,6 +7,7 @@
 pub mod actions;
 pub mod board;
 pub mod feed;
+pub mod host;
 pub mod pack_sync;
 pub mod roster;
 
@@ -77,6 +78,8 @@ pub struct DenArgs<'a> {
     pub reduce_motion: bool,
     /// Open workspace roots that contain a plans.md (the Share picker).
     pub sharable_plans: Vec<(String, std::path::PathBuf)>,
+    /// Set when WE host the relay: the shareable `ip:port` (QW6).
+    pub hosting: Option<String>,
 }
 
 /// The whole den screen (joined state).
@@ -228,6 +231,34 @@ fn header(args: &DenArgs) -> AnyElement {
                     }
                 }),
         )
+        .children(args.hosting.clone().map(|share| {
+            div()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .child(
+                    div()
+                        .px_1p5()
+                        .py_0p5()
+                        .rounded(px(6.))
+                        .bg(alpha(t.run, 0.15))
+                        .text_size(px(10.5))
+                        .text_color(t.run)
+                        .child(format!("HOSTING \u{b7} share {share}")),
+                )
+                .child(
+                    widgets::btn(&t, "Stop hosting")
+                        .id("den-stop-host")
+                        .on_click({
+                            let root = root.clone();
+                            move |_, _, cx| {
+                                root.update(cx, |r, cx| {
+                                    r.dispatch(DashAction::Den(DenAction::StopHost), cx)
+                                });
+                            }
+                        }),
+                )
+        }))
         .child(widgets::btn(&t, "Leave den").id("den-leave").on_click({
             let root = root.clone();
             move |_, _, cx| {
@@ -376,6 +407,25 @@ pub fn join_screen(args: &JoinArgs) -> AnyElement {
                             move |_, _, cx| {
                                 root.update(cx, |r, cx| {
                                     r.dispatch(DashAction::Den(DenAction::JoinSubmit), cx)
+                                });
+                            }
+                        }),
+                )
+                .child(div().h(px(1.)).bg(t.line_soft))
+                .child(div().text_size(px(12.)).text_color(t.weak).child(format!(
+                    "No relay yet? Host one here \u{2014} runs puppy-relay locally, \
+                     joins you automatically, and shows a LAN address + room code \
+                     to share. Stopping the host (or quitting) closes the {DEN_LABEL} \
+                     for everyone. Server setups: docs/DEN_HOSTING.md."
+                )))
+                .child(
+                    widgets::btn(&t, format!("\u{1f3e0} Host a {DEN_LABEL}"))
+                        .id("den-host")
+                        .on_click({
+                            let root = args.root.clone();
+                            move |_, _, cx| {
+                                root.update(cx, |r, cx| {
+                                    r.dispatch(DashAction::Den(DenAction::HostSubmit), cx)
                                 });
                             }
                         }),

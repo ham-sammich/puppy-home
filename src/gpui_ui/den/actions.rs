@@ -24,6 +24,10 @@ pub enum DenAction {
     /// Open the Den screen (join form when not connected).
     Show,
     JoinSubmit,
+    /// Spawn a local puppy-relay and auto-join it (QW6).
+    HostSubmit,
+    /// Kill the locally hosted relay (ends the den for everyone).
+    StopHost,
     Leave,
     SetSeg(DenSeg),
     CopyRoom,
@@ -56,7 +60,28 @@ impl RootView {
                 self.screen = Screen::Den;
             }
             DenAction::JoinSubmit => self.den_join(cx),
+            DenAction::HostSubmit => self.den_host_start(cx),
+            DenAction::StopHost => {
+                if let Some(host) = self.den_host.take() {
+                    host.stop();
+                }
+                if let Some(den) = self.den.take() {
+                    den.client.leave();
+                }
+                self.toast(
+                    format!(
+                        "Stopped hosting \u{2014} the {} is closed",
+                        crate::pack::DEN_LABEL
+                    ),
+                    accent,
+                );
+            }
             DenAction::Leave => {
+                // Leaving while hosting also stops the relay (the room
+                // lives in this process; no zombie hosts).
+                if let Some(host) = self.den_host.take() {
+                    host.stop();
+                }
                 if let Some(den) = self.den.take() {
                     den.client.leave();
                     self.toast(
@@ -215,6 +240,59 @@ impl RootView {
     }
 
     /// Connect to the relay with the join form's values.
+    /// Host flow: spawn the relay, then join our own den on localhost.
+    fn den_host_start(&mut self, cx: &mut Context<Self>) {
+        if self.den_host.is_some() || self.den.is_some() {
+            return;
+        }
+        match super::host::spawn_host() {
+            Ok(host) => {
+                let room = super::host::room_code();
+                let user = std::env::var("USER")
+                    .or_else(|_| std::env::var("USERNAME"))
+                    .unwrap_or_else(|_| "host".to_string());
+                let addr = format!("127.0.0.1:{}", host.port);
+                let share = format!("{} \u{b7} room {room}", host.share_addr);
+                let puppy = self.puppy_name();
+                match PackClient::connect(&addr, &room, &user, &puppy, self.waker.clone()) {
+                    Ok((client, rx)) => {
+                        // Seed the join inputs so the form mirrors reality.
+                        self.ensure_join_inputs(cx);
+                        for (input, text) in [
+                            (&self.den_join_addr, addr.clone()),
+                            (&self.den_join_room, room.clone()),
+                            (&self.den_join_user, user.clone()),
+                        ] {
+                            if let Some(i) = input {
+                                i.update(cx, |i, cx| i.set_text(&text, cx));
+                            }
+                        }
+                        self.den = Some(DenConn {
+                            client,
+                            rx,
+                            state: DenState::default(),
+                            room: room.clone(),
+                            addr,
+                            user,
+                            alive: true,
+                            sparks: Default::default(),
+                        });
+                        self.den_host = Some(host);
+                        self.den_join_error = None;
+                        self.den_show_all_feed = false;
+                        self.screen = Screen::Den;
+                        self.toast(format!("Hosting \u{b7} share: {share}"), self.tokens.run);
+                    }
+                    Err(e) => {
+                        host.stop();
+                        self.den_join_error = Some(format!("relay up but join failed: {e}"));
+                    }
+                }
+            }
+            Err(e) => self.den_join_error = Some(e),
+        }
+    }
+
     fn den_join(&mut self, cx: &mut Context<Self>) {
         let read = |input: &Option<gpui::Entity<super::super::input::ChatInput>>| {
             input
@@ -413,6 +491,20 @@ impl RootView {
         let Ok(spec) = std::env::var("PUPPY_GPUI_DEN") else {
             return;
         };
+        // `PUPPY_GPUI_DEN=host` exercises the QW6 hosting path instead.
+        if spec == "host" {
+            unsafe { std::env::remove_var("PUPPY_GPUI_DEN") };
+            self.dispatch(DashAction::Den(DenAction::HostSubmit), cx);
+            match (&self.den_host, &self.den_join_error) {
+                (Some(h), _) => eprintln!(
+                    "[probe] den hosted: share {} \u{b7} joined={}",
+                    h.share_addr,
+                    self.den.is_some()
+                ),
+                (None, err) => eprintln!("[probe] den host failed: {err:?}"),
+            }
+            return;
+        }
         let parts: Vec<&str> = spec.splitn(3, ',').collect();
         let [addr, room, user] = parts.as_slice() else {
             return;
@@ -464,6 +556,7 @@ impl RootView {
                 show_all_feed: self.den_show_all_feed,
                 reduce_motion: self.reduce_motion,
                 sharable_plans: sharable,
+                hosting: self.den_host.as_ref().map(|h| h.share_addr.clone()),
             });
         }
         self.ensure_join_inputs(cx);
