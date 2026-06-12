@@ -367,7 +367,7 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       global heuristic exists — nothing to fix here; redesign/egui's
       own dashboard lede needs the same local-pin at sync time (queued).
       E2E vs a real remote needs human QA (standing E4 limitation).
-      `<b138hash>`
+      `5df2868`
 
       SYNC QUEUE (phase-end batch): sidecar/sidecar.py (picker
       intercepts + cwd event + open flags), backend/mod.rs (Wire/UiEvent
