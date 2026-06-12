@@ -362,7 +362,7 @@ impl RootView {
                 entity.update(cx, |i, cx| i.set_text(initial, cx));
             }
             let sub = cx.subscribe(&entity, |this, _, event: &InputEvent, cx| {
-                if *event == InputEvent::Submitted {
+                if matches!(event, InputEvent::Submitted) {
                     this.dispatch(DashAction::Den(DenAction::JoinSubmit), cx);
                 }
             });
@@ -377,7 +377,7 @@ impl RootView {
 
         let feed = cx.new(|cx| ChatInput::new("Message the den\u{2026}", cx));
         let sub = cx.subscribe(&feed, |this, _, event: &InputEvent, cx| {
-            if *event == InputEvent::Submitted {
+            if matches!(event, InputEvent::Submitted) {
                 this.dispatch(DashAction::Den(DenAction::FeedSend), cx);
             }
         });
@@ -391,7 +391,7 @@ impl RootView {
         }
         let entity = cx.new(|cx| ChatInput::new("Card title\u{2026}", cx));
         let sub = cx.subscribe(&entity, |this, _, event: &InputEvent, cx| {
-            if *event == InputEvent::Submitted {
+            if matches!(event, InputEvent::Submitted) {
                 this.dispatch(DashAction::Den(DenAction::TaskInputSubmit), cx);
             }
         });

@@ -23,6 +23,12 @@ pub struct ComposerArgs<'a> {
     pub style: ComposerStyle,
     pub pop: Option<&'a ChatPop>,
     pub puppy: String,
+    /// Pending pasted images `(index, thumbnail)` for the chips row.
+    pub images: Vec<(usize, std::sync::Arc<gpui::Image>)>,
+    /// Completion-palette keyboard selection.
+    pub palette_sel: usize,
+    /// Dock steer toggle state (false = now, true = queue).
+    pub steer_queue: bool,
 }
 
 /// The whole bottom dock: palette + status line + skin + footer.
@@ -39,6 +45,11 @@ pub fn composer_dock(args: &ComposerArgs) -> AnyElement {
         .bg(t.panel)
         .child(slash_palette(args))
         .child(status_line(args))
+        .children(
+            // Unified embeds its chips in-bar; the rest show them above.
+            (!args.images.is_empty() && args.style != ComposerStyle::Unified)
+                .then(|| image_chips(args)),
+        )
         .child(match args.style {
             ComposerStyle::Classic => classic(args),
             ComposerStyle::Unified => unified(args),
@@ -49,16 +60,242 @@ pub fn composer_dock(args: &ComposerArgs) -> AnyElement {
         .into_any_element()
 }
 
-/// `. Ready · code-puppy · model` directly above the composer.
+/// Thumbnails of pending pasted images, each with a remove control.
+fn image_chips(args: &ComposerArgs) -> AnyElement {
+    let t = args.t;
+    let id = args.ws.id;
+    div()
+        .flex()
+        .flex_wrap()
+        .gap_1p5()
+        .children(args.images.iter().map(|(i, img)| {
+            let root = args.root.clone();
+            let idx = *i;
+            div()
+                .relative()
+                .rounded(px(8.))
+                .border_1()
+                .border_color(alpha(t.accent, 0.5))
+                .overflow_hidden()
+                .child(gpui::img(img.clone()).h(px(44.)).max_w(px(96.)))
+                .child(
+                    div()
+                        .id(("img-chip-x", idx as u64))
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .px_1()
+                        .bg(alpha(t.bg, 0.7))
+                        .text_size(px(10.))
+                        .text_color(t.text)
+                        .cursor_pointer()
+                        .hover(|d| d.text_color(t.error))
+                        .child("\u{2715}")
+                        .on_click(move |_, _, cx| {
+                            root.update(cx, |r, cx| {
+                                r.dispatch(DashAction::RemoveImage(id, idx), cx)
+                            });
+                        }),
+                )
+                .into_any_element()
+        }))
+        .into_any_element()
+}
+
+/// The `@ File` affordance + its directory-browsing popover.
+fn at_file_btn(args: &ComposerArgs) -> AnyElement {
+    let t = args.t;
+    let id = args.ws.id;
+    let open_dir = match args.pop {
+        Some(ChatPop::FilePicker(pid, dir)) if *pid == id => Some(dir.clone()),
+        _ => None,
+    };
+    let picker = open_dir.map(|dir| {
+        let root_entity = args.root.clone();
+        let ws_root = args.ws.root.clone();
+        let mut rows: Vec<AnyElement> = Vec::new();
+        if dir != ws_root {
+            let parent = dir.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+            let root = args.root.clone();
+            rows.push(
+                div()
+                    .id("picker-up")
+                    .px_2()
+                    .py_0p5()
+                    .rounded(px(6.))
+                    .font_family("JetBrains Mono")
+                    .text_size(px(11.5))
+                    .text_color(t.weak)
+                    .cursor_pointer()
+                    .hover(|d| d.bg(t.well))
+                    .child("\u{2191} ..")
+                    .on_click(move |_, _, cx| {
+                        root.update(cx, |r, cx| {
+                            r.dispatch(DashAction::PickerDir(id, parent.clone()), cx)
+                        });
+                    })
+                    .into_any_element(),
+            );
+        }
+        if let Ok(mut entries) = args.ws.fs_handle().read_dir(&dir) {
+            entries.sort_by(|a, b| {
+                (!a.is_dir, a.name.to_lowercase()).cmp(&(!b.is_dir, b.name.to_lowercase()))
+            });
+            for (i, entry) in entries
+                .into_iter()
+                .filter(|e| !e.name.starts_with('.'))
+                .take(200)
+                .enumerate()
+            {
+                let root = args.root.clone();
+                let path = entry.path.clone();
+                let is_dir = entry.is_dir;
+                rows.push(
+                    div()
+                        .id(("picker-row", i as u64))
+                        .px_2()
+                        .py_0p5()
+                        .rounded(px(6.))
+                        .font_family("JetBrains Mono")
+                        .text_size(px(11.5))
+                        .text_color(if is_dir { t.text } else { t.weak })
+                        .cursor_pointer()
+                        .hover(|d| d.bg(t.well))
+                        .child(format!(
+                            "{} {}",
+                            if is_dir { "\u{25b8}" } else { "\u{b7}" },
+                            entry.name
+                        ))
+                        .on_click(move |_, _, cx| {
+                            let action = if is_dir {
+                                DashAction::PickerDir(id, path.clone())
+                            } else {
+                                DashAction::PickerPick(id, path.clone())
+                            };
+                            root.update(cx, |r, cx| r.dispatch(action, cx));
+                        })
+                        .into_any_element(),
+                );
+            }
+        }
+        let panel = div()
+            .occlude()
+            .absolute()
+            .bottom(px(28.))
+            .left_0()
+            .w(px(300.))
+            .max_h(px(280.))
+            .id("picker-scroll")
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap_0p5()
+            .p_1()
+            .rounded(px(10.))
+            .bg(t.panel)
+            .border_1()
+            .border_color(t.line_soft)
+            .shadow_lg()
+            .on_mouse_down_out(move |_, _, cx| {
+                root_entity.update(cx, |r, cx| r.dispatch(DashAction::CloseChatPop, cx));
+            })
+            .children(rows);
+        gpui::deferred(panel).with_priority(100)
+    });
+    div()
+        .relative()
+        .child(widgets::btn(&t, "@ File").id(("at-file", id.0)).on_click({
+            let root = args.root.clone();
+            move |_, _, cx| {
+                root.update(cx, |r, cx| r.dispatch(DashAction::PickerOpen(id), cx));
+            }
+        }))
+        .children(picker)
+        .into_any_element()
+}
+
+/// `. Ready · code-puppy · model` directly above the composer; while a turn
+/// runs the right side grows pause/resume + stop + the steer now/queue
+/// toggle (B11 — mirrors the egui dock, in every composer style).
 fn status_line(args: &ComposerArgs) -> AnyElement {
     let t = args.t;
-    let color = match args.ws.status {
+    let ws = args.ws;
+    let id = ws.id;
+    let color = match ws.status {
         InstanceStatus::Running | InstanceStatus::Thinking | InstanceStatus::ToolCalling => t.run,
         InstanceStatus::WaitingForInput => t.wait,
         InstanceStatus::Paused => t.paused,
         InstanceStatus::Dead => t.error,
         _ => t.weak,
     };
+    let mut controls: Vec<AnyElement> = Vec::new();
+    if ws.is_running_turn() {
+        let mk = |label: &str, key: &'static str, action: DashAction, root: &Entity<RootView>| {
+            let root = root.clone();
+            widgets::btn(&t, label)
+                .id((key, id.0))
+                .on_click(move |_, _, cx| {
+                    let a = action.clone();
+                    root.update(cx, |r, cx| r.dispatch(a, cx));
+                })
+                .into_any_element()
+        };
+        if ws.is_paused() {
+            controls.push(mk(
+                "\u{25b6} Resume",
+                "dock-resume",
+                DashAction::Resume(id),
+                &args.root,
+            ));
+        } else {
+            controls.push(mk(
+                "\u{23f8} Pause",
+                "dock-pause",
+                DashAction::Pause(id),
+                &args.root,
+            ));
+        }
+        controls.push(mk(
+            "\u{23f9} Stop",
+            "dock-stop",
+            DashAction::Stop(id),
+            &args.root,
+        ));
+        // Steer delivery toggle: Enter mid-turn steers with this mode.
+        let seg = |label: &str, on: bool, queue: bool, idx: u64, root: &Entity<RootView>| {
+            let root = root.clone();
+            div()
+                .id(("dock-steer-mode", id.0 * 2 + idx))
+                .px_1p5()
+                .py_0p5()
+                .rounded(px(6.))
+                .text_size(px(10.5))
+                .cursor_pointer()
+                .when(on, |d| d.bg(alpha(t.accent, 0.18)).text_color(t.accent))
+                .when(!on, |d| d.text_color(t.weak))
+                .child(label.to_string())
+                .on_click(move |_, _, cx| {
+                    root.update(cx, |r, cx| {
+                        r.dispatch(DashAction::SetChatSteerQueue(queue), cx)
+                    });
+                })
+                .into_any_element()
+        };
+        controls.push(seg(
+            "\u{1f3af} now",
+            !args.steer_queue,
+            false,
+            0,
+            &args.root,
+        ));
+        controls.push(seg(
+            "\u{1f4e8} queue",
+            args.steer_queue,
+            true,
+            1,
+            &args.root,
+        ));
+    }
     div()
         .flex()
         .items_center()
@@ -69,8 +306,10 @@ fn status_line(args: &ComposerArgs) -> AnyElement {
                 .font_family("JetBrains Mono")
                 .text_size(px(11.))
                 .text_color(t.weak)
-                .child(args.ws.status_line.clone()),
+                .child(ws.status_line.clone()),
         )
+        .child(div().flex_1())
+        .children(controls)
         .into_any_element()
 }
 
@@ -99,6 +338,7 @@ fn classic(args: &ComposerArgs) -> AnyElement {
                 .gap_2()
                 .child(agent_pill(args))
                 .child(model_pill(args))
+                .child(at_file_btn(args))
                 .child(div().flex_1())
                 .child(
                     div()
@@ -114,18 +354,26 @@ fn unified(args: &ComposerArgs) -> AnyElement {
     let t = args.t;
     div()
         .flex()
-        .items_center()
-        .gap_2()
+        .flex_col()
+        .gap_1p5()
         .px_2p5()
         .py_1p5()
         .rounded(px(12.))
         .bg(t.well)
         .border_1()
         .border_color(alpha(t.accent, 0.55))
-        .child(div().min_w_0().flex_1().child(args.input.clone()))
-        .child(agent_pill(args))
-        .child(model_pill(args))
-        .child(send_btn(args, "Send"))
+        .children((!args.images.is_empty()).then(|| image_chips(args)))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(div().min_w_0().flex_1().child(args.input.clone()))
+                .child(agent_pill(args))
+                .child(model_pill(args))
+                .child(at_file_btn(args))
+                .child(send_btn(args, "Send")),
+        )
         .into_any_element()
 }
 
@@ -541,7 +789,7 @@ fn slash_palette(args: &ComposerArgs) -> AnyElement {
                 .py_0p5()
                 .text_size(px(9.5))
                 .text_color(t.dim)
-                .child("completions \u{b7} click to insert"),
+                .child("completions \u{b7} \u{2191}\u{2193} navigate \u{b7} \u{23ce} insert \u{b7} esc dismiss"),
         )
         .children(
             ws.completion_items()
@@ -551,6 +799,7 @@ fn slash_palette(args: &ComposerArgs) -> AnyElement {
                 .map(|(i, item)| {
                     let root = root.clone();
                     let shown = display_of(item);
+                    let selected = i == args.palette_sel;
                     div()
                         .id(("comp-opt", i as u64))
                         .px_2()
@@ -560,6 +809,7 @@ fn slash_palette(args: &ComposerArgs) -> AnyElement {
                         .text_size(px(11.5))
                         .text_color(t.text)
                         .cursor_pointer()
+                        .when(selected, |d| d.bg(alpha(t.accent, 0.16)))
                         .hover(|d| d.bg(t.well))
                         .child(shown)
                         .on_click(move |_, _, cx| {

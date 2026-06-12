@@ -13,12 +13,14 @@ use crate::workspace::WorkspaceId;
 use super::dashboard::{CardInput, InputKind};
 use super::{RootView, Screen, chat, den};
 
-/// Which open chat popover (agent / model switcher, composer style gear).
+/// Which open chat popover (agent / model switcher, composer style gear,
+/// the @File picker browsing some directory).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChatPop {
     Agent(WorkspaceId),
     Model(WorkspaceId),
     Style,
+    FilePicker(WorkspaceId, PathBuf),
 }
 
 /// Every dashboard interaction, funneled through [`RootView::dispatch`].
@@ -69,8 +71,44 @@ pub enum DashAction {
     PendingText(WorkspaceId),
     /// Enter pressed inside the shared answer input.
     AnswerEnter,
+    /// Steer delivery mode for composer-dock steering (false = now).
+    SetChatSteerQueue(bool),
+    /// Open the @File picker at the workspace root.
+    PickerOpen(WorkspaceId),
+    /// Navigate the @File picker into a directory.
+    PickerDir(WorkspaceId, PathBuf),
+    /// Insert an `@<path>` reference for the picked file.
+    PickerPick(WorkspaceId, PathBuf),
+    /// Drop a pending pasted image before sending.
+    RemoveImage(WorkspaceId, usize),
     /// Den interactions (join/leave/feed/kanban/plans/...).
     Den(den::DenAction),
+}
+
+/// `@<path>` reference token, exactly like the egui composer: paths under
+/// the workspace root go relative with forward slashes; outside stays
+/// absolute.
+fn file_token(root: &std::path::Path, path: &std::path::Path) -> String {
+    let rel = path.strip_prefix(root).unwrap_or(path);
+    format!("@{}", rel.to_string_lossy().replace('\\', "/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_token_relativizes_under_root() {
+        let root = std::path::Path::new("/repo");
+        assert_eq!(
+            file_token(root, std::path::Path::new("/repo/src/main.rs")),
+            "@src/main.rs"
+        );
+        assert_eq!(
+            file_token(root, std::path::Path::new("/elsewhere/x.txt")),
+            "@/elsewhere/x.txt"
+        );
+    }
 }
 
 impl RootView {
@@ -192,10 +230,15 @@ impl RootView {
                     Some((input.clone(), chat::composer::apply_completion(&text, item)))
                 });
                 if let Some((input, new_text)) = applied {
-                    input.update(cx, |i, cx| i.set_text(new_text, cx));
                     if let Some(ws) = self.supervisor.get_mut(id) {
+                        // Inserted text must not immediately re-open the
+                        // palette as "fresh typing".
+                        ws.suppress_completions_for(&new_text);
                         ws.dismiss_completions();
                     }
+                    input.update(cx, |i, cx| i.set_text(new_text, cx));
+                    self.palette_sel = 0;
+                    self.sync_palette_flag(id, cx);
                 }
             }
             DashAction::ToggleDiff(id, idx) => {
@@ -293,6 +336,40 @@ impl RootView {
             DashAction::Den(den_action) => {
                 self.dispatch_den(den_action, cx);
                 return;
+            }
+            DashAction::SetChatSteerQueue(q) => self.chat_steer_queue = q,
+            DashAction::PickerOpen(id) => {
+                let root_dir = self.supervisor.get(id).map(|w| w.root.clone());
+                if let Some(dir) = root_dir {
+                    self.chat_pop = Some(ChatPop::FilePicker(id, dir));
+                }
+            }
+            DashAction::PickerDir(id, dir) => {
+                self.chat_pop = Some(ChatPop::FilePicker(id, dir));
+            }
+            DashAction::PickerPick(id, path) => {
+                self.chat_pop = None;
+                let token = self
+                    .supervisor
+                    .get(id)
+                    .map(|ws| file_token(&ws.root, &path))
+                    .unwrap_or_default();
+                if let Some(input) = self.chat_inputs.get(&id).cloned() {
+                    let mut text = input.read(cx).text().to_string();
+                    if !text.is_empty() && !text.ends_with(' ') {
+                        text.push(' ');
+                    }
+                    text.push_str(&token);
+                    text.push(' ');
+                    input.update(cx, |i, cx| i.set_text(text, cx));
+                }
+            }
+            DashAction::RemoveImage(id, idx) => {
+                if let Some(imgs) = self.pending_images.get_mut(&id)
+                    && idx < imgs.len()
+                {
+                    imgs.remove(idx);
+                }
             }
             DashAction::AnswerEnter => {
                 // Route Enter in the answer input: input prompts submit
@@ -427,15 +504,40 @@ impl RootView {
             return;
         }
         if ws.is_running_turn() {
-            if ws.steer_text(&text, false) {
-                self.toast(format!("Steered {name} now \u{1f3af}"), accent);
+            // Mid-turn Enter = steer, honoring the dock's now/queue toggle.
+            // Pending images stay attached for the next real prompt.
+            let queue = self.chat_steer_queue;
+            if ws.steer_text(&text, queue) {
+                let how = if queue {
+                    "(queued \u{1f4e8})"
+                } else {
+                    "now \u{1f3af}"
+                };
+                self.toast(format!("Steered {name} {how}"), accent);
             }
+        } else if text.starts_with('/') {
+            ws.send_prompt_text(&text); // slash command; images stay pending
         } else {
-            ws.send_prompt_text(&text);
+            if !ws.is_ready() {
+                self.toast(format!("{name} isn't ready yet"), accent);
+                return;
+            }
+            let images: Vec<String> = self
+                .pending_images
+                .remove(&id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|p| p.b64)
+                .collect();
+            if let Some(ws) = self.supervisor.get_mut(id) {
+                ws.send_user_prompt(text, images);
+            }
         }
         if let Some(ws) = self.supervisor.get_mut(id) {
             ws.dismiss_completions();
         }
+        self.palette_sel = 0;
+        self.sync_palette_flag(id, cx);
         input.update(cx, |i, cx| i.clear(cx));
     }
 }

@@ -141,6 +141,18 @@ pub struct RootView {
     session_no_save: bool,
     /// Last saved workspace-list signature (change-gated drain saves).
     session_sig: String,
+    /// Images pasted into a workspace's composer, awaiting the next send.
+    pending_images: HashMap<WorkspaceId, Vec<PendingImage>>,
+    /// Completion-palette selection (reset on edit / new completions).
+    palette_sel: usize,
+    /// Steer delivery mode for composer-dock steering (false = now).
+    chat_steer_queue: bool,
+}
+
+/// One pasted image: the wire form + the displayable form.
+pub struct PendingImage {
+    pub b64: String,
+    pub img: std::sync::Arc<gpui::Image>,
 }
 
 impl RootView {
@@ -220,6 +232,9 @@ impl RootView {
             presence_idle: false,
             session_no_save: probing,
             session_sig: String::new(),
+            pending_images: HashMap::new(),
+            palette_sel: 0,
+            chat_steer_queue: false,
         }
     }
 
@@ -230,7 +245,7 @@ impl RootView {
         }
         let entity = cx.new(|cx| ChatInput::new("Type your answer\u{2026}", cx));
         let sub = cx.subscribe(&entity, |this, _, event: &InputEvent, cx| {
-            if *event == InputEvent::Submitted {
+            if matches!(event, InputEvent::Submitted) {
                 this.dispatch(DashAction::AnswerEnter, cx);
             }
         });
@@ -281,21 +296,121 @@ impl RootView {
                 cx,
             )
         });
-        let sub = cx.subscribe(
-            &entity,
-            move |this, input, event: &InputEvent, cx| match event {
-                InputEvent::Edited => {
-                    let text = input.read(cx).text().to_string();
-                    if let Some(ws) = this.supervisor.get_mut(id) {
-                        ws.update_completions(&text);
-                    }
-                    cx.notify();
-                }
-                InputEvent::Submitted => this.dispatch(DashAction::ChatSubmit(id), cx),
-            },
-        );
+        let sub = cx.subscribe(&entity, move |this, input, event: &InputEvent, cx| {
+            this.on_chat_input_event(id, &input, event, cx);
+        });
         self.chat_inputs.insert(id, entity);
         self.chat_subs.push(sub);
+    }
+
+    /// All composer-input events for one workspace, in one place.
+    fn on_chat_input_event(
+        &mut self,
+        id: WorkspaceId,
+        input: &Entity<ChatInput>,
+        event: &InputEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::Edited => {
+                let text = input.read(cx).text().to_string();
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.update_completions(&text);
+                }
+                self.palette_sel = 0;
+                self.sync_palette_flag(id, cx);
+                cx.notify();
+            }
+            InputEvent::Submitted => self.dispatch(DashAction::ChatSubmit(id), cx),
+            InputEvent::HistoryPrev => {
+                let draft = input.read(cx).text().to_string();
+                let recalled = self
+                    .supervisor
+                    .get_mut(id)
+                    .and_then(|ws| ws.history_prev(&draft));
+                if let Some(text) = recalled {
+                    // Suppress BEFORE set_text: the Edited event is delivered
+                    // after this handler, and update_completions equality-
+                    // debounces against last_query.
+                    if let Some(ws) = self.supervisor.get_mut(id) {
+                        ws.suppress_completions_for(&text);
+                    }
+                    input.update(cx, |i, cx| i.set_text(text, cx));
+                    self.sync_palette_flag(id, cx);
+                }
+            }
+            InputEvent::HistoryNext => {
+                let recalled = self.supervisor.get_mut(id).and_then(|ws| ws.history_next());
+                if let Some(text) = recalled {
+                    if let Some(ws) = self.supervisor.get_mut(id) {
+                        ws.suppress_completions_for(&text);
+                    }
+                    input.update(cx, |i, cx| i.set_text(text, cx));
+                    self.sync_palette_flag(id, cx);
+                }
+            }
+            InputEvent::PaletteNav(delta) => {
+                let n = self
+                    .supervisor
+                    .get(id)
+                    .map(|ws| ws.completion_items().len().min(30))
+                    .unwrap_or(0);
+                if n > 0 {
+                    let cur = self.palette_sel as i64 + *delta as i64;
+                    self.palette_sel = cur.rem_euclid(n as i64) as usize;
+                }
+                cx.notify();
+            }
+            InputEvent::PaletteAccept => {
+                self.dispatch(DashAction::ApplyCompletion(id, self.palette_sel), cx);
+            }
+            InputEvent::PaletteDismiss => {
+                if let Some(ws) = self.supervisor.get_mut(id) {
+                    ws.dismiss_completions();
+                }
+                self.sync_palette_flag(id, cx);
+                cx.notify();
+            }
+            InputEvent::Image(png) => {
+                use base64::Engine as _;
+                let b64 = base64::engine::general_purpose::STANDARD.encode(png);
+                let img = std::sync::Arc::new(gpui::Image::from_bytes(
+                    gpui::ImageFormat::Png,
+                    png.clone(),
+                ));
+                self.pending_images
+                    .entry(id)
+                    .or_default()
+                    .push(PendingImage { b64, img });
+                let accent = self.tokens.accent;
+                self.toast(
+                    "Image attached \u{2014} sends with your next message".into(),
+                    accent,
+                );
+                cx.notify();
+            }
+        }
+    }
+
+    /// Mirror a workspace's palette visibility onto its input entity (the
+    /// input routes nav keys to the palette while this is set).
+    fn sync_palette_flag(&mut self, id: WorkspaceId, cx: &mut Context<Self>) {
+        let open = self
+            .supervisor
+            .get(id)
+            .map(|ws| ws.completions_open())
+            .unwrap_or(false);
+        if let Some(input) = self.chat_inputs.get(&id) {
+            input.update(cx, |i, _| i.palette_open = open);
+        }
+    }
+
+    /// Keep the active chat's palette flag fresh (sidecar completion replies
+    /// arrive via the drain loop, not via input edits).
+    fn sync_active_palette(&mut self, cx: &mut Context<Self>) {
+        if let Screen::Chat(id) = self.screen {
+            self.sync_palette_flag(id, cx);
+        }
     }
 
     /// The recurring drain task: wake-driven with an adaptive timer floor.
@@ -307,6 +422,7 @@ impl RootView {
                 let Ok(busy) = this.update(cx, |root, cx| {
                     root.supervisor.drain();
                     root.save_session_if_changed();
+                    root.sync_active_palette(cx);
                     root.pump_den();
                     root.maybe_probe_den(cx);
                     root.maybe_send_probe_prompt();
@@ -649,6 +765,18 @@ impl Render for RootView {
                         .other_target
                         .filter(|(tid, _)| *tid == id)
                         .map(|(_, qi)| qi),
+                    images: self
+                        .pending_images
+                        .get(&id)
+                        .map(|v| {
+                            v.iter()
+                                .enumerate()
+                                .map(|(i, p)| (i, p.img.clone()))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    palette_sel: self.palette_sel,
+                    steer_queue: self.chat_steer_queue,
                 })
             }
             Screen::Dashboard => self.dashboard_body(cx),

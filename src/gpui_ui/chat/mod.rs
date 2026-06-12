@@ -33,6 +33,12 @@ pub struct ChatArgs<'a> {
     pub answer_input: Option<&'a Entity<ChatInput>>,
     /// The ask question index the answer input is bound to, if any.
     pub other_target: Option<usize>,
+    /// Pending pasted images `(index, thumbnail)`.
+    pub images: Vec<(usize, std::sync::Arc<gpui::Image>)>,
+    /// Completion-palette keyboard selection.
+    pub palette_sel: usize,
+    /// Dock steer toggle (false = now, true = queue).
+    pub steer_queue: bool,
 }
 
 /// The whole chat screen body (below the tab strip).
@@ -55,6 +61,9 @@ pub fn chat_screen(args: &ChatArgs) -> AnyElement {
         style: args.style,
         pop: args.pop,
         puppy: args.puppy.clone(),
+        images: args.images.clone(),
+        palette_sel: args.palette_sel,
+        steer_queue: args.steer_queue,
     });
 
     let answer = ask::ask_panel(&ask::AskArgs {

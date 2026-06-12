@@ -1,27 +1,39 @@
-//! The composer's real text input: a multiline adaptation of gpui's
+//! The composer's text input: a soft-wrapping multiline adaptation of gpui's
 //! `examples/input.rs` (EntityInputHandler — IME, cursor, selection, mouse).
 //!
-//! Differences from the example, documented for the next puppy:
-//! - **Multiline, no soft wrap**: content may contain `\n`; each line is
-//!   shaped separately and painted on its own row. Long lines clip (like a
-//!   terminal) rather than wrap — soft wrap is editor-grade work we defer.
-//! - **Events out**: the entity emits [`InputEvent`] (`Edited` on every
-//!   change, `Submitted` on Enter); `shift-enter` inserts a newline.
-//! - Key bindings live in `gpui_ui::run()` under the `"ChatInput"` context.
+//! B1c upgrades over the 2.3 version, for the next puppy:
+//! - **Soft wrap**: logical lines are shaped with `shape_text(wrap_width)`
+//!   into [`WrappedLine`]s; cursor/selection/mouse geometry is multi-row
+//!   aware via `position_for_index` / `index_for_position`. Height comes
+//!   from a measured layout (`request_measured_layout`), capped at
+//!   [`MAX_VISIBLE_ROWS`].
+//! - **Up/Down** move across visual rows; at the top/bottom edge they emit
+//!   `HistoryPrev`/`HistoryNext` (shell-style prompt recall, root-handled).
+//! - **Word jump**: alt/ctrl+arrows (+shift to select).
+//! - **Palette routing**: while `palette_open` is set by the root,
+//!   Up/Down/Enter/Tab/Escape become palette events instead of edits.
+//! - **Image paste**: clipboard image entries emit `InputEvent::Image`
+//!   (PNG bytes); non-PNG clipboards fall back to the shared arboard
+//!   pipeline (`workspace::clipboard`).
+//! Deliberate punts: no goal-column stickiness on Up/Down, no internal
+//! scroll past [`MAX_VISIBLE_ROWS`] (content clips), no cursor blink.
 
 use std::ops::Range;
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding,
-    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
-    ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div,
-    fill, point, prelude::*, px, relative, size,
+    App, Bounds, ClipboardEntry, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
+    EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, ImageFormat,
+    KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
+    Pixels, Point, SharedString, Style, TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window,
+    WrappedLine, actions, div, fill, point, prelude::*, px, relative, size,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::tokens::Tokens;
 use super::widgets::alpha;
+
+/// Height cap, in visual rows (the mock's composer height).
+const MAX_VISIBLE_ROWS: usize = 8;
 
 actions!(
     chat_input,
@@ -30,17 +42,25 @@ actions!(
         Delete,
         Left,
         Right,
+        Up,
+        Down,
         SelectLeft,
         SelectRight,
         SelectAll,
         Home,
         End,
+        WordLeft,
+        WordRight,
+        SelectWordLeft,
+        SelectWordRight,
         Paste,
         Copy,
         Cut,
         ShowCharacterPalette,
         Submit,
         Newline,
+        EscapeKey,
+        TabKey,
     ]
 );
 
@@ -52,35 +72,98 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("delete", Delete, CTX),
         KeyBinding::new("left", Left, CTX),
         KeyBinding::new("right", Right, CTX),
+        KeyBinding::new("up", Up, CTX),
+        KeyBinding::new("down", Down, CTX),
         KeyBinding::new("shift-left", SelectLeft, CTX),
         KeyBinding::new("shift-right", SelectRight, CTX),
         KeyBinding::new("cmd-a", SelectAll, CTX),
         KeyBinding::new("home", Home, CTX),
         KeyBinding::new("end", End, CTX),
+        KeyBinding::new("cmd-left", Home, CTX),
+        KeyBinding::new("cmd-right", End, CTX),
+        // Word jump: alt on macOS, ctrl elsewhere — bind both, they don't clash.
+        KeyBinding::new("alt-left", WordLeft, CTX),
+        KeyBinding::new("alt-right", WordRight, CTX),
+        KeyBinding::new("ctrl-left", WordLeft, CTX),
+        KeyBinding::new("ctrl-right", WordRight, CTX),
+        KeyBinding::new("alt-shift-left", SelectWordLeft, CTX),
+        KeyBinding::new("alt-shift-right", SelectWordRight, CTX),
+        KeyBinding::new("ctrl-shift-left", SelectWordLeft, CTX),
+        KeyBinding::new("ctrl-shift-right", SelectWordRight, CTX),
         KeyBinding::new("cmd-v", Paste, CTX),
         KeyBinding::new("cmd-c", Copy, CTX),
         KeyBinding::new("cmd-x", Cut, CTX),
         KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, CTX),
         KeyBinding::new("enter", Submit, CTX),
         KeyBinding::new("shift-enter", Newline, CTX),
+        KeyBinding::new("escape", EscapeKey, CTX),
+        KeyBinding::new("tab", TabKey, CTX),
     ]);
 }
 
 /// Events the composer surface listens for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum InputEvent {
     /// Content changed (typing, paste, IME commit, cut...).
     Edited,
-    /// Enter pressed — send the prompt.
+    /// Enter pressed (palette closed) — send the prompt.
     Submitted,
+    /// Up pressed on the first visual row — recall older prompt.
+    HistoryPrev,
+    /// Down pressed on the last visual row — recall newer prompt / draft.
+    HistoryNext,
+    /// Up/Down while the completion palette is open.
+    PaletteNav(i32),
+    /// Enter/Tab while the palette is open.
+    PaletteAccept,
+    /// Escape while the palette is open.
+    PaletteDismiss,
+    /// An image was pasted (PNG bytes).
+    Image(Vec<u8>),
 }
 
-/// Per-paint shaped layout (one entry per visual line).
-struct LineLayout {
-    lines: Vec<ShapedLine>,
-    /// Byte offset where each line starts in `content`.
+/// Per-paint wrapped layout: one [`WrappedLine`] per logical line.
+struct WrapLayout {
+    lines: Vec<WrappedLine>,
+    /// Byte offset where each logical line starts in `content`.
     starts: Vec<usize>,
+    /// Y offset of each logical line's first visual row.
+    y_offsets: Vec<Pixels>,
     line_height: Pixels,
+    total_height: Pixels,
+}
+
+impl WrapLayout {
+    /// Top-left of the caret for a global byte offset.
+    fn pos_for_offset(&self, offset: usize) -> Option<Point<Pixels>> {
+        let (row, col) = line_col(&self.starts, offset);
+        let line = self.lines.get(row)?;
+        let base = self.y_offsets[row];
+        match line.position_for_index(col, self.line_height) {
+            Some(p) => Some(point(p.x, p.y + base)),
+            // End-of-text on an empty trailing line (or any miss): line start.
+            None => Some(point(px(0.), base)),
+        }
+    }
+
+    /// Closest byte offset for a point relative to the element origin.
+    fn offset_for_point(&self, p: Point<Pixels>, content_len: usize) -> usize {
+        if p.y < px(0.) {
+            return 0;
+        }
+        for (i, line) in self.lines.iter().enumerate() {
+            let rows = line.wrap_boundaries().len() + 1;
+            let h = self.line_height * rows as f32;
+            if p.y < self.y_offsets[i] + h {
+                let local = point(p.x.max(px(0.)), (p.y - self.y_offsets[i]).max(px(0.)));
+                let ix = match line.index_for_position(local, self.line_height) {
+                    Ok(ix) | Err(ix) => ix,
+                };
+                return self.starts[i] + ix.min(line.text.len());
+            }
+        }
+        content_len
+    }
 }
 
 pub struct ChatInput {
@@ -90,10 +173,13 @@ pub struct ChatInput {
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
-    last_layout: Option<LineLayout>,
+    last_layout: Option<WrapLayout>,
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
     tokens: Tokens,
+    /// Set by the root while the completion palette is showing: nav keys
+    /// route to the palette instead of the buffer.
+    pub palette_open: bool,
 }
 
 impl EventEmitter<InputEvent> for ChatInput {}
@@ -117,6 +203,7 @@ impl ChatInput {
             last_bounds: None,
             is_selecting: false,
             tokens: Tokens::dark(),
+            palette_open: false,
         }
     }
 
@@ -138,11 +225,73 @@ impl ChatInput {
     }
 
     fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
-        cx.emit(InputEvent::Submitted);
+        if self.palette_open {
+            cx.emit(InputEvent::PaletteAccept);
+        } else {
+            cx.emit(InputEvent::Submitted);
+        }
     }
 
     fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
         self.replace_text_in_range(None, "\n", window, cx);
+    }
+
+    fn escape(&mut self, _: &EscapeKey, _: &mut Window, cx: &mut Context<Self>) {
+        if self.palette_open {
+            cx.emit(InputEvent::PaletteDismiss);
+        }
+    }
+
+    fn tab(&mut self, _: &TabKey, _: &mut Window, cx: &mut Context<Self>) {
+        if self.palette_open {
+            cx.emit(InputEvent::PaletteAccept);
+        }
+    }
+
+    fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
+        if self.palette_open {
+            cx.emit(InputEvent::PaletteNav(-1));
+            return;
+        }
+        let cur = self.cursor_offset();
+        let Some((layout, p)) = self
+            .last_layout
+            .as_ref()
+            .and_then(|l| l.pos_for_offset(cur).map(|p| (l, p)))
+        else {
+            cx.emit(InputEvent::HistoryPrev);
+            return;
+        };
+        if p.y < layout.line_height {
+            cx.emit(InputEvent::HistoryPrev); // top edge -> history
+            return;
+        }
+        let target = point(p.x, p.y - layout.line_height / 2.);
+        let offset = layout.offset_for_point(target, self.content.len());
+        self.move_to(offset, cx);
+    }
+
+    fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
+        if self.palette_open {
+            cx.emit(InputEvent::PaletteNav(1));
+            return;
+        }
+        let cur = self.cursor_offset();
+        let Some((layout, p)) = self
+            .last_layout
+            .as_ref()
+            .and_then(|l| l.pos_for_offset(cur).map(|p| (l, p)))
+        else {
+            cx.emit(InputEvent::HistoryNext);
+            return;
+        };
+        if p.y + layout.line_height * 1.5 > layout.total_height {
+            cx.emit(InputEvent::HistoryNext); // bottom edge -> history
+            return;
+        }
+        let target = point(p.x, p.y + layout.line_height * 1.5);
+        let offset = layout.offset_for_point(target, self.content.len());
+        self.move_to(offset, cx);
     }
 
     fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
@@ -175,7 +324,6 @@ impl ChatInput {
     }
 
     fn home(&mut self, _: &Home, _: &mut Window, cx: &mut Context<Self>) {
-        // Start of the current line (multiline-aware Home).
         let cur = self.cursor_offset();
         let start = self.content[..cur].rfind('\n').map_or(0, |i| i + 1);
         self.move_to(start, cx);
@@ -187,6 +335,26 @@ impl ChatInput {
             .find('\n')
             .map_or(self.content.len(), |i| cur + i);
         self.move_to(end, cx);
+    }
+
+    fn word_left(&mut self, _: &WordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        let target = prev_word_boundary(&self.content, self.cursor_offset());
+        self.move_to(target, cx);
+    }
+
+    fn word_right(&mut self, _: &WordRight, _: &mut Window, cx: &mut Context<Self>) {
+        let target = next_word_boundary(&self.content, self.cursor_offset());
+        self.move_to(target, cx);
+    }
+
+    fn select_word_left(&mut self, _: &SelectWordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        let target = prev_word_boundary(&self.content, self.cursor_offset());
+        self.select_to(target, cx);
+    }
+
+    fn select_word_right(&mut self, _: &SelectWordRight, _: &mut Window, cx: &mut Context<Self>) {
+        let target = next_word_boundary(&self.content, self.cursor_offset());
+        self.select_to(target, cx);
     }
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
@@ -231,24 +399,50 @@ impl ChatInput {
         window.show_character_palette();
     }
 
+    /// Paste text and/or an image. gpui clipboard image entries are used
+    /// when present (PNG passes straight through); otherwise the shared
+    /// arboard pipeline converts whatever the OS has into PNG bytes.
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            // Multiline input: newlines survive the paste.
+        let mut text = String::new();
+        let mut image_png: Option<Vec<u8>> = None;
+        if let Some(item) = cx.read_from_clipboard() {
+            for entry in item.into_entries() {
+                match entry {
+                    ClipboardEntry::String(s) => text.push_str(s.text()),
+                    ClipboardEntry::Image(img) if image_png.is_none() => {
+                        if img.format == ImageFormat::Png {
+                            image_png = Some(img.bytes);
+                        }
+                    }
+                    ClipboardEntry::Image(_) => {}
+                }
+            }
+        }
+        if image_png.is_none() && text.is_empty() {
+            // Non-PNG or platform path: shared arboard RGBA -> PNG pipeline.
+            image_png = crate::workspace::clipboard::read_clipboard_image().and_then(|img| {
+                crate::workspace::clipboard::encode_png(img.width, img.height, &img.rgba)
+            });
+        }
+        if let Some(png) = image_png {
+            cx.emit(InputEvent::Image(png));
+        }
+        if !text.is_empty() {
             self.replace_text_in_range(None, &text, window, cx);
         }
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
         if !self.selected_range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),
             ));
         }
     }
 
-    fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+    fn cut(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.selected_range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),
             ));
             self.replace_text_in_range(None, "", window, cx)
@@ -276,17 +470,10 @@ impl ChatInput {
         else {
             return 0;
         };
-        if position.y < bounds.top() {
-            return 0;
-        }
-        if position.y > bounds.bottom() {
-            return self.content.len();
-        }
-        let row = (f32::from(position.y - bounds.top()) / f32::from(layout.line_height)) as usize;
-        let row = row.min(layout.lines.len().saturating_sub(1));
-        let line_start = layout.starts[row];
-        let col = layout.lines[row].closest_index_for_x(position.x - bounds.left());
-        line_start + col
+        layout.offset_for_point(
+            point(position.x - bounds.left(), position.y - bounds.top()),
+            self.content.len(),
+        )
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
@@ -350,6 +537,37 @@ impl ChatInput {
             .find_map(|(idx, _)| (idx > offset).then_some(idx))
             .unwrap_or(self.content.len())
     }
+}
+
+/// Previous word start strictly before `offset` (whitespace runs skipped).
+fn prev_word_boundary(content: &str, offset: usize) -> usize {
+    let mut target = 0;
+    for (i, w) in content.split_word_bound_indices() {
+        if i >= offset {
+            break;
+        }
+        if !w.trim().is_empty() {
+            target = i;
+        }
+    }
+    target
+}
+
+/// End of the next word at/after `offset` (whitespace runs skipped).
+fn next_word_boundary(content: &str, offset: usize) -> usize {
+    for (i, w) in content.split_word_bound_indices() {
+        let end = i + w.len();
+        if end > offset && !w.trim().is_empty() {
+            return end;
+        }
+    }
+    content.len()
+}
+
+/// Map a global byte offset to (logical line index, byte column).
+fn line_col(starts: &[usize], offset: usize) -> (usize, usize) {
+    let row = starts.iter().rposition(|&s| s <= offset).unwrap_or(0);
+    (row, offset - starts[row])
 }
 
 impl EntityInputHandler for ChatInput {
@@ -445,15 +663,10 @@ impl EntityInputHandler for ChatInput {
     ) -> Option<Bounds<Pixels>> {
         let layout = self.last_layout.as_ref()?;
         let range = self.range_from_utf16(&range_utf16);
-        let (row, col) = line_col(&layout.starts, range.start);
-        let line = layout.lines.get(row)?;
-        let y = bounds.top() + layout.line_height * row as f32;
+        let p = layout.pos_for_offset(range.start)?;
         Some(Bounds::from_corners(
-            point(bounds.left() + line.x_for_index(col), y),
-            point(
-                bounds.left() + line.x_for_index(col),
-                y + layout.line_height,
-            ),
+            point(bounds.left() + p.x, bounds.top() + p.y),
+            point(bounds.left() + p.x, bounds.top() + p.y + layout.line_height),
         ))
     }
 
@@ -468,12 +681,6 @@ impl EntityInputHandler for ChatInput {
     }
 }
 
-/// Map a global byte offset to (line index, byte column).
-fn line_col(starts: &[usize], offset: usize) -> (usize, usize) {
-    let row = starts.iter().rposition(|&s| s <= offset).unwrap_or(0);
-    (row, offset - starts[row])
-}
-
 // ---------------------------------------------------------------------------
 // The element
 // ---------------------------------------------------------------------------
@@ -483,7 +690,7 @@ struct TextElement {
 }
 
 struct PrepaintState {
-    layout: Option<LineLayout>,
+    layout: Option<WrapLayout>,
     cursor: Option<PaintQuad>,
     selections: Vec<PaintQuad>,
 }
@@ -492,6 +699,52 @@ impl IntoElement for TextElement {
     type Element = Self;
     fn into_element(self) -> Self::Element {
         self
+    }
+}
+
+/// Shape `content` into wrapped logical lines at `wrap_width`.
+fn shape(
+    content: &str,
+    marked: &Option<Range<usize>>,
+    color: gpui::Hsla,
+    wrap_width: Pixels,
+    window: &mut Window,
+) -> WrapLayout {
+    let style = window.text_style();
+    let font_size = style.font_size.to_pixels(window.rem_size());
+    let line_height = window.line_height();
+    let mut lines = Vec::new();
+    let mut starts = Vec::new();
+    let mut y_offsets = Vec::new();
+    let mut y = px(0.);
+    let mut byte = 0usize;
+    for seg in content.split('\n') {
+        starts.push(byte);
+        y_offsets.push(y);
+        let runs = marked_runs(&style, color, marked, byte, seg.len());
+        let shaped = window
+            .text_system()
+            .shape_text(
+                SharedString::from(seg.to_string()),
+                font_size,
+                &runs,
+                Some(wrap_width),
+                None,
+            )
+            .ok()
+            .and_then(|mut v| (!v.is_empty()).then(|| v.remove(0)))
+            .unwrap_or_default();
+        let rows = shaped.wrap_boundaries().len() + 1;
+        y += line_height * rows as f32;
+        lines.push(shaped);
+        byte += seg.len() + 1;
+    }
+    WrapLayout {
+        lines,
+        starts,
+        y_offsets,
+        line_height,
+        total_height: y,
     }
 }
 
@@ -512,14 +765,29 @@ impl gpui::Element for TextElement {
         _: Option<&GlobalElementId>,
         _: Option<&gpui::InspectorElementId>,
         window: &mut Window,
-        cx: &mut App,
+        _cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        let line_count = self.input.read(cx).content.split('\n').count().max(1);
+        let input = self.input.clone();
         let mut style = Style::default();
         style.size.width = relative(1.).into();
-        // Grow with content, capped at 8 rows (mock's composer height).
-        style.size.height = (window.line_height() * line_count.min(8) as f32).into();
-        (window.request_layout(style, [], cx), ())
+        let layout_id =
+            window.request_measured_layout(style, move |known, available, window, cx| {
+                let line_height = window.line_height();
+                let width = known.width.unwrap_or(match available.width {
+                    gpui::AvailableSpace::Definite(w) => w,
+                    _ => px(360.),
+                });
+                let state = input.read(cx);
+                let content = if state.content.is_empty() {
+                    state.placeholder.to_string()
+                } else {
+                    state.content.clone()
+                };
+                let layout = shape(&content, &None, gpui::black(), width, window);
+                let max = line_height * MAX_VISIBLE_ROWS as f32;
+                size(width, layout.total_height.min(max).max(line_height))
+            });
+        (layout_id, ())
     }
 
     fn prepaint(
@@ -538,83 +806,52 @@ impl gpui::Element for TextElement {
         let marked = input.marked_range.clone();
         let t = input.tokens;
         let style = window.text_style();
-        let font_size = style.font_size.to_pixels(window.rem_size());
-        let line_height = window.line_height();
 
         let placeholder = content.is_empty();
-        let text_color = if placeholder {
-            gpui::Hsla::from(alpha(t.dim, 0.7))
+        let (shown, color) = if placeholder {
+            (
+                input.placeholder.to_string(),
+                gpui::Hsla::from(alpha(t.dim, 0.7)),
+            )
         } else {
-            style.color
+            (content.clone(), style.color)
         };
+        let layout = shape(&shown, &marked, color, bounds.size.width, window);
 
-        // Shape each line separately; placeholder shapes as a single line.
-        let source: Vec<&str> = if placeholder {
-            vec![input.placeholder.as_ref()]
-        } else {
-            content.split('\n').collect()
-        };
-        let mut lines = Vec::with_capacity(source.len());
-        let mut starts = Vec::with_capacity(source.len());
-        let mut byte = 0usize;
-        for seg in &source {
-            starts.push(byte);
-            let seg_string: SharedString = SharedString::from(seg.to_string());
-            // IME underline: only applied within the line containing the
-            // marked range (cross-line marked text is vanishingly rare).
-            let runs = marked_runs(&style, text_color, &marked, byte, seg.len());
-            lines.push(
-                window
-                    .text_system()
-                    .shape_line(seg_string, font_size, &runs, None),
-            );
-            byte += seg.len() + 1; // +1 for the '\n'
-        }
-        let layout = LineLayout {
-            lines,
-            starts,
-            line_height,
-        };
-
-        // Cursor + selection quads (skip while showing the placeholder).
         let mut selections = Vec::new();
         let mut cursor = None;
         if !placeholder {
             if selected_range.is_empty() {
-                let (row, col) = line_col(&layout.starts, cursor_offset);
-                if let Some(line) = layout.lines.get(row) {
-                    let x = bounds.left() + line.x_for_index(col);
-                    let y = bounds.top() + line_height * row as f32;
+                if let Some(p) = layout.pos_for_offset(cursor_offset) {
                     cursor = Some(fill(
-                        Bounds::new(point(x, y), size(px(2.), line_height)),
+                        Bounds::new(
+                            point(bounds.left() + p.x, bounds.top() + p.y),
+                            size(px(2.), layout.line_height),
+                        ),
                         t.accent,
                     ));
                 }
-            } else {
-                let (sr, sc) = line_col(&layout.starts, selected_range.start);
-                let (er, ec) = line_col(&layout.starts, selected_range.end);
-                for row in sr..=er {
-                    let Some(line) = layout.lines.get(row) else {
-                        continue;
-                    };
-                    let x0 = if row == sr {
-                        line.x_for_index(sc)
-                    } else {
-                        px(0.)
-                    };
-                    let x1 = if row == er {
-                        line.x_for_index(ec)
-                    } else {
-                        line.width
-                    };
-                    let y = bounds.top() + line_height * row as f32;
-                    selections.push(fill(
-                        Bounds::from_corners(
-                            point(bounds.left() + x0, y),
-                            point(bounds.left() + x1, y + line_height),
-                        ),
-                        alpha(t.accent, 0.25),
-                    ));
+            } else if let (Some(p1), Some(p2)) = (
+                layout.pos_for_offset(selected_range.start),
+                layout.pos_for_offset(selected_range.end),
+            ) {
+                // One quad per visual row the selection touches.
+                let lh = layout.line_height;
+                let sel = alpha(t.accent, 0.25);
+                let mut y = p1.y;
+                while y <= p2.y {
+                    let x0 = if y == p1.y { p1.x } else { px(0.) };
+                    let x1 = if y == p2.y { p2.x } else { bounds.size.width };
+                    if x1 > x0 {
+                        selections.push(fill(
+                            Bounds::from_corners(
+                                point(bounds.left() + x0, bounds.top() + y),
+                                point(bounds.left() + x1, bounds.top() + y + lh),
+                            ),
+                            sel,
+                        ));
+                    }
+                    y += lh;
                 }
             }
         }
@@ -645,12 +882,16 @@ impl gpui::Element for TextElement {
             window.paint_quad(sel);
         }
         let layout = prepaint.layout.take().unwrap();
-        for (row, line) in layout.lines.iter().enumerate() {
-            let origin = point(
-                bounds.origin.x,
-                bounds.origin.y + layout.line_height * row as f32,
+        for (i, line) in layout.lines.iter().enumerate() {
+            let origin = point(bounds.origin.x, bounds.origin.y + layout.y_offsets[i]);
+            let _ = line.paint(
+                origin,
+                layout.line_height,
+                TextAlign::Left,
+                None,
+                window,
+                cx,
             );
-            let _ = line.paint(origin, layout.line_height, window, cx);
         }
         if focus_handle.is_focused(window)
             && let Some(cursor) = prepaint.cursor.take()
@@ -664,7 +905,7 @@ impl gpui::Element for TextElement {
     }
 }
 
-/// Text runs for one line, underlining any overlap with the IME marked range.
+/// Text runs for one logical line, underlining any IME marked-range overlap.
 fn marked_runs(
     style: &gpui::TextStyle,
     color: gpui::Hsla,
@@ -724,17 +965,25 @@ impl Render for ChatInput {
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::left))
             .on_action(cx.listener(Self::right))
+            .on_action(cx.listener(Self::up))
+            .on_action(cx.listener(Self::down))
             .on_action(cx.listener(Self::select_left))
             .on_action(cx.listener(Self::select_right))
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::home))
             .on_action(cx.listener(Self::end))
+            .on_action(cx.listener(Self::word_left))
+            .on_action(cx.listener(Self::word_right))
+            .on_action(cx.listener(Self::select_word_left))
+            .on_action(cx.listener(Self::select_word_right))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::copy))
-            .on_action(cx.listener(Self::cut))
+            .on_action(cx.listener(|this, _: &Cut, window, cx| this.cut(window, cx)))
             .on_action(cx.listener(Self::show_character_palette))
             .on_action(cx.listener(Self::submit))
             .on_action(cx.listener(Self::newline))
+            .on_action(cx.listener(Self::escape))
+            .on_action(cx.listener(Self::tab))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
@@ -749,12 +998,23 @@ mod tests {
 
     #[test]
     fn line_col_maps_offsets() {
-        // "ab\ncd\n e" → starts [0, 3, 6]
         let starts = vec![0usize, 3, 6];
         assert_eq!(line_col(&starts, 0), (0, 0));
         assert_eq!(line_col(&starts, 2), (0, 2));
         assert_eq!(line_col(&starts, 3), (1, 0));
         assert_eq!(line_col(&starts, 5), (1, 2));
         assert_eq!(line_col(&starts, 7), (2, 1));
+    }
+
+    #[test]
+    fn word_boundaries_skip_whitespace() {
+        let s = "run cargo  test now";
+        assert_eq!(prev_word_boundary(s, 9), 4); // mid-"cargo" -> its start
+        assert_eq!(prev_word_boundary(s, 4), 0); // at "cargo" start -> "run"
+        assert_eq!(prev_word_boundary(s, 0), 0);
+        assert_eq!(next_word_boundary(s, 0), 3); // end of "run"
+        assert_eq!(next_word_boundary(s, 3), 9); // end of "cargo"
+        assert_eq!(next_word_boundary(s, 18), 19);
+        assert_eq!(next_word_boundary(s, 19), 19);
     }
 }
