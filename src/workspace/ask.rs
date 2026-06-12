@@ -43,6 +43,110 @@ impl AskState {
 }
 
 impl Workspace {
+    /// The outstanding `ask_user_question`, if any (frontends render it).
+    #[allow(dead_code)] // the egui modal renders pending_ask inline
+    pub(crate) fn ask_state(&self) -> Option<&AskState> {
+        self.pending_ask.as_ref()
+    }
+
+    /// Toggle an option (radio semantics unless the question is multi-select).
+    #[allow(dead_code)] // the egui modal renders pending_ask inline
+    pub(crate) fn ask_toggle_option(&mut self, qi: usize, oi: usize) {
+        if let Some(ask) = self.pending_ask.as_mut()
+            && let Some(q) = ask.questions.get_mut(qi)
+            && oi < q.selected.len()
+        {
+            if q.multi_select {
+                q.selected[oi] = !q.selected[oi];
+            } else {
+                for s in &mut q.selected {
+                    *s = false;
+                }
+                q.selected[oi] = true;
+            }
+        }
+    }
+
+    /// Set a question's free-text "Other" answer.
+    #[allow(dead_code)] // the egui modal renders pending_ask inline
+    pub(crate) fn ask_set_other(&mut self, qi: usize, text: String) {
+        if let Some(ask) = self.pending_ask.as_mut()
+            && let Some(q) = ask.questions.get_mut(qi)
+        {
+            q.other = text;
+        }
+    }
+
+    /// Submit the current selections (the modal's Submit). Frontend-agnostic:
+    /// builds the answers, sends them, narrates the transcript, resumes.
+    pub(crate) fn ask_submit(&mut self) {
+        let Some(ask) = self.pending_ask.take() else {
+            return;
+        };
+        let answers: Vec<AskAnswer> = ask
+            .questions
+            .iter()
+            .map(|q| {
+                let mut selected: Vec<String> = q
+                    .options
+                    .iter()
+                    .zip(&q.selected)
+                    .filter(|(_, s)| **s)
+                    .map(|(o, _)| o.label.clone())
+                    .collect();
+                let other = q.other.trim();
+                let other_text = if other.is_empty() {
+                    None
+                } else {
+                    selected.push(other.to_string());
+                    Some(other.to_string())
+                };
+                AskAnswer {
+                    question_header: q.header.clone(),
+                    selected_options: selected,
+                    other_text,
+                }
+            })
+            .collect();
+        if let Some(backend) = &self.backend {
+            backend.ask_response(&ask.id, &answers);
+        }
+        let summary: Vec<String> = ask
+            .questions
+            .iter()
+            .map(|q| {
+                let mut picks: Vec<&str> = q
+                    .options
+                    .iter()
+                    .zip(&q.selected)
+                    .filter(|(_, s)| **s)
+                    .map(|(o, _)| o.label.as_str())
+                    .collect();
+                let other = q.other.trim();
+                if !other.is_empty() {
+                    picks.push(other);
+                }
+                format!("{}: {}", q.header, picks.join(", "))
+            })
+            .collect();
+        self.transcript
+            .push(Entry::User(format!("↳ {}", summary.join(" · "))));
+        self.set_status(InstanceStatus::Running);
+    }
+
+    /// Decline the question (the modal's Cancel).
+    pub(crate) fn ask_cancel(&mut self) {
+        let Some(ask) = self.pending_ask.take() else {
+            return;
+        };
+        if let Some(backend) = &self.backend {
+            backend.ask_cancel(&ask.id);
+        }
+        self.transcript
+            .push(Entry::Note("cancelled question".to_string()));
+        self.set_status(InstanceStatus::Running);
+    }
+
     pub(crate) fn render_ask_modal(&mut self, ctx: &egui::Context) {
         let title = format!("🐶 Code Puppy asks — {}", self.name);
         // 0 = nothing, 1 = submit, 2 = cancel.
@@ -97,63 +201,8 @@ impl Workspace {
         }
 
         match action {
-            1 => {
-                let ask = self.pending_ask.take().unwrap();
-                let answers: Vec<AskAnswer> = ask
-                    .questions
-                    .iter()
-                    .map(|q| {
-                        let mut selected: Vec<String> = q
-                            .options
-                            .iter()
-                            .zip(&q.selected)
-                            .filter(|(_, s)| **s)
-                            .map(|(o, _)| o.label.clone())
-                            .collect();
-                        let other = q.other.trim();
-                        let other_text = if other.is_empty() {
-                            None
-                        } else {
-                            selected.push(other.to_string());
-                            Some(other.to_string())
-                        };
-                        AskAnswer {
-                            question_header: q.header.clone(),
-                            selected_options: selected,
-                            other_text,
-                        }
-                    })
-                    .collect();
-                if let Some(backend) = &self.backend {
-                    backend.ask_response(&ask.id, &answers);
-                }
-                let summary: Vec<String> = ask
-                    .questions
-                    .iter()
-                    .map(|q| {
-                        let picks: Vec<&str> = q
-                            .options
-                            .iter()
-                            .zip(&q.selected)
-                            .filter(|(_, s)| **s)
-                            .map(|(o, _)| o.label.as_str())
-                            .collect();
-                        format!("{}: {}", q.header, picks.join(", "))
-                    })
-                    .collect();
-                self.transcript
-                    .push(Entry::User(format!("↳ {}", summary.join(" · "))));
-                self.set_status(InstanceStatus::Running);
-            }
-            2 => {
-                let ask = self.pending_ask.take().unwrap();
-                if let Some(backend) = &self.backend {
-                    backend.ask_cancel(&ask.id);
-                }
-                self.transcript
-                    .push(Entry::Note("cancelled question".to_string()));
-                self.set_status(InstanceStatus::Running);
-            }
+            1 => self.ask_submit(),
+            2 => self.ask_cancel(),
             _ => {}
         }
     }

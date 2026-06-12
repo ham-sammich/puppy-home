@@ -397,6 +397,32 @@ impl Workspace {
         &self.models
     }
 
+    /// The outstanding input/confirm/select request, if any (frontends
+    /// render it; answers go through [`Self::pending_choose`] /
+    /// [`Self::pending_answer_text`]).
+    #[allow(dead_code)] // the egui modal drives answer_pending() directly
+    pub(crate) fn pending_request(&self) -> Option<&Pending> {
+        self.pending.as_ref()
+    }
+
+    /// Answer a confirm/select request by picking option `i`.
+    #[allow(dead_code)] // the egui modal drives answer_pending() directly
+    pub(crate) fn pending_choose(&mut self, i: usize) {
+        if let Some(p) = self.pending.as_mut() {
+            p.selection = i;
+            self.answer_pending();
+        }
+    }
+
+    /// Answer an input request with typed text.
+    #[allow(dead_code)] // the egui modal drives answer_pending() directly
+    pub(crate) fn pending_answer_text(&mut self, text: &str) {
+        if let Some(p) = self.pending.as_mut() {
+            p.text = text.to_string();
+            self.answer_pending();
+        }
+    }
+
     /// The question text of an outstanding interactive request, if any (shown
     /// on waiting cards + the attention banner).
     pub fn pending_question(&self) -> Option<&str> {
