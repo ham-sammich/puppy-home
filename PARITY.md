@@ -44,16 +44,15 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       via shared `history_prev/next` (draft stash, egui semantics).
 - [x] B5. Palette keyboard nav: Up/Down wrap-around, Enter/Tab accept,
       Esc dismiss; palette-open routes keys away from buffer/history.
-- [ ] B6. Sessions browser + resume: list/preview/load autosaves. Backend
-      events already fold (`sessions`, `session_preview`, `load_session`).
-      Ref: `workspace/sessions.rs`.
-- [ ] B7. New chat flow: clear transcript + reset sidecar session (the
-      egui `+ New chat`). Ref: egui `view.rs` new-chat + sessions plumbing.
-- [ ] B8. Logs panel: collapsible sidecar-stderr view in the chat. Backend
-      `Workspace::logs` exists (needs accessor). Ref: egui `chat_body.rs`.
-- [ ] B9. Thinking auto-collapse: honor the one-shot `collapse` Cell when a
-      turn completes (currently manual fold only). Ref:
-      `workspace/render.rs` Thinking arm.
+- [x] B6. Sessions browser: filtered list + preview + resume-here, /resume
+      sidecar flag opens it; no delete (egui has none — matched). (9cfec78)
+- [x] B7. New chat: workspace-toolbar button over the /clear machinery,
+      egui enabled-gate; per-entry UI state resets. (9cfec78)
+- [x] B8. Logs panel: toggleable, mono, bottom-pinned, 200-line tail.
+      (9cfec78)
+- [x] B9. Thinking auto-collapse at turn end (egui's collapse-Cell consumed
+      in the drain loop); folds default open while streaming; manual toggle
+      wins. (9cfec78)
 - [x] B10. Session restore on launch: egui semantics (missing dirs
       skipped), agent/model/autosave re-applied; saves are read-modify-
       write (egui layout/theme preserved) + change-gated in the drain
@@ -62,9 +61,9 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
 - [x] B11. Composer dock turn controls: Pause/Resume + Stop + now/queue
       steer toggle in the status line while a turn runs, every skin;
       Enter mid-turn steers with the chosen mode. (c5cf117)
-- [ ] B12. Markdown upgrade (ADDED): tables + links (open in browser) for
-      the in-house renderer, or revisit the dependency decision. Ref:
-      gpui_ui/markdown.rs decision note in GPUI_NOTES.md.
+- [x] B12. Markdown upgrade: clickable links, tables, blockquotes,
+      horizontal rules — in-house, unit-tested. Still absent: images,
+      nested lists, ordered lists (ledger). (9cfec78)
 - [ ] B13. Triage bugs — *placeholder: user notes incoming.*
 
 ## Phase C — IDE surfaces
