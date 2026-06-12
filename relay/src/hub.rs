@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use std::sync::mpsc::Sender;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::protocol::ServerMsg;
+use crate::protocol::{MemberInfo, ServerMsg};
 
 /// All rooms + who's in them. One per relay process, shared across connections.
 #[derive(Default)]
@@ -25,6 +25,7 @@ struct Inner {
 
 struct Member {
     user: String,
+    puppy: String,
     tx: Sender<String>,
 }
 
@@ -47,12 +48,21 @@ impl Hub {
     /// Add a member to a room (creating it on first join). Existing members are
     /// told; the new member's current roster (including themselves) is returned
     /// along with their connection id.
-    pub fn join(&self, room: &str, user: &str, tx: Sender<String>) -> (u64, Vec<String>) {
+    pub fn join(
+        &self,
+        room: &str,
+        user: &str,
+        puppy: &str,
+        tx: Sender<String>,
+    ) -> (u64, Vec<MemberInfo>) {
         let mut inner = self.inner.lock().unwrap();
         inner.next_id += 1;
         let id = inner.next_id;
 
-        let joined = encode(&ServerMsg::MemberJoined { user: user.into() });
+        let joined = encode(&ServerMsg::MemberJoined {
+            user: user.into(),
+            puppy: puppy.into(),
+        });
         let members = inner.rooms.entry(room.to_string()).or_default();
         for m in members.values() {
             let _ = m.tx.send(joined.clone());
@@ -61,11 +71,18 @@ impl Hub {
             id,
             Member {
                 user: user.to_string(),
+                puppy: puppy.to_string(),
                 tx,
             },
         );
-        let mut roster: Vec<String> = members.values().map(|m| m.user.clone()).collect();
-        roster.sort();
+        let mut roster: Vec<MemberInfo> = members
+            .values()
+            .map(|m| MemberInfo {
+                user: m.user.clone(),
+                puppy: m.puppy.clone(),
+            })
+            .collect();
+        roster.sort_by(|a, b| a.user.cmp(&b.user));
         inner.conns.insert(id, room.to_string());
         (id, roster)
     }
@@ -154,15 +171,24 @@ mod tests {
         let (atx, arx) = channel();
         let (btx, brx) = channel();
 
-        let (_aid, roster_a) = hub.join("room", "alice", atx);
-        assert_eq!(roster_a, vec!["alice"]);
+        let (_aid, roster_a) = hub.join("room", "alice", "Rex", atx);
+        assert_eq!(roster_a.len(), 1);
+        assert_eq!(
+            (roster_a[0].user.as_str(), roster_a[0].puppy.as_str()),
+            ("alice", "Rex")
+        );
         assert!(drain(&arx).is_empty(), "no self-announce on join");
 
-        let (_bid, roster_b) = hub.join("room", "bob", btx);
-        assert_eq!(roster_b, vec!["alice", "bob"]);
+        let (_bid, roster_b) = hub.join("room", "bob", "Biscuit", btx);
+        let names: Vec<&str> = roster_b.iter().map(|m| m.user.as_str()).collect();
+        assert_eq!(names, vec!["alice", "bob"]);
         let a_saw = drain(&arx);
         assert_eq!(a_saw.len(), 1);
         assert!(a_saw[0].contains("member_joined") && a_saw[0].contains("bob"));
+        assert!(
+            a_saw[0].contains("Biscuit"),
+            "announce carries the puppy name"
+        );
         assert!(drain(&brx).is_empty(), "joiner isn't told about themselves");
     }
 
@@ -171,8 +197,8 @@ mod tests {
         let hub = Hub::new();
         let (atx, arx) = channel();
         let (btx, brx) = channel();
-        let (aid, _) = hub.join("room", "alice", atx);
-        let (_bid, _) = hub.join("room", "bob", btx);
+        let (aid, _) = hub.join("room", "alice", "", atx);
+        let (_bid, _) = hub.join("room", "bob", "", btx);
         drain(&arx);
 
         hub.chat(aid, "hello pack");
@@ -189,8 +215,8 @@ mod tests {
         let hub = Hub::new();
         let (atx, arx) = channel();
         let (btx, brx) = channel();
-        let (aid, _) = hub.join("room-one", "alice", atx);
-        let (_bid, _) = hub.join("room-two", "bob", btx);
+        let (aid, _) = hub.join("room-one", "alice", "", atx);
+        let (_bid, _) = hub.join("room-two", "bob", "", btx);
 
         hub.chat(aid, "secret");
         assert_eq!(drain(&arx).len(), 1);
@@ -202,8 +228,8 @@ mod tests {
         let hub = Hub::new();
         let (atx, arx) = channel();
         let (btx, _brx) = channel();
-        let (_aid, _) = hub.join("room", "alice", atx);
-        let (bid, _) = hub.join("room", "bob", btx);
+        let (_aid, _) = hub.join("room", "alice", "", atx);
+        let (bid, _) = hub.join("room", "bob", "", btx);
         drain(&arx);
 
         hub.leave(bid);

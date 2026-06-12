@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use eframe::egui;
-use puppy_relay::protocol::ServerMsg;
+use puppy_relay::protocol::{MemberInfo, ServerMsg};
+use serde_json::{Value, json};
 
 use crate::pack::{PackClient, PackEvent};
 
@@ -27,7 +28,7 @@ struct Conn {
     client: PackClient,
     rx: Receiver<PackEvent>,
     room: String,
-    members: Vec<String>,
+    members: Vec<MemberInfo>,
     /// user -> (kind, detail) of their latest activity ping.
     activity: HashMap<String, (String, String)>,
     feed: Vec<FeedItem>,
@@ -39,6 +40,8 @@ pub struct PackView {
     pub relay: String,
     pub room: String,
     pub user: String,
+    /// This member's puppy name (refreshed from the workspaces each frame).
+    pub puppy: String,
     pub error: Option<String>,
     conn: Option<Conn>,
 }
@@ -52,6 +55,7 @@ impl Default for PackView {
             relay: "127.0.0.1:9220".to_string(),
             room: String::new(),
             user,
+            puppy: String::new(),
             error: None,
             conn: None,
         }
@@ -69,6 +73,48 @@ impl PackView {
         if let Some(conn) = &self.conn {
             conn.client.activity(kind, detail);
         }
+    }
+
+    /// The `.puppy/pack.json` breadcrumb body the app drops in each workspace so
+    /// every sidecar can inject "[pack context] ..." into prompts (Tier 2).
+    /// `None` when not in a room. The app stamps `updated` at write time, so
+    /// this stays change-comparable.
+    pub fn breadcrumb(&self) -> Option<Value> {
+        let conn = self.conn.as_ref()?;
+        let members: Vec<Value> = conn
+            .members
+            .iter()
+            .map(|m| {
+                let activity = conn
+                    .activity
+                    .get(&m.user)
+                    .map(|(kind, detail)| {
+                        if kind == "status" {
+                            detail.clone()
+                        } else {
+                            format!("{kind}: {detail}")
+                        }
+                    })
+                    .unwrap_or_default();
+                json!({ "user": m.user, "puppy": m.puppy, "activity": activity })
+            })
+            .collect();
+        let chat: Vec<Value> = conn
+            .feed
+            .iter()
+            .filter_map(|item| match item {
+                FeedItem::Chat { from, text } => Some(json!({ "from": from, "text": text })),
+                FeedItem::Note(_) => None,
+            })
+            .collect();
+        let recent: Vec<Value> = chat.iter().rev().take(10).rev().cloned().collect();
+        Some(json!({
+            "room": conn.room,
+            "user": self.user.trim(),
+            "puppy": self.puppy.trim(),
+            "members": members,
+            "chat": recent,
+        }))
     }
 
     /// Drain relay events into the view state.
@@ -101,15 +147,20 @@ fn apply(conn: &mut Conn, msg: ServerMsg) {
             conn.room = room;
             conn.members = members;
         }
-        ServerMsg::MemberJoined { user } => {
-            if !conn.members.contains(&user) {
-                conn.members.push(user.clone());
-                conn.members.sort();
+        ServerMsg::MemberJoined { user, puppy } => {
+            let note = if puppy.is_empty() {
+                format!("{user} joined")
+            } else {
+                format!("{user} joined with {puppy}")
+            };
+            if !conn.members.iter().any(|m| m.user == user) {
+                conn.members.push(MemberInfo { user, puppy });
+                conn.members.sort_by(|a, b| a.user.cmp(&b.user));
             }
-            push(conn, FeedItem::Note(format!("{user} joined")));
+            push(conn, FeedItem::Note(note));
         }
         ServerMsg::MemberLeft { user } => {
-            conn.members.retain(|m| m != &user);
+            conn.members.retain(|m| m.user != user);
             conn.activity.remove(&user);
             push(conn, FeedItem::Note(format!("{user} left")));
         }
@@ -131,8 +182,12 @@ fn push(conn: &mut Conn, item: FeedItem) {
     }
 }
 
-/// Render the Pack tab.
-pub fn render(ui: &mut egui::Ui, view: &mut PackView) {
+/// Render the Pack tab. `puppy` is the local puppy's name (from the open
+/// workspaces), attached to our presence + breadcrumb.
+pub fn render(ui: &mut egui::Ui, view: &mut PackView, puppy: &str) {
+    if !puppy.is_empty() {
+        view.puppy = puppy.to_string();
+    }
     view.poll();
     match &view.conn {
         None => render_join_form(ui, view),
@@ -184,6 +239,7 @@ fn render_join_form(ui: &mut egui::Ui, view: &mut PackView) {
             view.relay.trim(),
             view.room.trim(),
             view.user.trim(),
+            view.puppy.trim(),
             ui.ctx().clone(),
         ) {
             Ok((client, rx)) => {
@@ -226,13 +282,16 @@ fn render_room(ui: &mut egui::Ui, view: &mut PackView) {
     ui.label(egui::RichText::new("MEMBERS").small().weak());
     for member in &conn.members {
         ui.horizontal(|ui| {
-            let label = if *member == me {
-                format!("{member} (you)")
+            let mut label = if member.user == me {
+                format!("{} (you)", member.user)
             } else {
-                member.clone()
+                member.user.clone()
             };
+            if !member.puppy.is_empty() {
+                label = format!("{label} \u{1f436} {}", member.puppy);
+            }
             ui.label(label);
-            if let Some((kind, detail)) = conn.activity.get(member) {
+            if let Some((kind, detail)) = conn.activity.get(&member.user) {
                 ui.weak(format!("- {kind}: {detail}"));
             }
         });

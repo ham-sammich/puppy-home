@@ -339,6 +339,11 @@ impl Workspace {
     }
 
     /// Number of file changes recorded so far (for tab badges).
+    /// Is this workspace on a remote host (fs/git/sidecar over SSH)?
+    pub fn is_remote(&self) -> bool {
+        self.remote_label.is_some()
+    }
+
     pub fn diff_count(&self) -> usize {
         self.diffs.len()
     }

@@ -85,7 +85,17 @@ impl TabViewer for Shell<'_> {
             Tab::McpManager => views::mcp_manager::render(ui, self.sup, self.mcp),
             Tab::SkillsManager => views::skills_manager::render(ui, self.sup, self.skills),
             Tab::AgentManager => views::agent_manager::render(ui, self.sup, self.agents),
-            Tab::Pack => views::pack_panel::render(ui, self.pack),
+            Tab::Pack => {
+                // Attach the local puppy's name to our pack presence (prefer a
+                // workspace that has learned its real name over the default).
+                let puppy = self
+                    .sup
+                    .iter()
+                    .map(|w| w.puppy_name.clone())
+                    .find(|p| !p.is_empty() && p != "Puppy")
+                    .unwrap_or_default();
+                views::pack_panel::render(ui, self.pack, &puppy)
+            }
         }
     }
 

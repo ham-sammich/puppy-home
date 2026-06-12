@@ -28,11 +28,13 @@ pub struct PackClient {
 
 impl PackClient {
     /// Connect, send the join, and start the reader thread. `addr` may omit the
-    /// port (defaults to the relay's 9220).
+    /// port (defaults to the relay's 9220). `puppy` is this member's puppy name,
+    /// shown to the pack (may be empty).
     pub fn connect(
         addr: &str,
         room: &str,
         user: &str,
+        puppy: &str,
         ctx: egui::Context,
     ) -> Result<(PackClient, Receiver<PackEvent>), String> {
         let addr = if addr.contains(':') {
@@ -59,6 +61,7 @@ impl PackClient {
         client.send(&ClientMsg::Join {
             room: room.to_string(),
             user: user.to_string(),
+            puppy: puppy.to_string(),
             proto: PROTO_VERSION,
         });
 
@@ -136,9 +139,14 @@ mod tests {
         });
 
         let ctx = egui::Context::default();
-        let (client, rx) =
-            PackClient::connect(&format!("127.0.0.1:{port}"), "test-room", "tester", ctx)
-                .expect("connect+join");
+        let (client, rx) = PackClient::connect(
+            &format!("127.0.0.1:{port}"),
+            "test-room",
+            "tester",
+            "Rex",
+            ctx,
+        )
+        .expect("connect+join");
 
         match rx
             .recv_timeout(Duration::from_secs(5))
@@ -146,7 +154,9 @@ mod tests {
         {
             PackEvent::Msg(ServerMsg::Joined { room, members }) => {
                 assert_eq!(room, "test-room");
-                assert_eq!(members, vec!["tester".to_string()]);
+                assert_eq!(members.len(), 1);
+                assert_eq!(members[0].user, "tester");
+                assert_eq!(members[0].puppy, "Rex");
             }
             _ => panic!("expected joined first"),
         }

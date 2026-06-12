@@ -64,6 +64,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import traceback
 import uuid
 from typing import Any, Optional
@@ -219,6 +220,58 @@ def _make_stream_console(on_thinking):
             # response text + everything else is suppressed (answer comes via result)
 
     return _StreamConsole()
+
+
+# How old a pack breadcrumb may be before we stop trusting it (the host
+# re-stamps every ~5 min while connected; a crash leaves a stale file behind).
+_PACK_STALE_SECS = 900
+
+
+def pack_context(cwd: str) -> str:
+    """If puppy-home is in a Puppy Pack room, it drops a breadcrumb at
+    ``.puppy/pack.json`` (members + their puppies' current activity + recent
+    pack chat). Surface it so the agent works WITH the other puppies instead of
+    stepping on them. Module-level so it can be tested by importing sidecar."""
+    try:
+        path = os.path.join(cwd, ".puppy", "pack.json")
+        if not os.path.exists(path):
+            return ""
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if time.time() - float(data.get("updated", 0)) > _PACK_STALE_SECS:
+            return ""
+        me = data.get("user", "")
+        others = [m for m in (data.get("members") or [])
+                  if m.get("user") and m.get("user") != me]
+        chat = data.get("chat") or []
+        if not others and not chat:
+            return ""
+        lines = []
+        for m in others:
+            who = m.get("user", "?")
+            pup = (m.get("puppy") or "").strip()
+            tag = f"{who}'s puppy {pup}" if pup else f"{who}'s puppy"
+            act = (m.get("activity") or "").strip() or "idle"
+            lines.append(f"- {tag}: {act}")
+        note = (
+            f"[pack context] Your user ({me}) is working in a pack "
+            "with teammates whose own AI puppies are active on this project.\n"
+        )
+        if lines:
+            note += "Teammate activity right now:\n" + "\n".join(lines) + "\n"
+        if chat:
+            recent = "\n".join(
+                f"  {c.get('from', '?')}: {c.get('text', '')}" for c in chat[-8:]
+            )
+            note += "Recent pack chat:\n" + recent + "\n"
+        note += (
+            "Coordinate, don't collide: avoid rewriting files a teammate's "
+            "puppy is actively working on, and flag overlaps to your user. "
+            "Ignore this note if it's irrelevant to the request."
+        )
+        return note
+    except Exception:
+        return ""
 
 
 def _decode_image_attachments(images):
@@ -1448,6 +1501,9 @@ class Bridge:
         "rendered", "rendering",
     )
 
+    def _pack_context(self) -> str:
+        return pack_context(os.getcwd())
+
     def _browser_context(self, user_text: str) -> str:
         """If the in-app browser plugin is open, the host drops a breadcrumb at
         ``.puppy/browser.json`` (in our cwd) with a live Chrome DevTools Protocol
@@ -1500,8 +1556,8 @@ class Bridge:
         self.current_run = asyncio.current_task()
         try:
             self._sanitize_history()  # never send an orphaned tool_use/result pair
-            ctx = self._browser_context(text)
-            prompt_text = f"{ctx}\n\n{text}" if ctx else text
+            notes = [n for n in (self._pack_context(), self._browser_context(text)) if n]
+            prompt_text = "\n\n".join(notes + [text]) if notes else text
             attachments = _decode_image_attachments(images)
             if attachments:
                 result = await self.agent.run_with_mcp(prompt_text, attachments=attachments)

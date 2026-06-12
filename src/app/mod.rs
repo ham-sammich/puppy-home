@@ -49,12 +49,19 @@ pub struct PuppyApp {
     pack_activity_last: String,
     /// When the pack activity was last considered (throttle).
     pack_activity_at: std::time::Instant,
+    /// Signature of the last `.puppy/pack.json` written (skip no-op rewrites).
+    pack_breadcrumb_sig: String,
+    /// When the breadcrumb was last written (periodic freshness re-stamp).
+    pack_breadcrumb_at: std::time::Instant,
+    /// Whether breadcrumbs are on disk (so leaving the pack cleans them up).
+    pack_breadcrumb_written: bool,
     /// The "Connect to remote" dialog, when open.
     remote: Option<crate::views::remote_connect::RemoteConnect>,
     /// An in-flight remote SSH connection (established on a worker thread).
     remote_pending: Option<remote::RemotePending>,
 }
 
+mod pack_sync;
 mod remote;
 
 /// Apply a theme to the egui context (on launch and on change).
@@ -172,6 +179,9 @@ impl PuppyApp {
             pack: crate::views::pack_panel::PackView::default(),
             pack_activity_last: String::new(),
             pack_activity_at: std::time::Instant::now(),
+            pack_breadcrumb_sig: String::new(),
+            pack_breadcrumb_at: std::time::Instant::now(),
+            pack_breadcrumb_written: false,
             skills: crate::views::skills_manager::SkillsManagerView::default(),
             agents: crate::views::agent_manager::AgentManagerView::default(),
             remote: None,
@@ -257,38 +267,6 @@ impl PuppyApp {
     }
 
     /// Apply structural changes queued during rendering (after the dock drew).
-    /// Tell the pack what this member's puppies are doing -- a compact summary
-    /// of every workspace's state, sent only when it changes (checked at most
-    /// every couple of seconds). Teammates see it in their member list.
-    fn broadcast_pack_activity(&mut self) {
-        if !self.pack.connected()
-            || self.pack_activity_at.elapsed() < std::time::Duration::from_secs(2)
-        {
-            return;
-        }
-        self.pack_activity_at = std::time::Instant::now();
-        let parts: Vec<String> = self
-            .sup
-            .iter()
-            .map(|w| {
-                let state = w.status.label();
-                match &w.current_tool {
-                    Some(tool) => format!("{}: {state} ({tool})", w.name),
-                    None => format!("{}: {state}", w.name),
-                }
-            })
-            .collect();
-        let detail = if parts.is_empty() {
-            "no workspaces open".to_string()
-        } else {
-            parts.join(" · ")
-        };
-        if detail != self.pack_activity_last {
-            self.pack.send_activity("status", &detail);
-            self.pack_activity_last = detail;
-        }
-    }
-
     fn apply_actions(&mut self, actions: Vec<ShellAction>) {
         for action in actions {
             match action {
@@ -383,6 +361,7 @@ impl eframe::App for PuppyApp {
         self.poll_folder_pick();
         self.poll_remote();
         self.broadcast_pack_activity();
+        self.sync_pack_breadcrumb();
 
         // Hand the resolved terminal palette to the embedded terminal renderer
         // via the per-context data store (avoids threading it through the dock).

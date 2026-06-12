@@ -8,7 +8,17 @@
 use serde::{Deserialize, Serialize};
 
 /// Bump on incompatible wire changes; the relay rejects mismatched joins.
-pub const PROTO_VERSION: u32 = 1;
+/// v2: members carry their puppy's name (Join/Joined/MemberJoined).
+pub const PROTO_VERSION: u32 = 2;
+
+/// A pack member as the relay knows them.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct MemberInfo {
+    pub user: String,
+    /// The member's puppy name (Code Puppy's `puppy_name`), may be empty.
+    #[serde(default)]
+    pub puppy: String,
+}
 
 /// What a pack member sends to the relay.
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -19,6 +29,9 @@ pub enum ClientMsg {
     Join {
         room: String,
         user: String,
+        /// The joiner's puppy name (shown to the pack; may be empty).
+        #[serde(default)]
+        puppy: String,
         #[serde(default)]
         proto: u32,
     },
@@ -38,10 +51,12 @@ pub enum ServerMsg {
     /// Reply to a successful join: who's in the room (including you).
     Joined {
         room: String,
-        members: Vec<String>,
+        members: Vec<MemberInfo>,
     },
     MemberJoined {
         user: String,
+        #[serde(default)]
+        puppy: String,
     },
     MemberLeft {
         user: String,
@@ -80,6 +95,7 @@ mod tests {
             ClientMsg::Join {
                 room: "swift-otter-42".into(),
                 user: "jacob".into(),
+                puppy: "Rufus".into(),
                 proto: PROTO_VERSION,
             },
             ClientMsg::Chat {
@@ -100,9 +116,21 @@ mod tests {
         for msg in [
             ServerMsg::Joined {
                 room: "r".into(),
-                members: vec!["a".into(), "b".into()],
+                members: vec![
+                    MemberInfo {
+                        user: "a".into(),
+                        puppy: "Rex".into(),
+                    },
+                    MemberInfo {
+                        user: "b".into(),
+                        puppy: String::new(),
+                    },
+                ],
             },
-            ServerMsg::MemberJoined { user: "b".into() },
+            ServerMsg::MemberJoined {
+                user: "b".into(),
+                puppy: "Biscuit".into(),
+            },
             ServerMsg::MemberLeft { user: "b".into() },
             ServerMsg::Chat {
                 from: "a".into(),
@@ -130,11 +158,12 @@ mod tests {
         let join = ClientMsg::Join {
             room: "r1".into(),
             user: "alice".into(),
-            proto: 1,
+            puppy: "Rex".into(),
+            proto: 2,
         };
         assert_eq!(
             serde_json::to_string(&join).unwrap(),
-            r#"{"op":"join","room":"r1","user":"alice","proto":1}"#
+            r#"{"op":"join","room":"r1","user":"alice","puppy":"Rex","proto":2}"#
         );
         let chat = ServerMsg::Chat {
             from: "alice".into(),
@@ -145,7 +174,7 @@ mod tests {
             serde_json::to_string(&chat).unwrap(),
             r#"{"event":"chat","from":"alice","text":"hi","ts":42}"#
         );
-        // `proto` is optional on the wire (defaults to 0 = "unspecified").
+        // `proto` and `puppy` are optional on the wire.
         let parsed: ClientMsg =
             serde_json::from_str(r#"{"op":"join","room":"r","user":"u"}"#).unwrap();
         assert_eq!(
@@ -153,6 +182,7 @@ mod tests {
             ClientMsg::Join {
                 room: "r".into(),
                 user: "u".into(),
+                puppy: String::new(),
                 proto: 0
             }
         );

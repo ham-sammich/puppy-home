@@ -52,7 +52,13 @@ fn handle_conn(hub: Arc<Hub>, stream: TcpStream) {
         .next()
         .and_then(|l| l.ok())
         .and_then(|l| serde_json::from_str::<ClientMsg>(&l).ok());
-    let Some(ClientMsg::Join { room, user, proto }) = first else {
+    let Some(ClientMsg::Join {
+        room,
+        user,
+        puppy,
+        proto,
+    }) = first
+    else {
         send_direct(&mut write_half, &error_line("first message must be a join"));
         return;
     };
@@ -85,7 +91,7 @@ fn handle_conn(hub: Arc<Hub>, stream: TcpStream) {
         })
         .ok();
 
-    let (id, members) = hub.join(&room, &user, tx.clone());
+    let (id, members) = hub.join(&room, &user, puppy.trim(), tx.clone());
     let _ = tx.send(
         serde_json::to_string(&ServerMsg::Joined {
             room: room.clone(),

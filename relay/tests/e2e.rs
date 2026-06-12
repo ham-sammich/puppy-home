@@ -21,7 +21,7 @@ impl Client {
         let reader = BufReader::new(stream.try_clone().unwrap());
         let mut c = Client { stream, reader };
         c.send(&format!(
-            r#"{{"op":"join","room":"{room}","user":"{user}","proto":1}}"#
+            r#"{{"op":"join","room":"{room}","user":"{user}","puppy":"{user}-pup","proto":2}}"#
         ));
         c
     }
@@ -60,10 +60,15 @@ fn two_members_chat_through_a_room() {
     let mut bob = Client::join(port, "pack-room", "bob");
     let joined_b = bob.read_line();
     assert!(joined_b.contains("alice") && joined_b.contains("bob"));
+    assert!(
+        joined_b.contains("alice-pup"),
+        "roster carries puppy names: {joined_b}"
+    );
 
-    // Alice hears bob arrive.
+    // Alice hears bob arrive (with his puppy).
     let seen = alice.read_line();
     assert!(seen.contains(r#""event":"member_joined""#) && seen.contains("bob"));
+    assert!(seen.contains("bob-pup"));
 
     // Chat reaches both, stamped with the relay-known sender.
     alice.send(r#"{"op":"chat","text":"hello pack"}"#);

@@ -223,10 +223,23 @@ PHASE B (Puppy Pack) in progress:
   Tab::Pack is a panel tab (right dock zone), persisted via SavedTab::Pack.
   App broadcasts a throttled 'status' activity summary of all workspaces
   (only when changed). Integration test: PackClient vs in-process relay.
-- NEXT (B3/Tier 2): pack context injection -- write .puppy/pack.json breadcrumb
-  (like browser.json) so the sidecar prepends '[pack context] <user>'s puppy is
-  doing X' to prompts. Then (B4/Tier 3): pack-coordination MCP server
-  (claim_file/release_file/post_to_pack/check_teammate_status/list_claims).
+- Inc B3 (Tier 2) DONE: puppy names + pack context injection. Protocol v2
+  (PROTO_VERSION=2): Join/Joined/MemberJoined carry `puppy` (MemberInfo struct);
+  member list shows 'user [dog] Puppy'. App drops .puppy/pack.json (members +
+  puppies + activity + last-10 chat + `updated` stamp) into every LOCAL
+  workspace -- written on change + re-stamped every 5 min, removed on leave;
+  sidecar's module-level pack_context() injects '[pack context] ...teammate
+  activity + recent chat + coordinate-don't-collide guidance' into every prompt
+  (staleness-gated, 15 min). Validated by importing sidecar and exercising
+  pack_context against a real breadcrumb (incl. self-exclusion + stale-reject).
+  App-side glue extracted to src/app/pack_sync.rs (app/mod.rs back to 620).
+  NOTE: remote workspaces don't get the breadcrumb yet (write via RemoteFs is
+  possible but chatty; revisit).
+- NEXT (B4/Tier 3): pack-coordination MCP server
+  (claim_file/release_file/post_to_pack/check_teammate_status/list_claims) so
+  agents actively coordinate, not just observe.
+- NOTE: protocol v2 means BOTH devices must rebuild (old clients get a clean
+  'protocol mismatch' from a new relay and vice versa).
 - To try it: cargo run -p puppy-relay (or ./target/debug/puppy-relay), then
   top bar -> Pack -> join the same room code from two machines/instances.
 
