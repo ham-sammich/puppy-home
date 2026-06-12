@@ -8,7 +8,7 @@ use std::time::Duration;
 use gpui::{
     Animation, AnimationExt as _, AnyElement, ClickEvent, Entity, FocusHandle, FontWeight,
     IntoElement, KeyDownEvent, ParentElement as _, RenderOnce, Styled as _, Window, div,
-    ease_in_out, prelude::*, px,
+    ease_in_out, prelude::*, px, relative,
 };
 
 use crate::gpui_ui::widgets::{self, alpha};
@@ -196,6 +196,36 @@ impl AgentCard {
             .into_any_element()
     }
 
+    /// The design's context-progress bar: 3px, gradient think→run, live cards
+    /// only. Unknown ctx draws nothing — a 0% bar would be a lie.
+    fn context_bar(&self) -> AnyElement {
+        let t = self.t;
+        let s = &self.snap;
+        let Some(pct) = s.ctx_pct.filter(|_| s.live) else {
+            return div().into_any_element();
+        };
+        let frac = (pct / 100.0).clamp(0.0, 1.0) as f32;
+        div()
+            .id(("ctx-bar", s.id.0))
+            .h(px(3.))
+            .w_full()
+            .rounded_full()
+            .bg(t.well)
+            .child(
+                div()
+                    .h_full()
+                    .w(relative(frac))
+                    .rounded_full()
+                    .bg(gpui::linear_gradient(
+                        90.,
+                        gpui::linear_color_stop(t.think, 0.),
+                        gpui::linear_color_stop(t.run, 1.),
+                    )),
+            )
+            .tooltip(widgets::text_tip(format!("context window {pct:.0}% full")))
+            .into_any_element()
+    }
+
     /// The five stat cells: tok/s (+ mini spark), tokens, tools, files, cost.
     fn stats_row(&self) -> impl IntoElement {
         let t = self.t;
@@ -255,10 +285,13 @@ impl AgentCard {
             ))
             .child(cell(
                 "cost",
-                mono(
-                    s.cost
-                        .map_or("\u{2014}".to_string(), |c| format!("${c:.2}")),
-                ),
+                // null = unknown: an honest dash, never $0.00. "≈" marks
+                // values priced from the dated models.dev snapshot.
+                mono(match s.cost {
+                    Some(c) if s.cost_estimated => format!("\u{2248}${c:.2}"),
+                    Some(c) => format!("${c:.2}"),
+                    None => "\u{2014}".to_string(),
+                }),
             ))
     }
 
@@ -555,6 +588,7 @@ impl RenderOnce for AgentCard {
             .child(self.header())
             .child(self.state_line())
             .child(self.last_prompt())
+            .child(self.context_bar())
             .child(self.stats_row())
             .child(self.sub_agents())
             .child(self.inline_input())

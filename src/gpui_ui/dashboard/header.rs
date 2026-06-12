@@ -92,10 +92,13 @@ pub fn pack_header(
                 .child(stat_tile(
                     t,
                     "Spend today",
-                    // NEVER $0.00 while the ledger is absent — an honest dash.
-                    stats
-                        .cost
-                        .map_or("\u{2014}".to_string(), |c| format!("${c:.2}")),
+                    // NEVER $0.00 while nothing is priced — an honest dash.
+                    // "≈" marks sums containing snapshot-priced estimates.
+                    match stats.cost {
+                        Some(c) if stats.cost_estimated => format!("\u{2248}${c:.2}"),
+                        Some(c) => format!("${c:.2}"),
+                        None => "\u{2014}".to_string(),
+                    },
                     None,
                     None,
                 ))

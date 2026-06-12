@@ -193,13 +193,14 @@ fn row(t: &Tokens, s: CardSnapshot, root: &Entity<RootView>) -> AnyElement {
             },
             t.text,
         )))
-        .child(
-            div().w(px(W_COST)).flex_none().child(mono(
-                s.cost
-                    .map_or("\u{2014}".to_string(), |c| format!("${c:.2}")),
-                t.text,
-            )),
-        )
+        .child(div().w(px(W_COST)).flex_none().child(mono(
+            match s.cost {
+                Some(c) if s.cost_estimated => format!("\u{2248}${c:.2}"),
+                Some(c) => format!("${c:.2}"),
+                None => "\u{2014}".to_string(),
+            },
+            t.text,
+        )))
         .child(
             div()
                 .w(px(W_ACTIONS))

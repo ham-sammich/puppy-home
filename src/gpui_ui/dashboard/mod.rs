@@ -146,7 +146,11 @@ pub struct CardSnapshot {
     pub tools: u64,
     pub adds: u64,
     pub dels: u64,
+    /// Context-window fullness 0–100; `None` = unknown (no bar, no lie).
+    pub ctx_pct: Option<f64>,
     pub cost: Option<f64>,
+    /// `cost` came from the sidecar's dated models.dev snapshot (≈ marker).
+    pub cost_estimated: bool,
     pub diff_count: usize,
     pub sparks: Vec<f32>,
     pub subs: Vec<SubSnap>,
@@ -205,7 +209,9 @@ pub fn snapshot(ws: &Workspace, t: &Tokens, with_catalog: bool) -> CardSnapshot 
         tools: ws.tool_calls,
         adds,
         dels,
+        ctx_pct: ws.ctx_pct,
         cost: ws.cost,
+        cost_estimated: ws.cost_estimated,
         diff_count: ws.diff_count(),
         sparks: ws.spark_history().to_vec(),
         subs: ws
@@ -241,6 +247,8 @@ pub struct FleetStats {
     pub tokens: u64,
     pub tools: u64,
     pub cost: Option<f64>,
+    /// Any priced contribution was an estimate (≈ on the Spend tile).
+    pub cost_estimated: bool,
 }
 
 pub fn fleet_stats(sup: &Supervisor) -> FleetStats {
@@ -254,6 +262,7 @@ pub fn fleet_stats(sup: &Supervisor) -> FleetStats {
         tokens: 0,
         tools: 0,
         cost: None,
+        cost_estimated: false,
     };
     for ws in sup.iter() {
         match ws.status {
@@ -270,6 +279,7 @@ pub fn fleet_stats(sup: &Supervisor) -> FleetStats {
         s.tools += ws.tool_calls;
         if let Some(c) = ws.cost {
             *s.cost.get_or_insert(0.0) += c;
+            s.cost_estimated |= ws.cost_estimated;
         }
     }
     s

@@ -238,11 +238,27 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
 
 ## Phase F — shared-base backend (cherry-picked both ways)
 
-- [ ] F1. Sidecar ctx-% in the status payload -> card context-progress bar
+- [x] F1. Sidecar ctx-% in the status payload -> card context-progress bar
       lights up on BOTH branches. Ref: `sidecar.py` `emit_status`,
       `workspace/events.rs` status arm.
-- [ ] F2. Cost ledger investigation: can Code Puppy report per-turn $ cost?
+      DONE: `ctx_pct` (0-100, one decimal, null = unknowable) delegates to
+      the library's own /context plugin estimator
+      (`context_indicator.usage.get_current_usage` — raw chars/2.5, immune
+      to the token_ratio_learner monkeypatch, stable across model
+      switches). Bar per design: 3px, gradient think->run, live cards
+      only, tooltip with exact %; null draws nothing (a 0% bar would lie).
+- [x] F2. Cost ledger investigation: can Code Puppy report per-turn $ cost?
       If yes -> `cost` field populates and the em-dash rule retires.
+      VERDICT (option b): the library has NO cost ledger, but bundles a
+      dated models.dev snapshot (`models_dev_api.json`, the same file its
+      model browser uses offline). Sidecar now tracks input/output tokens
+      separately and prices them against the snapshot (exact provider
+      match, else cheapest input rate — resellers mark up); payload adds
+      `cost_estimated: true` and the UIs render `\u2248$X.XX` (card cell,
+      table column, Spend tile on both branches). Models absent from the
+      snapshot (e.g. subscription `claude_code` ids) stay null -> em-dash
+      survives where pricing would be fiction. The em-dash rule never
+      fully retires by design.
 - [ ] F3. Keep the ask/steer/prompt seams identical across branches
       (standing rule; verify at each cherry-pick).
 
