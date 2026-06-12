@@ -21,6 +21,17 @@ pub struct Session {
     /// run or pre-layout sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<DockState<SavedTab>>,
+    /// The dashboard's fleet view (Grid / List / Focus), remembered per
+    /// machine. Canonical here (drift reconciliation); the UI branches
+    /// carry identical copies so session.json stays portable.
+    #[serde(default)]
+    pub dashboard_view: DashboardViewMode,
+    /// The chat composer style (a user preference, applies to all workspaces).
+    #[serde(default)]
+    pub composer_style: ComposerStyle,
+    /// Disable decorative animation app-wide (pulses, ring spins, bobs).
+    #[serde(default)]
+    pub reduce_motion: bool,
     /// Your avatar emoji in transcripts (empty = the \u{1f9d1} default).
     /// Owned by the redesign shells' pickers (QW8); present here so
     /// session.json round-trips losslessly across all branches.
@@ -29,6 +40,65 @@ pub struct Session {
     /// Your puppy's avatar emoji (empty = the \u{1f436} default).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub puppy_avatar: String,
+}
+
+/// Which composer skin the chat dock renders. One shared input state
+/// underneath; this only picks the layout. Persisted per machine.
+/// Canonical on this branch; the UI branches carry identical copies
+/// (incl. serde casing) so session.json stays portable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ComposerStyle {
+    /// Buttons + menus, like today (evolved).
+    #[default]
+    Classic,
+    /// One rounded accent bar with inline chips and switchers.
+    Unified,
+    /// Keyboard / command-first mono prompt.
+    Palette,
+    /// Friendly: starter prompts, drop zone, labeled selectors.
+    Guided,
+}
+
+impl ComposerStyle {
+    pub const ALL: [ComposerStyle; 4] = [
+        ComposerStyle::Classic,
+        ComposerStyle::Unified,
+        ComposerStyle::Palette,
+        ComposerStyle::Guided,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ComposerStyle::Classic => "Classic",
+            ComposerStyle::Unified => "Unified",
+            ComposerStyle::Palette => "Palette",
+            ComposerStyle::Guided => "Guided",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            ComposerStyle::Classic => "Buttons + menu, like today",
+            ComposerStyle::Unified => "One bar, inline chips & switch",
+            ComposerStyle::Palette => "Keyboard / command-first",
+            ComposerStyle::Guided => "Friendly, with starter prompts",
+        }
+    }
+}
+
+/// How the dashboard lays out the fleet. Persisted in `session.json`.
+/// Canonical on this branch; the UI branches carry identical copies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DashboardViewMode {
+    /// Responsive card grid (`minmax(420px, 1fr)`).
+    #[default]
+    Grid,
+    /// Dense table.
+    List,
+    /// Single column, max 880px.
+    Focus,
 }
 
 /// A persistable mirror of `shell::Tab` using stable keys instead of runtime
@@ -198,6 +268,9 @@ mod tests {
             ],
             theme: Theme::Light,
             layout: None,
+            dashboard_view: DashboardViewMode::Focus,
+            composer_style: ComposerStyle::Unified,
+            reduce_motion: true,
         };
         save(&session);
 
@@ -212,6 +285,9 @@ mod tests {
         );
         assert_eq!(loaded.workspaces[1].agent, None);
         assert_eq!(loaded.theme, Theme::Light);
+        assert_eq!(loaded.dashboard_view, DashboardViewMode::Focus);
+        assert_eq!(loaded.composer_style, ComposerStyle::Unified);
+        assert!(loaded.reduce_motion);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -233,11 +309,8 @@ mod tests {
     #[test]
     fn custom_theme_roundtrips_via_serde() {
         let s = Session {
-            user_avatar: String::new(),
-            puppy_avatar: String::new(),
-            workspaces: vec![],
             theme: Theme::Custom("Neon".into()),
-            layout: None,
+            ..Default::default()
         };
         let j = serde_json::to_string(&s).unwrap();
         assert!(j.contains("\"theme\":\"custom:Neon\""));
@@ -250,11 +323,9 @@ mod tests {
         let mut dock = DockState::new(vec![SavedTab::Dashboard, SavedTab::McpManager]);
         normalize_layout_rects(&mut dock); // fresh leaves carry inf rects
         let s = Session {
-            user_avatar: String::new(),
-            puppy_avatar: String::new(),
-            workspaces: vec![],
             theme: Theme::Dark,
             layout: Some(dock),
+            ..Default::default()
         };
         let j = serde_json::to_string(&s).unwrap();
         let back: Session = serde_json::from_str(&j).unwrap();
@@ -277,11 +348,8 @@ mod tests {
     #[test]
     fn theme_serializes_lowercase() {
         let s = Session {
-            user_avatar: String::new(),
-            puppy_avatar: String::new(),
-            workspaces: vec![],
             theme: Theme::Light,
-            layout: None,
+            ..Default::default()
         };
         let j = serde_json::to_string(&s).unwrap();
         assert!(j.contains("\"theme\":\"light\""));

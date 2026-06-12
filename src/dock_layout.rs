@@ -19,10 +19,14 @@ use crate::workspace::WorkspaceId;
 
 /// Snapshot the open workspaces + dock layout as a persistable session.
 pub fn current_session(sup: &Supervisor, theme: Theme, dock: Option<&DockState<Tab>>) -> Session {
-    // Owned by the redesign shells' pickers; carried so a save from this
-    // branch never clobbers the choice (lossless round-trip).
+    // Avatar + UI-preference fields are owned by the redesign shells'
+    // pickers/toggles; carry the saved values so a save from this branch
+    // never clobbers them (lossless round-trip).
     let carry = crate::session::load();
     Session {
+        dashboard_view: carry.dashboard_view,
+        composer_style: carry.composer_style,
+        reduce_motion: carry.reduce_motion,
         workspaces: sup
             .iter()
             .map(|w| WorkspaceEntry {
