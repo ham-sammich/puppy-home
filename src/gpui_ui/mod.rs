@@ -220,6 +220,9 @@ pub struct RootView {
     pub(crate) tree_op: Option<TreeOp>,
     pub(crate) tree_op_input: Option<Entity<ChatInput>>,
     pub(crate) tree_delete_confirm: Option<(WorkspaceId, PathBuf, bool)>,
+    /// Window-space anchor for the floating tree context menu (set on
+    /// right-click; read only while `chat_pop` is a `TreeMenu`).
+    pub(crate) tree_menu_pos: Option<gpui::Point<gpui::Pixels>>,
     // -- git surface state --
     /// Commit-message inputs, one per workspace (height is a CONSTANT in
     /// gitpanel.rs — never content-derived; the 31a6dcb principle).
@@ -412,6 +415,7 @@ impl RootView {
             tree_op: None,
             tree_op_input: None,
             tree_delete_confirm: None,
+            tree_menu_pos: None,
             commit_inputs: HashMap::new(),
             git_list_mode: HashSet::new(),
             graph_menu: None,
@@ -1789,14 +1793,7 @@ impl Render for RootView {
                         .filter(|(cid, _)| *cid == id)
                         .map(|(_, ix)| ix),
                     markers: ws.tree_markers(),
-                    tree_menu: match &self.chat_pop {
-                        Some(ChatPop::TreeMenu(tid, path, is_dir)) if *tid == id => {
-                            Some((path.clone(), *is_dir))
-                        }
-                        _ => None,
-                    },
                     tree_op_input: self.tree_op_input.as_ref(),
-                    tree_op_armed: self.tree_op.is_some(),
                     // Header-initiated "new at root" op for THIS workspace,
                     // distinguished from per-row ops by the absent TreeMenu pop.
                     tree_root_new: match (&self.tree_op, &self.chat_pop) {
@@ -1808,11 +1805,6 @@ impl Render for RootView {
                         }
                         _ => None,
                     },
-                    tree_delete_pending: self
-                        .tree_delete_confirm
-                        .as_ref()
-                        .filter(|(cid, ..)| *cid == id)
-                        .map(|(_, p, _)| p.clone()),
                     commit_input: self.commit_inputs.get(&id),
                     git_list_mode: self.git_list_mode.contains(&id),
                     graph_menu: self.graph_menu.as_ref(),
@@ -1951,6 +1943,7 @@ impl Render for RootView {
                     .visible
                     .then(|| perf_ui::hud(&t, &entity, &self.perf)),
             )
+            .children(self.tree_context_menu(cx))
             .child(widgets::toast_layer(&t, &self.toasts));
         self.perf.frame_end(perf_began);
         out
@@ -1958,6 +1951,58 @@ impl Render for RootView {
 }
 
 impl RootView {
+    /// The floating, cursor-anchored tree context menu (VSCode-style, F-req).
+    /// Mounted at the window root so its click-away scrim covers everything;
+    /// `gpui::anchored` keeps it on-screen near edges. The menu body itself
+    /// lives with the explorer (`chat::tree_menu_panel`).
+    fn tree_context_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let (id, path, is_dir) = match &self.chat_pop {
+            Some(ChatPop::TreeMenu(id, path, is_dir)) => (*id, path.clone(), *is_dir),
+            _ => return None,
+        };
+        let pos = self.tree_menu_pos?;
+        let entity = cx.entity();
+        let delete_pending = self
+            .tree_delete_confirm
+            .as_ref()
+            .filter(|(cid, ..)| *cid == id)
+            .map(|(_, p, _)| p.clone());
+        let panel = chat::tree_menu_panel(
+            self.tokens,
+            id,
+            &path,
+            is_dir,
+            self.tree_op_input.as_ref(),
+            self.tree_op.is_some(),
+            delete_pending.as_deref(),
+            &entity,
+        );
+        let scrim_root = entity.clone();
+        Some(
+            gpui::deferred(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .child(
+                        // Click-away scrim: closes the menu (and abandons any
+                        // armed rename/new op so it can't leak elsewhere).
+                        div()
+                            .id("tree-menu-scrim")
+                            .absolute()
+                            .inset_0()
+                            .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
+                                scrim_root.update(cx, |r, cx| {
+                                    r.dispatch(DashAction::TreeOpCancel, cx)
+                                });
+                            }),
+                    )
+                    .child(gpui::anchored().position(pos).snap_to_window().child(panel)),
+            )
+            .with_priority(260)
+            .into_any_element(),
+        )
+    }
+
     /// The dashboard screen body (Task 2.2), extracted from `render`.
     fn dashboard_body(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let t = self.tokens;

@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use gpui::prelude::*;
-use gpui::{Context, Keystroke, Window};
+use gpui::{Context, Keystroke, Pixels, Point, Window};
 
 use crate::session::{ComposerStyle, DashboardViewMode};
 use crate::workspace::WorkspaceId;
@@ -79,6 +79,12 @@ pub enum DashAction {
     ToggleTree(WorkspaceId),
     /// Cycle the explorer's hidden-entry policy (Show -> Dim -> Hide, F4).
     CycleHidden,
+    /// Open the floating tree context menu at a window-space cursor point.
+    OpenTreeMenu(WorkspaceId, PathBuf, bool, Point<Pixels>),
+    /// Copy a tree entry's absolute (false) or workspace-relative (true) path.
+    TreeCopyPath(WorkspaceId, PathBuf, bool),
+    /// Reveal a tree entry in the OS file manager (is_dir picks select-vs-open).
+    TreeReveal(PathBuf, bool),
     ToggleDir(WorkspaceId, PathBuf),
     StarterPrompt(WorkspaceId, String),
     // -- needs-you answers --
@@ -373,6 +379,30 @@ impl RootView {
             }
             DashAction::CycleHidden => {
                 self.hidden_mode = self.hidden_mode.next();
+            }
+            DashAction::OpenTreeMenu(id, path, is_dir, pos) => {
+                self.chat_pop = Some(ChatPop::TreeMenu(id, path, is_dir));
+                self.tree_menu_pos = Some(pos);
+                self.tree_op = None;
+                self.tree_delete_confirm = None;
+            }
+            DashAction::TreeCopyPath(id, path, relative) => {
+                let text = if relative {
+                    self.supervisor
+                        .get(id)
+                        .and_then(|ws| path.strip_prefix(&ws.root).ok())
+                        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+                        .unwrap_or_else(|| path.to_string_lossy().into_owned())
+                } else {
+                    path.to_string_lossy().into_owned()
+                };
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.clone()));
+                self.toast(format!("\u{1f4cb} {text}"), accent);
+                self.chat_pop = None;
+            }
+            DashAction::TreeReveal(path, is_dir) => {
+                crate::proc::reveal_in_file_manager(&path, is_dir);
+                self.chat_pop = None;
             }
             DashAction::ToggleDir(id, path) => {
                 let key = (id.0, path);

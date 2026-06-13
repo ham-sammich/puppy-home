@@ -21,3 +21,31 @@ pub fn hide_console(cmd: &mut Command) {
         let _ = cmd;
     }
 }
+
+/// Reveal a path in the OS file manager: select the entry where supported
+/// (Windows Explorer, macOS Finder), otherwise open its containing folder.
+/// Best-effort — failures are swallowed (it's a convenience action).
+pub fn reveal_in_file_manager(path: &std::path::Path, _is_dir: bool) {
+    #[cfg(windows)]
+    {
+        // `/select,` highlights the file/folder within its parent window.
+        let mut cmd = Command::new("explorer");
+        cmd.arg(format!("/select,{}", path.display()));
+        hide_console(&mut cmd);
+        let _ = cmd.spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("open").arg("-R").arg(path).spawn();
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        // No universal "select" on Linux; open the containing directory.
+        let target = if _is_dir {
+            path.to_path_buf()
+        } else {
+            path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| path.to_path_buf())
+        };
+        let _ = Command::new("xdg-open").arg(target).spawn();
+    }
+}

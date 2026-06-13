@@ -8,14 +8,14 @@ pub mod sessions;
 pub mod transcript;
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui::{AnyElement, Entity, IntoElement, ParentElement as _, Styled as _, div, prelude::*, px};
 
 use crate::gpui_ui::input::ChatInput;
 use crate::gpui_ui::{ChatPop, DashAction, RootView, Tokens};
 use crate::session::{ComposerStyle, HiddenMode};
-use crate::workspace::Workspace;
+use crate::workspace::{Workspace, WorkspaceId};
 
 /// UI surface for the persisted [`HiddenMode`] (the enum + cycle logic
 /// live in `session`; these are the explorer toggle's presentation).
@@ -88,16 +88,12 @@ pub struct ChatArgs<'a> {
     pub editor_close_confirm: Option<usize>,
     /// A/M/D markers per absolute path (ws.tree_markers()).
     pub markers: HashMap<PathBuf, char>,
-    /// Open tree context panel target (path, is_dir) for THIS workspace.
-    pub tree_menu: Option<(PathBuf, bool)>,
-    /// Rename/new input (shown inside the context panel when an op is armed).
+    /// Rename/new name input, shared by the header root-create panel and the
+    /// floating context menu (only one tree op is armed at a time).
     pub tree_op_input: Option<&'a Entity<ChatInput>>,
-    pub tree_op_armed: bool,
     /// A header-initiated "new at workspace root" op is armed (F5):
     /// `Some(is_dir)` while naming, independent of any right-click row.
     pub tree_root_new: Option<bool>,
-    /// Delete awaiting confirmation (path shown in the panel).
-    pub tree_delete_pending: Option<PathBuf>,
     // -- git pass-through --
     pub commit_input: Option<&'a Entity<ChatInput>>,
     pub git_list_mode: bool,
@@ -605,131 +601,159 @@ fn tree_panel(args: &ChatArgs) -> AnyElement {
         .flex_col()
         .py_1()
         .children(tree_root_op_panel(args))
-        .children(tree_op_panel(args))
         .children(rows)
         .into_any_element()
 }
 
-/// Context panel for a right-clicked tree row: New file / New folder (dirs),
-/// Rename, Delete (click-again confirm), with the inline name input while a
-/// rename/new is armed. Replaces egui's three modals — same operations.
-fn tree_op_panel(args: &ChatArgs) -> Option<AnyElement> {
-    let t = args.t;
-    let id = args.ws.id;
-    let (path, is_dir) = args.tree_menu.clone()?;
+/// The VSCode-style right-click context menu for a tree entry. Built here
+/// (cohesive with the explorer) but mounted by `RootView` as a cursor-
+/// anchored floating overlay. While a rename/new op is armed it morphs into
+/// the inline name input. Pure builder — positioning lives in the caller.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn tree_menu_panel(
+    t: Tokens,
+    id: WorkspaceId,
+    path: &Path,
+    is_dir: bool,
+    op_input: Option<&Entity<ChatInput>>,
+    op_armed: bool,
+    delete_pending: Option<&Path>,
+    root: &Entity<RootView>,
+) -> AnyElement {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string());
-    let mk = |label: &str, key: &'static str, action: DashAction, root: &Entity<RootView>| {
+    // New file/folder target: the entry itself if a dir, else its parent.
+    let target_dir = if is_dir {
+        path.to_path_buf()
+    } else {
+        path.parent().map(Path::to_path_buf).unwrap_or_else(|| path.to_path_buf())
+    };
+
+    // A single full-width menu row (VSCode list item).
+    let item = |label: String, key: &'static str, action: DashAction, danger: bool| {
         let root = root.clone();
         div()
             .id((key, id.0))
-            .px_1p5()
-            .py_0p5()
+            .w_full()
+            .px_2()
+            .py_1()
             .rounded(px(6.))
-            .text_size(px(10.5))
-            .text_color(t.text)
+            .text_size(px(11.5))
+            .text_color(if danger { t.error } else { t.text })
             .cursor_pointer()
             .hover(|d| d.bg(t.well))
-            .child(label.to_string())
+            .child(label)
             .on_click(move |_, _, cx| {
                 let a = action.clone();
                 root.update(cx, |r, cx| r.dispatch(a, cx));
             })
             .into_any_element()
     };
-    let mut row: Vec<AnyElement> = Vec::new();
-    if is_dir {
-        row.push(mk(
-            "\u{ff0b} file",
-            "tree-new-file",
-            DashAction::TreeNew(id, path.clone(), false),
-            &args.root,
-        ));
-        row.push(mk(
-            "\u{ff0b} folder",
-            "tree-new-dir",
-            DashAction::TreeNew(id, path.clone(), true),
-            &args.root,
-        ));
-    }
-    row.push(mk(
-        "rename",
-        "tree-rename",
-        DashAction::TreeRename(id, path.clone()),
-        &args.root,
+    let sep = || {
+        div()
+            .my_0p5()
+            .h(px(1.))
+            .w_full()
+            .bg(t.line_soft)
+            .into_any_element()
+    };
+
+    let mut items: Vec<AnyElement> = Vec::new();
+    items.push(item(
+        "\u{ff0b} New File".into(),
+        "tree-new-file",
+        DashAction::TreeNew(id, target_dir.clone(), false),
+        false,
     ));
-    let deleting = args.tree_delete_pending.as_ref() == Some(&path);
-    row.push({
-        let root = args.root.clone();
-        let action = if deleting {
+    items.push(item(
+        "\u{ff0b} New Folder".into(),
+        "tree-new-dir",
+        DashAction::TreeNew(id, target_dir, true),
+        false,
+    ));
+    items.push(sep());
+    items.push(item(
+        "Rename".into(),
+        "tree-rename",
+        DashAction::TreeRename(id, path.to_path_buf()),
+        false,
+    ));
+    items.push(item(
+        "Copy Path".into(),
+        "tree-copy-path",
+        DashAction::TreeCopyPath(id, path.to_path_buf(), false),
+        false,
+    ));
+    items.push(item(
+        "Copy Relative Path".into(),
+        "tree-copy-rel",
+        DashAction::TreeCopyPath(id, path.to_path_buf(), true),
+        false,
+    ));
+    items.push(item(
+        "Reveal in File Explorer".into(),
+        "tree-reveal",
+        DashAction::TreeReveal(path.to_path_buf(), is_dir),
+        false,
+    ));
+    items.push(sep());
+    let deleting = delete_pending == Some(path);
+    items.push(item(
+        if deleting { "Delete \u{2014} click to confirm".into() } else { "Delete".into() },
+        "tree-delete",
+        if deleting {
             DashAction::TreeDeleteConfirm
         } else {
-            DashAction::TreeDelete(id, path.clone(), is_dir)
-        };
-        div()
-            .id(("tree-delete", id.0))
-            .px_1p5()
-            .py_0p5()
-            .rounded(px(6.))
-            .text_size(px(10.5))
-            .text_color(t.error)
-            .cursor_pointer()
-            .hover(|d| d.bg(t.well))
-            .child(if deleting { "sure? delete" } else { "delete" })
-            .on_click(move |_, _, cx| {
-                let a = action.clone();
-                root.update(cx, |r, cx| r.dispatch(a, cx));
-            })
-            .into_any_element()
-    });
-    row.push(mk(
-        "\u{2715}",
-        "tree-menu-close",
-        DashAction::CloseChatPop,
-        &args.root,
+            DashAction::TreeDelete(id, path.to_path_buf(), is_dir)
+        },
+        true,
     ));
 
-    Some(
-        div()
-            .mx_1()
-            .mb_1()
-            .p_1p5()
-            .rounded(px(8.))
-            .bg(t.well)
-            .border_1()
-            .border_color(alpha_accent(&t))
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(
-                div()
-                    .font_family("JetBrains Mono")
-                    .text_size(px(10.))
-                    .text_color(t.weak)
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .whitespace_nowrap()
-                    .child(name),
-            )
-            .child(div().flex().flex_wrap().gap_0p5().children(row))
-            .children(
-                (args.tree_op_armed && args.tree_op_input.is_some()).then(|| {
+    div()
+        .w(px(220.))
+        .p_1()
+        .rounded(px(8.))
+        .bg(t.card)
+        .border_1()
+        .border_color(t.line_soft)
+        .shadow_lg()
+        .flex()
+        .flex_col()
+        .gap_0p5()
+        .child(
+            div()
+                .px_2()
+                .py_0p5()
+                .font_family("JetBrains Mono")
+                .text_size(px(10.))
+                .text_color(t.weak)
+                .overflow_hidden()
+                .text_ellipsis()
+                .whitespace_nowrap()
+                .child(name),
+        )
+        // Armed: the inline name input replaces the action list (type + Enter).
+        .when_some(
+            (op_armed && op_input.is_some()).then(|| op_input.unwrap().clone()),
+            |d, input| {
+                d.child(sep()).child(
                     div()
                         .px_1p5()
                         .py_0p5()
                         .rounded(px(6.))
-                        .bg(t.card)
+                        .bg(t.well)
                         .border_1()
                         .border_color(alpha_accent(&t))
                         .font_family("JetBrains Mono")
                         .text_size(px(11.))
-                        .child(args.tree_op_input.unwrap().clone())
-                }),
-            )
-            .into_any_element(),
-    )
+                        .child(input),
+                )
+            },
+        )
+        .when(!(op_armed && op_input.is_some()), |d| d.children(items))
+        .into_any_element()
 }
 
 fn alpha_accent(t: &crate::gpui_ui::Tokens) -> gpui::Rgba {
@@ -804,7 +828,8 @@ fn push_dir_rows(args: &ChatArgs, dir: &std::path::Path, depth: usize, rows: &mu
         } else {
             DashAction::OpenEditorFile(id, entry.path.clone())
         };
-        let menu_pop = ChatPop::TreeMenu(id, entry.path.clone(), entry.is_dir);
+        let menu_path = entry.path.clone();
+        let menu_is_dir = entry.is_dir;
         let root_click = args.root.clone();
         let root_menu = args.root.clone();
         let row = row
@@ -814,9 +839,12 @@ fn push_dir_rows(args: &ChatArgs, dir: &std::path::Path, depth: usize, rows: &mu
                 let a = click_action.clone();
                 root_click.update(cx, |r, cx| r.dispatch(a, cx));
             })
-            .on_mouse_down(gpui::MouseButton::Right, move |_, _, cx| {
-                let pop = menu_pop.clone();
-                root_menu.update(cx, |r, cx| r.dispatch(DashAction::ToggleChatPop(pop), cx));
+            .on_mouse_down(gpui::MouseButton::Right, move |ev: &gpui::MouseDownEvent, _, cx| {
+                let p = menu_path.clone();
+                let pos = ev.position;
+                root_menu.update(cx, |r, cx| {
+                    r.dispatch(DashAction::OpenTreeMenu(id, p.clone(), menu_is_dir, pos), cx)
+                });
             })
             .into_any_element();
         rows.push(row);
