@@ -70,15 +70,16 @@ pub fn card_state(status: InstanceStatus, t: &Tokens) -> CardState {
 }
 
 /// Sort rank: needs-you first, then live, then paused/stuck, then resting.
+///
+/// `Starting` ranks with `Idle` (resting), not the live band: a cold spawn
+/// has no work yet and settles to Idle, so banding it as "live" would make a
+/// freshly opened card sit high then drop to the tail once ready (F7).
 pub fn rank(status: InstanceStatus) -> u8 {
     match status {
         InstanceStatus::WaitingForInput => 0,
-        InstanceStatus::Running
-        | InstanceStatus::Thinking
-        | InstanceStatus::ToolCalling
-        | InstanceStatus::Starting => 1,
+        InstanceStatus::Running | InstanceStatus::Thinking | InstanceStatus::ToolCalling => 1,
         InstanceStatus::Paused | InstanceStatus::Dead => 2,
-        InstanceStatus::Idle => 3,
+        InstanceStatus::Idle | InstanceStatus::Starting => 3,
     }
 }
 
@@ -310,6 +311,10 @@ pub fn fleet(
     input_focus: &gpui::FocusHandle,
     reduce_motion: bool,
 ) -> AnyElement {
+    // Reverse first so a STABLE sort keeps the newest workspace at the front
+    // of its rank — a freshly spawned card lands top-left and stays, instead
+    // of being appended to the tail and jumping bands as it boots (F7).
+    cards.reverse();
     cards.sort_by_key(|c| rank(c.status));
     match mode {
         DashboardViewMode::List => table::FleetTable {
@@ -384,6 +389,14 @@ mod tests {
         assert!(rank(InstanceStatus::Running) < rank(InstanceStatus::Paused));
         assert!(rank(InstanceStatus::Paused) <= rank(InstanceStatus::Dead));
         assert!(rank(InstanceStatus::Dead) < rank(InstanceStatus::Idle));
+    }
+
+    #[test]
+    fn starting_ranks_with_idle_not_live() {
+        // F7: a cold spawn must not band as "live" (it would jump to the tail
+        // once it settles to Idle). Starting and Idle share the resting rank.
+        assert_eq!(rank(InstanceStatus::Starting), rank(InstanceStatus::Idle));
+        assert!(rank(InstanceStatus::Running) < rank(InstanceStatus::Starting));
     }
 
     #[test]
