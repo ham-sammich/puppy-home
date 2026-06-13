@@ -8,7 +8,7 @@ use gpui::{
     px,
 };
 
-use crate::backend::CompletionItem;
+use crate::backend::{CommandInfo, CompletionItem};
 use crate::gpui_ui::input::ChatInput;
 use crate::gpui_ui::widgets::{self, alpha};
 use crate::gpui_ui::{ChatPop, DashAction, RootView, Tokens};
@@ -337,9 +337,9 @@ fn status_line(args: &ComposerArgs) -> AnyElement {
                 .child(ws.status_line.clone()),
         )
         .children(ctx_chip(args))
+        .child(context_pill(args))
         .child(div().flex_1())
         .children(controls)
-        .child(context_pill(args))
         .into_any_element()
 }
 
@@ -369,42 +369,69 @@ fn ctx_chip(args: &ComposerArgs) -> Option<AnyElement> {
     )
 }
 
-/// `/cmds` pill + popover: the FULL slash-command catalog the sidecar
-/// announced (`ws.command_catalog()`), not a hand-picked subset — so every
-/// command code_puppy ships is discoverable here. Behavior matches typing:
-/// arg-less commands send exactly as typed; parametrized ones (usage shows
-/// `<...>`/`[...]`) seed the input so the user supplies the arg — no
-/// invented defaults. Empty catalog -> the panel shows "catalog not loaded
-/// yet".
+/// A command is "context/history" (lives in the pill next to the ctx chip)
+/// when it's in code_puppy's `session` category — /clear, /compact,
+/// /truncate, /dump_context, /load_context, … — plus the `/pop` plugin,
+/// which is the headline history-trim command but ships as a custom
+/// command. Everything else lands in the general commands menu.
+fn is_context_cmd(c: &CommandInfo) -> bool {
+    c.category == "session" || c.name.trim_start_matches('/') == "pop"
+}
+
+/// Build popover rows from the live command catalog (`ws.command_catalog()`),
+/// split by [`is_context_cmd`]. Behavior matches typing: arg-less commands
+/// send exactly as typed; parametrized ones (usage shows `<...>`/`[...]`)
+/// seed the input so the user supplies the arg — no invented defaults.
+fn cmd_rows(args: &ComposerArgs, want_context: bool) -> Vec<(String, String, bool, DashAction)> {
+    let id = args.ws.id;
+    args.ws
+        .command_catalog()
+        .iter()
+        .filter(|c| is_context_cmd(c) == want_context)
+        .map(|c| {
+            let name = c.name.trim_start_matches('/');
+            let label = if c.usage.is_empty() {
+                format!("/{name}")
+            } else {
+                c.usage.clone()
+            };
+            let takes_arg = c.usage.contains('<') || c.usage.contains('[');
+            let action = if takes_arg {
+                DashAction::SeedCommand(id, format!("/{name} "))
+            } else {
+                DashAction::SendCommand(id, format!("/{name}"))
+            };
+            (label, c.description.clone(), false, action)
+        })
+        .collect()
+}
+
+/// Context/history-commands pill — sits next to the `ctx` chip. Trim,
+/// compact, clear, pop, dump/load context (the `session` category + /pop).
 fn context_pill(args: &ComposerArgs) -> AnyElement {
     let id = args.ws.id;
     let open = matches!(args.pop, Some(ChatPop::Context(p)) if *p == id);
-    let items = open.then(|| {
-        args.ws
-            .command_catalog()
-            .iter()
-            .map(|c| {
-                let name = c.name.trim_start_matches('/');
-                let label = if c.usage.is_empty() {
-                    format!("/{name}")
-                } else {
-                    c.usage.clone()
-                };
-                let takes_arg = c.usage.contains('<') || c.usage.contains('[');
-                let action = if takes_arg {
-                    DashAction::SeedCommand(id, format!("/{name} "))
-                } else {
-                    DashAction::SendCommand(id, format!("/{name}"))
-                };
-                (label, c.description.clone(), false, action)
-            })
-            .collect::<Vec<_>>()
-    });
+    let items = open.then(|| cmd_rows(args, true));
     switch_pill(
         args,
         "ctx-pill",
-        "/cmds \u{25be}".to_string(),
+        "context \u{25be}".to_string(),
         ChatPop::Context(id),
+        items,
+    )
+}
+
+/// General slash-command menu — sits to the LEFT of the input box. Every
+/// other command the sidecar announced (core / config / tools / plugins).
+fn commands_menu(args: &ComposerArgs) -> AnyElement {
+    let id = args.ws.id;
+    let open = matches!(args.pop, Some(ChatPop::Commands(p)) if *p == id);
+    let items = open.then(|| cmd_rows(args, false));
+    switch_pill(
+        args,
+        "cmds-pill",
+        "commands \u{25be}".to_string(),
+        ChatPop::Commands(id),
         items,
     )
 }
@@ -424,6 +451,7 @@ fn classic(args: &ComposerArgs) -> AnyElement {
                 .flex()
                 .items_center()
                 .gap_2()
+                .child(commands_menu(args))
                 .child(input_well(args, t.line_soft))
                 .child(send_btn(args, "Send")),
         )
@@ -465,6 +493,7 @@ fn unified(args: &ComposerArgs) -> AnyElement {
                 .flex()
                 .items_center()
                 .gap_2()
+                .child(commands_menu(args))
                 .child(div().min_w_0().flex_1().child(args.input.clone()))
                 .child(agent_pill(args))
                 .child(model_pill(args))
@@ -499,6 +528,7 @@ fn palette(args: &ComposerArgs) -> AnyElement {
                 .border_1()
                 .border_color(t.line_soft)
                 .font_family("JetBrains Mono")
+                .child(commands_menu(args))
                 .child(
                     div()
                         .text_color(t.accent)
@@ -571,6 +601,7 @@ fn guided(args: &ComposerArgs) -> AnyElement {
                 .gap_2()
                 .child(labeled(&t, "agent", agent_pill(args)))
                 .child(labeled(&t, "model", model_pill(args)))
+                .child(commands_menu(args))
                 .child(input_well(args, t.line_soft))
                 .child(send_btn(args, &format!("Send to {} \u{2192}", args.puppy))),
         )

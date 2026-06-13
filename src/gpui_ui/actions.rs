@@ -24,8 +24,10 @@ pub enum ChatPop {
     FilePicker(WorkspaceId, PathBuf),
     /// Tree-row context panel: (workspace, path, is_dir).
     TreeMenu(WorkspaceId, PathBuf, bool),
-    /// Composer context-commands menu (QW9).
+    /// Composer context/history-commands pill (next to the ctx chip).
     Context(WorkspaceId),
+    /// Composer general slash-command menu (left of the input box).
+    Commands(WorkspaceId),
 }
 
 /// Every dashboard interaction, funneled through [`RootView::dispatch`].
