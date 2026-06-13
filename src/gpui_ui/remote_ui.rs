@@ -242,12 +242,23 @@ pub(crate) fn overlay(
                         .on_click(ract(root, RemoteAction::Close))
                 })),
         )
-        .child(hosts)
-        .child(input_row(
-            &t,
-            "SSH target  ( [user@]host[:port] ):",
-            inputs.first(),
-        ))
+        // Header pinned above; body scrolls so the footer (Connect) never
+        // gets pushed off-screen at small window sizes (F2/F3).
+        .child(
+            div()
+                .id("remote-body-scroll")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(hosts)
+                .child(input_row(
+                    &t,
+                    "SSH target  ( [user@]host[:port] ):",
+                    inputs.first(),
+                ))
         .child(path_section)
         .child(push_section)
         .children(st.fallback_offer.as_ref().map(|launcher| {
@@ -288,7 +299,8 @@ pub(crate) fn overlay(
                         ),
                 )
         }))
-        .children(st.error.clone().map(|e| small(&t, e, t.error)))
+                .children(st.error.clone().map(|e| small(&t, e, t.error))),
+        )
         .child(footer);
 
     gpui::deferred(
