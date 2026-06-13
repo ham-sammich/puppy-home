@@ -468,6 +468,11 @@ pub(crate) fn named_key_seq(name: &str) -> Option<&'static [u8]> {
         "enter" => b"\r",
         "backspace" => b"\x7f",
         "tab" => b"\t",
+        // GPUI delivers the spacebar as the NAMED key "space" (cf. the
+        // "ctrl-space" keybinding syntax), and doesn't reliably populate
+        // key_char for it -- so it must be handled here, not via the
+        // printable fallthrough, or the spacebar does nothing in the PTY.
+        "space" => b" ",
         "escape" => b"\x1b",
         "up" => b"\x1b[A",
         "down" => b"\x1b[B",
@@ -644,6 +649,9 @@ mod tests {
         assert_eq!(named_key_seq("up"), Some(b"\x1b[A" as &[u8]));
         assert_eq!(named_key_seq("pageup"), Some(b"\x1b[5~" as &[u8]));
         assert_eq!(named_key_seq("pagedown"), Some(b"\x1b[6~" as &[u8]));
+        // GPUI hands the spacebar over as the named key "space"; it must
+        // encode to a literal space, not fall through to a missing key_char.
+        assert_eq!(named_key_seq("space"), Some(b" " as &[u8]));
         assert_eq!(named_key_seq("f5"), None);
         assert_eq!(ctrl_byte('c'), Some(0x03));
         assert_eq!(ctrl_byte('z'), Some(0x1a));
