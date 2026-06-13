@@ -369,54 +369,36 @@ fn ctx_chip(args: &ComposerArgs) -> Option<AnyElement> {
     )
 }
 
-/// `/cmds` pill + popover: the context/history commands code_puppy
-/// actually ships (verified in source). Buttons send EXACTLY what
-/// typing would; parametrized /truncate and /pop N seed the input
-/// instead so the user picks N — no invented defaults.
+/// `/cmds` pill + popover: the FULL slash-command catalog the sidecar
+/// announced (`ws.command_catalog()`), not a hand-picked subset — so every
+/// command code_puppy ships is discoverable here. Behavior matches typing:
+/// arg-less commands send exactly as typed; parametrized ones (usage shows
+/// `<...>`/`[...]`) seed the input so the user supplies the arg — no
+/// invented defaults. Empty catalog -> the panel shows "catalog not loaded
+/// yet".
 fn context_pill(args: &ComposerArgs) -> AnyElement {
     let id = args.ws.id;
-    let send = |c: &str| DashAction::SendCommand(id, c.to_string());
-    let seed = |c: &str| DashAction::SeedCommand(id, c.to_string());
     let open = matches!(args.pop, Some(ChatPop::Context(p)) if *p == id);
     let items = open.then(|| {
-        vec![
-            (
-                "/pop".to_string(),
-                "remove the last message from history".to_string(),
-                false,
-                send("/pop"),
-            ),
-            (
-                "/pop N\u{2026}".to_string(),
-                "remove the last N messages (system prompt kept)".to_string(),
-                false,
-                seed("/pop "),
-            ),
-            (
-                "/compact".to_string(),
-                "summarize + compact chat history".to_string(),
-                false,
-                send("/compact"),
-            ),
-            (
-                "/truncate N\u{2026}".to_string(),
-                "keep only the N most recent messages".to_string(),
-                false,
-                seed("/truncate "),
-            ),
-            (
-                "/dump_context".to_string(),
-                "save message history to a file".to_string(),
-                false,
-                send("/dump_context"),
-            ),
-            (
-                "/clear".to_string(),
-                "forget all prior turns (rotates autosave)".to_string(),
-                false,
-                send("/clear"),
-            ),
-        ]
+        args.ws
+            .command_catalog()
+            .iter()
+            .map(|c| {
+                let name = c.name.trim_start_matches('/');
+                let label = if c.usage.is_empty() {
+                    format!("/{name}")
+                } else {
+                    c.usage.clone()
+                };
+                let takes_arg = c.usage.contains('<') || c.usage.contains('[');
+                let action = if takes_arg {
+                    DashAction::SeedCommand(id, format!("/{name} "))
+                } else {
+                    DashAction::SendCommand(id, format!("/{name}"))
+                };
+                (label, c.description.clone(), false, action)
+            })
+            .collect::<Vec<_>>()
     });
     switch_pill(
         args,
