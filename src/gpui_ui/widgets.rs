@@ -165,6 +165,38 @@ pub fn status_dot(id: u64, color: Rgba, live: bool, reduce_motion: bool) -> Div 
     )
 }
 
+/// A three-dot "connecting" spinner for workspaces still spinning up their
+/// sidecar (#4). The dots pulse in a staggered wave; reduce-motion collapses
+/// it to three dim static dots (still reads as "in progress").
+pub fn spinner(t: &Tokens, id: u64, reduce_motion: bool) -> AnyElement {
+    let color = t.accent;
+    let dot = move |i: u64| {
+        let d = div().size(px(5.)).rounded_full().bg(color);
+        if reduce_motion {
+            return d.opacity(0.55).into_any_element();
+        }
+        d.with_animation(
+            ("spin-dot", id * 8 + i),
+            Animation::new(Duration::from_millis(1000)).repeat(),
+            move |el, delta| {
+                // Each dot is a third of a cycle behind the previous one.
+                let phase = (delta + i as f32 / 3.0) % 1.0;
+                let tri = 1.0 - (phase * 2.0 - 1.0).abs(); // 0→1→0
+                el.opacity(0.25 + 0.75 * tri)
+            },
+        )
+        .into_any_element()
+    };
+    div()
+        .flex()
+        .items_center()
+        .gap_0p5()
+        .child(dot(0))
+        .child(dot(1))
+        .child(dot(2))
+        .into_any_element()
+}
+
 /// Neutral card-style button shell; caller adds `.id(...)` + `.on_click(...)`.
 pub fn btn(t: &Tokens, label: impl Into<String>) -> Div {
     div()

@@ -194,6 +194,22 @@ impl Supervisor {
             .any(|w| !matches!(w.status, InstanceStatus::Idle | InstanceStatus::Dead))
     }
 
+    /// True while any workspace is mid-turn in a way that would LOSE work if
+    /// the app quit now (running/thinking/tool-calling, or paused mid-turn).
+    /// Drives the quit-confirm (#4) — narrower than `any_busy` on purpose:
+    /// a `Starting` spin-up or a `WaitingForInput` idle isn't "doing work."
+    pub fn any_running_turn(&self) -> bool {
+        self.workspaces.values().any(|w| {
+            matches!(
+                w.status,
+                InstanceStatus::Running
+                    | InstanceStatus::Thinking
+                    | InstanceStatus::ToolCalling
+                    | InstanceStatus::Paused
+            )
+        })
+    }
+
     /// How many workspaces are blocked waiting for user input.
     pub fn waiting_count(&self) -> usize {
         self.workspaces

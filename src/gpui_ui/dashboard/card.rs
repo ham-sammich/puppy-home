@@ -47,11 +47,14 @@ impl AgentCard {
     fn header(&self) -> impl IntoElement {
         let t = self.t;
         let s = &self.snap;
+        // A spinning-up sidecar gets the same pulsing ring/dot as a live one —
+        // it reads as "connecting," not "asleep" (#4).
+        let ring = s.live || matches!(s.status, InstanceStatus::Starting);
         div()
             .flex()
             .items_center()
             .gap_2p5()
-            .child(avatar(&t, s.emoji, s.live, s.id.0, self.reduce_motion))
+            .child(avatar(&t, s.emoji, ring, s.id.0, self.reduce_motion))
             .child(
                 div()
                     .flex()
@@ -67,7 +70,7 @@ impl AgentCard {
                             .child(widgets::status_dot(
                                 s.id.0,
                                 s.color,
-                                s.live,
+                                ring,
                                 self.reduce_motion,
                             ))
                             .child(
@@ -179,6 +182,18 @@ impl AgentCard {
                 .text_ellipsis()
                 .whitespace_nowrap()
                 .child(s.status_line.clone())
+                .into_any_element(),
+            InstanceStatus::Starting => div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(widgets::spinner(&t, s.id.0, self.reduce_motion))
+                .child(
+                    div()
+                        .text_size(px(11.5))
+                        .text_color(t.weak)
+                        .child("connecting to sidecar\u{2026}"),
+                )
                 .into_any_element(),
             _ if s.live && s.tool.is_some() => div()
                 .font_family("JetBrains Mono")

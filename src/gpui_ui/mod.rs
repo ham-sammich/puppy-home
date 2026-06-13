@@ -112,8 +112,18 @@ pub fn run() {
                 ..Default::default()
             };
             input::bind_keys(cx);
-            cx.open_window(options, |_, cx| cx.new(RootView::new))
-                .expect("failed to open the main window");
+            cx.open_window(options, |window, cx| {
+                let view = cx.new(RootView::new);
+                // Quit-confirm (#4): if a puppy is mid-turn, intercept the
+                // window close, arm the confirm overlay, and veto the close
+                // until the user decides.
+                let view_close = view.clone();
+                window.on_window_should_close(cx, move |_, cx| {
+                    view_close.update(cx, |root, cx| root.allow_close(cx))
+                });
+                view
+            })
+            .expect("failed to open the main window");
             cx.activate(true);
         });
 }
@@ -246,6 +256,11 @@ pub struct RootView {
     pub(crate) tree_delete_confirm: Option<(WorkspaceId, PathBuf, bool)>,
     /// Dashboard card awaiting a close confirmation (busy puppy only).
     pub(crate) card_close_confirm: Option<WorkspaceId>,
+    /// A puppy is mid-turn and the user tried to quit — show the confirm
+    /// overlay and block the close until they decide (#4).
+    pub(crate) quit_confirm: bool,
+    /// User confirmed "quit anyway" — the next close request sails through.
+    pub(crate) quit_armed: bool,
     /// Window-space anchor for the floating tree context menu (set on
     /// right-click; read only while `chat_pop` is a `TreeMenu`).
     pub(crate) tree_menu_pos: Option<gpui::Point<gpui::Pixels>>,
@@ -449,6 +464,8 @@ impl RootView {
             picker_path_input: None,
             tree_delete_confirm: None,
             card_close_confirm: None,
+            quit_confirm: false,
+            quit_armed: false,
             tree_menu_pos: None,
             commit_inputs: HashMap::new(),
             git_list_mode: HashSet::new(),
@@ -2149,6 +2166,7 @@ impl Render for RootView {
                     .then(|| perf_ui::hud(&t, &entity, &self.perf)),
             )
             .children(self.tree_context_menu(cx))
+            .children(self.quit_confirm.then(|| self.quit_overlay(&entity)))
             .child(widgets::toast_layer(&t, &self.toasts));
         self.perf.frame_end(perf_began);
         out
@@ -2156,6 +2174,92 @@ impl Render for RootView {
 }
 
 impl RootView {
+    /// Window-close gate (#4): allow the quit unless a puppy is mid-turn. The
+    /// first attempt while busy arms the confirm overlay and vetoes the close;
+    /// once the user picks "Quit anyway" (`quit_armed`), it sails through.
+    fn allow_close(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.quit_armed {
+            return true;
+        }
+        if self.supervisor.any_running_turn() {
+            self.quit_confirm = true;
+            cx.notify();
+            return false;
+        }
+        true
+    }
+
+    /// The centered "a puppy is still working" quit confirmation (#4). Forces
+    /// a choice — the scrim occludes everything behind it.
+    fn quit_overlay(&self, root: &Entity<RootView>) -> AnyElement {
+        let t = self.tokens;
+        let root_keep = root.clone();
+        let root_quit = root.clone();
+        let scrim = div()
+            .occlude()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(widgets::alpha(t.bg, 0.6))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .w(px(360.))
+                    .p_4()
+                    .rounded(px(14.))
+                    .bg(t.panel)
+                    .border_1()
+                    .border_color(t.line_soft)
+                    .shadow_lg()
+                    .child(
+                        div()
+                            .text_size(px(15.))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(t.text)
+                            .child("A puppy is still working"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.5))
+                            .text_color(t.weak)
+                            .child(
+                                "Quitting now stops the running turn. \
+                                 Close Doghouse anyway?",
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                widgets::btn(&t, "Keep running").id("quit-keep").on_click(
+                                    move |_, _, cx| {
+                                        root_keep.update(cx, |r, cx| {
+                                            r.quit_confirm = false;
+                                            cx.notify();
+                                        });
+                                    },
+                                ),
+                            )
+                            .child(
+                                widgets::primary_btn(&t, "Quit anyway")
+                                    .id("quit-yes")
+                                    .on_click(move |_, window, cx| {
+                                        root_quit.update(cx, |r, _| r.quit_armed = true);
+                                        window.remove_window();
+                                    }),
+                            ),
+                    ),
+            );
+        gpui::deferred(scrim).with_priority(200).into_any_element()
+    }
+
     /// The floating, cursor-anchored tree context menu (VSCode-style, F-req).
     /// Mounted at the window root so its click-away scrim covers everything;
     /// `gpui::anchored` keeps it on-screen near edges. The menu body itself
