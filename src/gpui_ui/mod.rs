@@ -1204,8 +1204,11 @@ impl RootView {
         }
         #[cfg(windows)]
         {
-            // By construction (untestable on this box): reparent into the
-            // GPUI HWND once, then place at the canvas rect in client px.
+            // Owned-overlay glue (G3): attach to the GPUI HWND as an owned
+            // borderless popup once, then place at the canvas rect in client
+            // px (converted to screen px inside embed_tab_win). SetParent/
+            // WS_CHILD is a trap here — the GPUI window is a DComp surface
+            // that composes over child HWNDs (probe: EX_NOREDIRECTIONBITMAP).
             use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
             let Some(id) = self.browser_tab else { return };
             if !self.browser.tab_running(id) {

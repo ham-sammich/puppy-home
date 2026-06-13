@@ -111,6 +111,10 @@ struct BrowserTab {
     visible: bool,
     /// CDP remote-debugging port this page listens on (for DevTools / Code Puppy).
     cdp_port: Option<u16>,
+    /// Background placement thread for the embedded overlay — tracks window
+    /// drags that GPUI's render loop can't see (Windows modal move loop).
+    #[cfg(windows)]
+    gluer: Option<embed::Gluer>,
 }
 
 /// Owns plugin discovery + the open browser tabs.
@@ -422,6 +426,10 @@ impl BrowserManager {
             tab.embedded = false;
             tab.visible = false;
             tab.placed_rect = None;
+            #[cfg(windows)]
+            {
+                tab.gluer = None; // stop the placement thread with the process
+            }
         }
     }
 
@@ -443,6 +451,9 @@ impl BrowserManager {
             // Mode flips re-drive the window state on the next upkeep.
             tab.floated = false;
             tab.visible = false;
+            // Stale placement must not short-circuit the re-glue after a
+            // pop-out -> pop-in round trip (G3 retest: pop-in dead).
+            tab.placed_rect = None;
         }
     }
 
@@ -482,6 +493,19 @@ impl BrowserManager {
             && tab.visible
             && let Some(h) = tab.host.as_mut()
         {
+            // Windows: hide via Win32, NOT the IPC `hide` — the host shows
+            // the overlay behind tao's back (ShowWindow), so tao believes
+            // it's still hidden and its `set_visible(false)` no-ops. That
+            // was the G3 "browser takes over the workspace view" bug.
+            #[cfg(windows)]
+            if let Some(child) = h.child_hwnd() {
+                if let Some(g) = &tab.gluer {
+                    g.set(None); // pause tracking while hidden
+                }
+                embed::hide(child);
+                tab.visible = false;
+                return;
+            }
             h.hide();
             tab.visible = false;
         }
@@ -500,6 +524,7 @@ impl BrowserManager {
         {
             #[cfg(windows)]
             if tab.embedded {
+                tab.gluer = None; // stop the placement thread first
                 if let Some(child) = h.child_hwnd() {
                     embed::unparent(child);
                 }
@@ -511,24 +536,30 @@ impl BrowserManager {
         }
     }
 
-    /// GPUI embedded mode on Windows (by construction): reparent the
-    /// plugin window into the host HWND once, then place it at the canvas
-    /// rect (client px) and show it. Mirrors the egui Windows pump.
+    /// GPUI embedded mode on Windows: attach the plugin window as an OWNED
+    /// borderless overlay once (NOT `SetParent` — the GPUI window is a
+    /// DComp surface that composes over child HWNDs, G3 finding B1), then
+    /// hand the canvas rect (host-client px) to the [`embed::Gluer`]
+    /// thread, which converts to screen px and repositions on any change —
+    /// including host-window moves that GPUI's starved render loop never
+    /// sees (modal move loop).
     #[cfg(windows)]
     pub fn embed_tab_win(&mut self, id: BrowserId, parent: i64, rect: (i32, i32, i32, i32)) {
         if let Some(tab) = self.tabs.get_mut(&id)
             && let Some(child) = tab.host.as_ref().and_then(|h| h.child_hwnd())
         {
             if !tab.embedded {
-                embed::reparent(parent, child);
+                embed::attach(parent, child);
+                tab.gluer = Some(embed::Gluer::spawn(parent, child));
                 tab.embedded = true;
                 tab.floated = false;
             }
             let (x, y, w, h) = rect;
             if w > 0 && h > 0 {
-                if tab.placed_rect != Some(rect) {
-                    embed::place(child, x, y, w, h);
-                    tab.placed_rect = Some(rect);
+                // The glue thread does the actual SetWindowPos calls — it
+                // also tracks host-window moves that never reach a render.
+                if let Some(g) = &tab.gluer {
+                    g.set(Some((x, y, w, h)));
                 }
                 if !tab.visible {
                     embed::show(child);
@@ -770,14 +801,16 @@ impl BrowserManager {
         // The viewport region below the toolbar is where the plugin window goes.
         let rect = ui.available_rect_before_wrap();
 
-        // Windows: reparent the plugin's window as a true child of the host.
+        // Windows: glue the plugin's window over the host as an owned
+        // borderless overlay (same strategy as the GPUI shell — SetParent/
+        // WS_CHILD is invisible under DComp hosts, G3 finding B1).
         #[cfg(windows)]
         {
             let child = tab.host.as_ref().and_then(|h| h.child_hwnd());
             match (parent, child) {
                 (Some(parent), Some(child)) => {
                     if !tab.embedded {
-                        embed::reparent(parent, child);
+                        embed::attach(parent, child);
                         tab.embedded = true;
                     }
                     let ppp = ui.ctx().pixels_per_point();
@@ -786,9 +819,10 @@ impl BrowserManager {
                     let w = (rect.width() * ppp).round() as i32;
                     let h = (rect.height() * ppp).round() as i32;
                     if w > 0 && h > 0 {
-                        let r = (x, y, w, h);
+                        let (sx, sy) = embed::screen_origin(parent, x, y);
+                        let r = (sx, sy, w, h);
                         if tab.placed_rect != Some(r) {
-                            embed::place(child, x, y, w, h);
+                            embed::place(child, sx, sy, w, h);
                             tab.placed_rect = Some(r);
                         }
                         if !tab.visible {

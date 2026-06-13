@@ -89,8 +89,12 @@ impl SshTarget {
     }
 
     /// A base `ssh` invocation: common flags + destination, no remote command.
+    /// Console suppression lives HERE so every ssh call site inherits it —
+    /// the remote folder browser flashed a console per click when it was
+    /// left to callers (G3 finding F1).
     fn base_ssh(&self) -> Command {
         let mut cmd = Command::new("ssh");
+        crate::proc::hide_console(&mut cmd);
         cmd.arg("-T") // no pseudo-tty; stdio carries the protocol verbatim
             .arg("-o")
             .arg("BatchMode=yes")
