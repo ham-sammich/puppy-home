@@ -343,6 +343,10 @@ pub fn overlay(args: &MgrArgs) -> AnyElement {
         .w(px(760.))
         .max_w_full()
         .h(px(540.))
+        // Height guard (mirrors max_w_full): on a short window the fixed 540px
+        // panel used to overflow off-screen, hiding the footer/Save with no way
+        // to scroll. Cap to the viewport so the body's scroll region engages.
+        .max_h_full()
         .flex()
         .flex_col()
         .gap_2()
