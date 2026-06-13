@@ -173,6 +173,14 @@ pub struct RootView {
     screen: Screen,
     composer_style: ComposerStyle,
     chat_inputs: HashMap<WorkspaceId, Entity<ChatInput>>,
+    /// Per-workspace transcript scroll handle (so each chat keeps its own
+    /// scroll position) and the entry count we last pinned at — together they
+    /// keep the view glued to the newest turn while still letting you scroll
+    /// up to read history (see the render-time pin logic).
+    chat_scroll: HashMap<WorkspaceId, gpui::ScrollHandle>,
+    chat_seen_len: HashMap<WorkspaceId, usize>,
+    /// Scroll handle for the agent-creator modal's transcript preview.
+    agent_creator_scroll: gpui::ScrollHandle,
     chat_subs: Vec<gpui::Subscription>,
     chat_pop: Option<ChatPop>,
     /// Transcript entries with an opened collapsible body (diff / thinking).
@@ -415,6 +423,9 @@ impl RootView {
             screen: Screen::Dashboard,
             composer_style: saved.composer_style,
             chat_inputs: HashMap::new(),
+            chat_scroll: HashMap::new(),
+            chat_seen_len: HashMap::new(),
+            agent_creator_scroll: gpui::ScrollHandle::new(),
             chat_subs: Vec::new(),
             chat_pop: None,
             expanded_entries: HashSet::new(),
@@ -1201,6 +1212,7 @@ impl RootView {
             expanded: &self.expanded_entries,
             collapsed_thinking: &self.collapsed_thinking,
             reduce_motion: self.reduce_motion,
+            scroll: self.agent_creator_scroll.clone(),
         });
         let dock = chat::composer::composer_dock(&chat::composer::ComposerArgs {
             t: *t,
@@ -1948,6 +1960,22 @@ impl Render for RootView {
                 div().size_full().into_any_element()
             }
             Screen::Chat(id) => {
+                // Keep the transcript pinned to the newest turn: scroll to the
+                // bottom on first open and whenever a new entry arrives WHILE
+                // already at the bottom — but never yank the view down if the
+                // user has scrolled up to read history (#scroll fix).
+                let len = self.supervisor.get(id).map(|w| w.entries().len()).unwrap_or(0);
+                let handle = self.chat_scroll.entry(id).or_default().clone();
+                let seen = self.chat_seen_len.get(&id).copied();
+                let at_bottom = {
+                    let max = handle.max_offset().height;
+                    max <= px(1.) || handle.offset().y <= -max + px(8.)
+                };
+                if seen.is_none() || (seen.is_some_and(|s| len > s) && at_bottom) {
+                    handle.scroll_to_bottom();
+                }
+                self.chat_seen_len.insert(id, len);
+
                 let ws = self.supervisor.get(id).expect("guarded by the arm above");
                 let input = self
                     .chat_inputs
@@ -1976,6 +2004,7 @@ impl Render for RootView {
                     hidden_mode: self.hidden_mode,
                     expanded: &self.expanded_entries,
                     reduce_motion: self.reduce_motion,
+                    scroll: handle,
                     tree_open: !self.tree_closed.contains(&id),
                     expanded_dirs: &self.expanded_dirs,
                     answer_input: self.answer_input.as_ref(),

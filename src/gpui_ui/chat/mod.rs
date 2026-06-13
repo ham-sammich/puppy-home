@@ -60,6 +60,8 @@ pub struct ChatArgs<'a> {
     pub hidden_mode: HiddenMode,
     pub expanded: &'a HashSet<(u64, usize)>,
     pub reduce_motion: bool,
+    /// This workspace's transcript scroll handle (bottom-pinned by RootView).
+    pub scroll: gpui::ScrollHandle,
     pub tree_open: bool,
     pub expanded_dirs: &'a HashSet<(u64, PathBuf)>,
     /// Shared answer input (ask Other / pending input prompts).
@@ -137,6 +139,7 @@ pub fn chat_screen(args: &ChatArgs) -> AnyElement {
             expanded: args.expanded,
             collapsed_thinking: args.collapsed_thinking,
             reduce_motion: args.reduce_motion,
+            scroll: args.scroll.clone(),
         })
     };
     let dock = composer::composer_dock(&composer::ComposerArgs {

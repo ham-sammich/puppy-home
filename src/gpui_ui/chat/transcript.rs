@@ -4,8 +4,12 @@
 //!
 //! Render cost is bounded exactly like redesign/egui: only the most recent
 //! [`RENDER_TAIL`] entries render unless "Show older" was clicked. The column
-//! is `flex_col_reverse`, which keeps the scroll pinned to the newest turn
-//! without a scroll-anchoring dance.
+//! is a normal `flex_col` (oldest→newest, top→bottom) tracking a per-workspace
+//! `ScrollHandle`; RootView pins it to the bottom on new turns while still
+//! letting you scroll up to read history. (An earlier `flex_col_reverse`
+//! trick fought gpui's scroll range — older turns landed at negative
+//! coordinates the scroll offset couldn't reach, so you could scroll *past*
+//! the newest into blank but never *up* to history.)
 
 use std::time::Duration;
 
@@ -31,6 +35,8 @@ pub struct TranscriptArgs<'a> {
     pub user_avatar: String,
     pub puppy_avatar: String,
     pub show_all: bool,
+    /// The transcript scroll handle (bottom-pinned by RootView).
+    pub scroll: gpui::ScrollHandle,
     /// `(workspace id, entry index)` pairs whose diff body is open.
     pub expanded: &'a std::collections::HashSet<(u64, usize)>,
     /// Thinking folds that are CLOSED (default open while streaming; the
@@ -55,11 +61,20 @@ pub fn transcript_panel(args: &TranscriptArgs) -> AnyElement {
         total.saturating_sub(RENDER_TAIL)
     };
 
-    // Children are built newest-first because the column is reversed (which
-    // pins the scroll viewport to the bottom = newest).
+    // Children top→bottom = oldest→newest: the trimmed/older notices first
+    // (top), then the rendered entries in chronological order.
     let mut children: Vec<AnyElement> = Vec::with_capacity(total - start + 2);
-    for (i, entry) in entries.iter().enumerate().skip(start).rev() {
-        children.push(render_entry(args, i, entry));
+    if ws.collapsed_count() > 0 {
+        children.push(
+            div()
+                .text_size(px(11.5))
+                .text_color(t.weak)
+                .child(format!(
+                    "{} earlier message(s) trimmed to keep the UI responsive.",
+                    ws.collapsed_count()
+                ))
+                .into_any_element(),
+        );
     }
     if start > 0 {
         let root = args.root.clone();
@@ -89,26 +104,18 @@ pub fn transcript_panel(args: &TranscriptArgs) -> AnyElement {
                 .into_any_element(),
         );
     }
-    if ws.collapsed_count() > 0 {
-        children.push(
-            div()
-                .text_size(px(11.5))
-                .text_color(t.weak)
-                .child(format!(
-                    "{} earlier message(s) trimmed to keep the UI responsive.",
-                    ws.collapsed_count()
-                ))
-                .into_any_element(),
-        );
+    for (i, entry) in entries.iter().enumerate().skip(start) {
+        children.push(render_entry(args, i, entry));
     }
 
     div()
         .id(("chat-scroll", ws.id.0))
+        .track_scroll(&args.scroll)
         .flex_1()
         .min_h_0()
         .overflow_y_scroll()
         .flex()
-        .flex_col_reverse()
+        .flex_col()
         .gap_3()
         .px_4()
         .py_3()
