@@ -150,6 +150,33 @@ pub fn btn(t: &Tokens, label: impl Into<String>) -> Div {
         .child(label.into())
 }
 
+/// A [`btn`] with a leading monochrome SVG icon (tinted to the text color).
+/// `icon` is an asset path like `"icons/whistle.svg"`.
+pub fn icon_btn(t: &Tokens, icon: &'static str, label: impl Into<String>) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_1()
+        .px_2p5()
+        .py_1()
+        .rounded(px(8.))
+        .bg(t.well)
+        .border_1()
+        .border_color(t.line_soft)
+        .text_size(px(12.))
+        .text_color(t.text)
+        .cursor_pointer()
+        .hover(|s| s.border_color(alpha(t.accent, 0.6)))
+        .child(
+            gpui::svg()
+                .path(icon)
+                .size(px(13.))
+                .text_color(t.text)
+                .flex_none(),
+        )
+        .child(label.into())
+}
+
 /// Accent-filled call-to-action (ink-on-amber), mirror of egui's primary_btn.
 pub fn primary_btn(t: &Tokens, label: impl Into<String>) -> Div {
     div()

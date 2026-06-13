@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g fill="#000">
+    <!-- round chamber -->
+    <circle cx="14.5" cy="14.5" r="5.5"/>
+    <!-- mouthpiece: rounded-left rectangle -->
+    <path d="M2 11h12v5.5H3.3C2.6 16.5 2 15.9 2 15.2v-3.1C2 11.5 2.4 11 2.9 11z"/>
+    <!-- hanging loop stem on top of the chamber -->
+    <rect x="13.3" y="5" width="2.4" height="5" rx="1.2"/>
+  </g>
+</svg>

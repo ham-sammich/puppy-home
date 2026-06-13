@@ -79,7 +79,7 @@ pub fn pack_header(
                             // The whistle: summon a fresh puppy at $HOME —
                             // Open Folder minus the dialog.
                             let root = root.clone();
-                            widgets::btn(t, "\u{1f4e3} Whistle")
+                            widgets::icon_btn(t, "icons/whistle.svg", "Whistle")
                                 .id("dash-whistle")
                                 .tooltip(widgets::text_tip(
                                     "Spawn a Code Puppy at your home directory".into(),

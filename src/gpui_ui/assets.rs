@@ -31,12 +31,20 @@ const FONTS: &[(&str, &[u8])] = &[
     ),
 ];
 
+/// Embedded monochrome SVG icons (tinted by the element's `text_color` at
+/// render time), served through the same asset source as the fonts.
+const ICONS: &[(&str, &[u8])] = &[(
+    "icons/whistle.svg",
+    include_bytes!("../../assets/icons/whistle.svg"),
+)];
+
 pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
         Ok(FONTS
             .iter()
+            .chain(ICONS.iter())
             .find(|(p, _)| *p == path)
             .map(|(_, bytes)| Cow::Borrowed(*bytes)))
     }
@@ -44,6 +52,7 @@ impl AssetSource for Assets {
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         Ok(FONTS
             .iter()
+            .chain(ICONS.iter())
             .filter(|(p, _)| p.starts_with(path))
             .map(|(p, _)| SharedString::from(*p))
             .collect())
