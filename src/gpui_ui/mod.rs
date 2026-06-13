@@ -50,7 +50,7 @@ use futures::channel::mpsc::UnboundedReceiver;
 use gpui::{
     App, Application, Bounds, Context, Entity, FocusHandle, Focusable as _, FontWeight,
     IntoElement, ParentElement as _, Rgba, SharedString, Styled as _, TitlebarOptions, Window,
-    WindowBounds, WindowOptions, div, prelude::*, px, size,
+    WindowBounds, WindowOptions, div, point, prelude::*, px, size,
 };
 
 use crate::browser::{BrowserId, BrowserManager};
@@ -88,9 +88,23 @@ pub fn run() {
         .with_assets(assets::Assets)
         .run(|cx: &mut App| {
             assets::register_fonts(cx);
-            let bounds = Bounds::centered(None, size(px(1180.), px(760.)), cx);
+            // P5: restore the last window size/position (with a sanity floor
+            // so a corrupt/tiny saved rect can't open an unusable window).
+            let saved = session::load();
+            let bounds = match saved.window_rect {
+                Some((x, y, w, h)) if w >= 480. && h >= 360. => Bounds {
+                    origin: point(px(x), px(y)),
+                    size: size(px(w), px(h)),
+                },
+                _ => Bounds::centered(None, size(px(1180.), px(760.)), cx),
+            };
+            let window_bounds = if saved.window_maximized {
+                WindowBounds::Maximized(bounds)
+            } else {
+                WindowBounds::Windowed(bounds)
+            };
             let options = WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_bounds: Some(window_bounds),
                 titlebar: Some(TitlebarOptions {
                     title: Some(SharedString::from("Doghouse")),
                     ..Default::default()
@@ -194,6 +208,10 @@ pub struct RootView {
     den_roster_last: String,
     /// Presence heuristic inputs (unfocused OR >5min since interaction).
     window_active: bool,
+    /// Latest window placement, captured each render for persistence (P5):
+    /// `(x, y, w, h)` logical px of the windowed/restore rect, + maximized.
+    win_rect: Option<(f32, f32, f32, f32)>,
+    win_maximized: bool,
     last_interaction: Instant,
     presence_idle: bool,
     /// Probe runs never write session.json (don't clobber the user's state).
@@ -402,6 +420,8 @@ impl RootView {
             den_roster_at: None,
             den_roster_last: String::new(),
             window_active: true,
+            win_rect: None,
+            win_maximized: false,
             last_interaction: Instant::now(),
             presence_idle: false,
             session_no_save: probing,
@@ -1050,6 +1070,10 @@ impl RootView {
         s.user_avatar = self.user_avatar.clone();
         s.puppy_avatar = self.puppy_avatar.clone();
         s.theme = self.theme.clone();
+        if let Some(r) = self.win_rect {
+            s.window_rect = Some(r);
+        }
+        s.window_maximized = self.win_maximized;
         s.workspaces = self
             .supervisor
             .iter()
@@ -1070,12 +1094,19 @@ impl RootView {
         if self.session_no_save {
             return;
         }
+        // Round the window rect so sub-pixel jitter during a drag/resize
+        // doesn't thrash the save; a settled new size/pos still triggers one.
+        let win = self
+            .win_rect
+            .map(|(x, y, w, h)| (x as i32, y as i32, w as i32, h as i32));
         let sig: String = format!(
-            "{:?}",
+            "{:?}|{:?}|{}",
             self.supervisor
                 .iter()
                 .map(|w| (&w.root, &w.agent, &w.model, &w.autosave))
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>(),
+            win,
+            self.win_maximized,
         );
         if sig != self.session_sig {
             self.session_sig = sig;
@@ -1673,6 +1704,21 @@ impl Render for RootView {
 
         // Presence heuristic input: is the window focused right now?
         self.window_active = window.is_window_active();
+        // P5: track the window's placement so the drain-loop save can persist
+        // it. The windowed/restore rect is carried by every WindowBounds arm.
+        {
+            let (b, maxed) = match window.window_bounds() {
+                WindowBounds::Windowed(b) => (b, false),
+                WindowBounds::Maximized(b) | WindowBounds::Fullscreen(b) => (b, true),
+            };
+            self.win_rect = Some((
+                f32::from(b.origin.x),
+                f32::from(b.origin.y),
+                f32::from(b.size.width),
+                f32::from(b.size.height),
+            ));
+            self.win_maximized = maxed;
+        }
         self.apply_terminal_resize();
         self.browser_embed_upkeep(window);
 

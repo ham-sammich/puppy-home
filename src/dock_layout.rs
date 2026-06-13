@@ -27,6 +27,8 @@ pub fn current_session(sup: &Supervisor, theme: Theme, dock: Option<&DockState<T
         dashboard_view: carry.dashboard_view,
         reduce_motion: carry.reduce_motion,
         hidden_mode: carry.hidden_mode,
+        window_rect: carry.window_rect,
+        window_maximized: carry.window_maximized,
         composer_style: carry.composer_style,
         user_avatar: carry.user_avatar,
         puppy_avatar: carry.puppy_avatar,

@@ -35,6 +35,13 @@ pub struct Session {
     /// How the file explorer treats hidden (dot-prefixed) entries (F4).
     #[serde(default)]
     pub hidden_mode: HiddenMode,
+    /// Last window placement in logical px `(x, y, w, h)`, restored on launch
+    /// (P5). Absent on first run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_rect: Option<(f32, f32, f32, f32)>,
+    /// Whether the window was maximized at last exit (P5).
+    #[serde(default)]
+    pub window_maximized: bool,
     /// Your avatar emoji in transcripts (empty = the \u{1f9d1} default).
     /// Owned by the redesign shells' pickers (QW8); present here so
     /// session.json round-trips losslessly across all branches.
