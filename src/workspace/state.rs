@@ -126,7 +126,12 @@ pub(crate) enum PendingKind {
 
 /// An open file's editable contents.
 pub(crate) struct FileBuffer {
+    /// Editable text, ALWAYS LF-normalized in memory. The on-disk line
+    /// ending is restored from `crlf` on save so editing one line in a
+    /// CRLF file doesn't rewrite every line (whole-file diff bug).
     pub(crate) content: String,
+    /// The file used CRLF (\r\n) on disk; restore it when writing back.
+    pub(crate) crlf: bool,
     pub(crate) dirty: bool,
     pub(crate) load_error: Option<String>,
     pub(crate) save_error: Option<String>,

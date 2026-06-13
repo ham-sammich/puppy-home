@@ -316,6 +316,11 @@ fn file_view(args: &EditorArgs, path: &Path) -> AnyElement {
             .id(("editor-scroll", id.0))
             .flex_1()
             .min_h_0()
+            // flex-col so the code input's flex_grow fills the viewport: a
+            // short file's empty area below the text is still clickable to
+            // place the caret / focus (#feedback: click-to-focus).
+            .flex()
+            .flex_col()
             .overflow_x_scroll()
             .overflow_y_scroll()
             .font_family("JetBrains Mono")

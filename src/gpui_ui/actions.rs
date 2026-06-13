@@ -1247,6 +1247,22 @@ impl RootView {
         if text.is_empty() {
             return;
         }
+        // App-level slash commands open the matching manager panel instead of
+        // going to code_puppy (which would answer "Unknown command"). #feedback
+        use crate::gpui_ui::managers::{MgrAction, MgrKind};
+        let app_mgr = match text.to_lowercase().as_str() {
+            "/skills" => Some(MgrKind::Skills),
+            "/agents" => Some(MgrKind::Agents),
+            "/mcp" | "/mcps" => Some(MgrKind::Mcp),
+            "/models" => Some(MgrKind::Models),
+            "/config" => Some(MgrKind::Config),
+            _ => None,
+        };
+        if let Some(kind) = app_mgr {
+            input.update(cx, |i, cx| i.clear(cx));
+            self.dispatch(DashAction::Mgr(MgrAction::Open(kind)), cx);
+            return;
+        }
         let accent = self.tokens.accent;
         let Some(ws) = self.supervisor.get_mut(id) else {
             return;

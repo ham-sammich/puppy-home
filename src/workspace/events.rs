@@ -308,9 +308,12 @@ impl Workspace {
                 let abs = self.abs_path(&record.path);
                 if let Some(buf) = self.open_files.get_mut(&abs)
                     && !buf.dirty
-                    && let Ok(content) = self.fs.read_to_string(&abs)
+                    && let Ok(raw) = self.fs.read_to_string(&abs)
                 {
+                    // Keep the buffer LF-normalized + track the on-disk style.
+                    let (content, crlf) = super::editor::split_eol(raw);
                     buf.content = content;
+                    buf.crlf = crlf;
                     buf.load_error = None;
                 }
                 self.diffs.push(record);

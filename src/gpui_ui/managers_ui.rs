@@ -71,7 +71,12 @@ pub(crate) fn field(
         .gap_0p5()
         .child(small(t, label, t.weak))
         .children(input.map(|i| {
+            // flex-col so the input's flex_grow fills the box vertically: the
+            // WHOLE padded box (and a tall field's empty area) is clickable to
+            // focus, not just the one text line (#feedback: click-to-focus).
             div()
+                .flex()
+                .flex_col()
                 .px_2()
                 .py_1()
                 .rounded(px(8.))

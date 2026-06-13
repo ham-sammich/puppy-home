@@ -585,7 +585,9 @@ impl Workspace {
         let Some(b) = self.open_files.get_mut(path) else {
             return false;
         };
-        match self.fs.write(path, b.content.as_bytes()) {
+        // Restore the file's original line endings (buffer is LF in memory).
+        let bytes = editor::restore_eol(&b.content, b.crlf);
+        match self.fs.write(path, &bytes) {
             Ok(()) => {
                 b.dirty = false;
                 b.save_error = None;

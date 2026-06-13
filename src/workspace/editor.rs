@@ -12,6 +12,23 @@ use super::Workspace;
 use super::render::truncate;
 use super::state::{EditorItem, FileBuffer};
 
+/// Split raw file text into an LF-normalized buffer + whether it was CRLF.
+/// Mixed endings count as CRLF if ANY `\r\n` is present (Windows default).
+pub(crate) fn split_eol(raw: String) -> (String, bool) {
+    let crlf = raw.contains("\r\n");
+    let content = if crlf { raw.replace("\r\n", "\n") } else { raw };
+    (content, crlf)
+}
+
+/// Re-apply the original line ending to an LF buffer for writing to disk.
+pub(crate) fn restore_eol(content: &str, crlf: bool) -> Vec<u8> {
+    if crlf {
+        content.replace('\n', "\r\n").into_bytes()
+    } else {
+        content.as_bytes().to_vec()
+    }
+}
+
 impl Workspace {
     /// Load a file into an editable buffer (no-op if already open).
     pub fn open_file(&mut self, path: PathBuf) {
@@ -19,14 +36,21 @@ impl Workspace {
             return;
         }
         let buffer = match self.fs.read_to_string(&path) {
-            Ok(content) => FileBuffer {
-                content,
-                dirty: false,
-                load_error: None,
-                save_error: None,
-            },
+            Ok(raw) => {
+                // Detect + strip CRLF so the buffer is pure-LF for editing;
+                // save_file restores the original style.
+                let (content, crlf) = split_eol(raw);
+                FileBuffer {
+                    content,
+                    crlf,
+                    dirty: false,
+                    load_error: None,
+                    save_error: None,
+                }
+            }
             Err(e) => FileBuffer {
                 content: String::new(),
+                crlf: false,
                 dirty: false,
                 load_error: Some(e.to_string()),
                 save_error: None,
@@ -318,5 +342,22 @@ mod tests {
     fn language_for_unknown_is_txt() {
         assert_eq!(language_for(Path::new("file.xyz")), "txt");
         assert_eq!(language_for(Path::new("noext")), "txt");
+    }
+
+    #[test]
+    fn crlf_file_roundtrips_with_only_the_edit_changed() {
+        let (content, crlf) = super::split_eol("a\r\nb\r\nc\r\n".to_string());
+        assert!(crlf);
+        assert_eq!(content, "a\nb\nc\n"); // LF in memory
+        // edit one line in the LF buffer, then write back
+        let edited = content.replace('b', "BEE");
+        assert_eq!(super::restore_eol(&edited, crlf), b"a\r\nBEE\r\nc\r\n");
+    }
+
+    #[test]
+    fn lf_file_stays_lf() {
+        let (content, crlf) = super::split_eol("x\ny\n".to_string());
+        assert!(!crlf);
+        assert_eq!(super::restore_eol(&content, crlf), b"x\ny\n");
     }
 }
