@@ -156,6 +156,14 @@ impl RootView {
                     w.scope = if project { Scope::Project } else { Scope::User };
                 }
             }
+            MgrAction::AgentSetModel(model) => {
+                // Picker click: drive the free-text model field (the source of
+                // truth on submit) and keep the wizard mirror in sync.
+                self.seed(F_D, model.clone(), cx);
+                if let Some(w) = &mut self.agent_wizard {
+                    w.model = model;
+                }
+            }
             MgrAction::AgentToggleTool(tool) => {
                 if let Some(w) = &mut self.agent_wizard {
                     if let Some(i) = w.tools.iter().position(|t| *t == tool) {

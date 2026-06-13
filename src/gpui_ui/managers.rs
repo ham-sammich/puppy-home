@@ -104,6 +104,9 @@ pub enum MgrAction {
     AgentMode(bool),
     AgentStep(i32),
     AgentScope(bool), // true = project
+    /// Pick a model for the agent from the catalog (seeds the model field).
+    /// Empty string = use the global default.
+    AgentSetModel(String),
     AgentToggleTool(String),
     AgentToggleMcp(String),
     AgentToolsAll,

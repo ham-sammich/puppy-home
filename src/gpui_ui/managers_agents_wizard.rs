@@ -83,6 +83,7 @@ pub(crate) fn wizard_body(args: &MgrArgs, ws: &Workspace, w: &agent_wizard::Wiza
                     args.inputs.get(F_D),
                     false,
                 ))
+                .child(model_picker(args, ws, w))
                 .child(small(&t, "Where to save", t.weak))
                 .child(scope_cards("agent-scope"))
                 .children(w.editing.then(|| {
@@ -215,6 +216,56 @@ pub(crate) fn wizard_body(args: &MgrArgs, ws: &Workspace, w: &agent_wizard::Wiza
                 .child(body),
         )
         .child(footer)
+        .into_any_element()
+}
+
+/// A pick-list of this Code Puppy's announced models that seeds the free-text
+/// model field. Empty when the sidecar reported no catalog (field stays free).
+fn model_picker(args: &MgrArgs, ws: &Workspace, w: &agent_wizard::Wizard) -> AnyElement {
+    let t = args.t;
+    let catalog = ws.model_catalog();
+    if catalog.is_empty() {
+        return div().into_any_element();
+    }
+    let cur = w.model.trim().to_string();
+    let chip = |id: u64, label: String, on: bool, model: String| {
+        div()
+            .id(("agent-model-chip", id))
+            .px_2()
+            .py_0p5()
+            .rounded_full()
+            .bg(if on { alpha(t.accent, 0.16) } else { t.well })
+            .border_1()
+            .border_color(if on {
+                alpha(t.accent, 0.7)
+            } else {
+                t.line_soft
+            })
+            .font_family("JetBrains Mono")
+            .text_size(px(11.))
+            .text_color(if on { t.accent } else { t.weak })
+            .cursor_pointer()
+            .hover(|d| d.border_color(alpha(t.accent, 0.5)))
+            .child(label)
+            .on_click(act(&args.root, MgrAction::AgentSetModel(model)))
+            .into_any_element()
+    };
+    let mut row = div().flex().flex_wrap().gap_1().child(chip(
+        0,
+        "global default".to_string(),
+        cur.is_empty(),
+        String::new(),
+    ));
+    for (i, m) in catalog.iter().enumerate() {
+        let on = cur == m.name;
+        row = row.child(chip(i as u64 + 1, m.name.clone(), on, m.name.clone()));
+    }
+    div()
+        .flex()
+        .flex_col()
+        .gap_0p5()
+        .child(small(&t, "or pick from this Code Puppy's models:", t.dim))
+        .child(row)
         .into_any_element()
 }
 
