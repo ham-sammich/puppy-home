@@ -20,14 +20,18 @@
 //! scroll past [`MAX_VISIBLE_ROWS`] (content clips), no cursor blink.
 
 use std::ops::Range;
+use std::time::{Duration, Instant};
 
 use gpui::{
     App, Bounds, ClipboardEntry, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, ImageFormat,
     KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
-    Pixels, Point, SharedString, Style, TextAlign, TextRun, UTF16Selection, UnderlineStyle, Window,
-    WrappedLine, actions, div, fill, point, prelude::*, px, relative, size,
+    Pixels, Point, SharedString, Style, Subscription, TextAlign, TextRun, UTF16Selection,
+    UnderlineStyle, Window, WrappedLine, actions, div, fill, point, prelude::*, px, relative, size,
 };
+
+/// Caret blink half-period: solid this long, then hidden this long (~VSCode).
+const CARET_BLINK: Duration = Duration::from_millis(530);
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::tokens::Tokens;
@@ -200,6 +204,16 @@ pub struct ChatInput {
     /// re-render on every drain notify; reshaping a whole file per frame
     /// would be O(file) at 4Hz, so we shape only when content/width change.
     cache: std::cell::RefCell<Option<(u64, i32, std::sync::Arc<WrapLayout>)>>,
+    // -- caret blink (only ticks while focused; see `start_blink`) --
+    /// Phase reference; reset on focus and on every edit/move so the caret
+    /// stays SOLID while you're actively typing, then blinks when idle.
+    blink_epoch: Instant,
+    /// Whether this input currently holds focus (driven by focus listeners).
+    blink_focused: bool,
+    /// Guard so only one blink ticker task runs at a time.
+    blinking: bool,
+    /// Focus/blur subscriptions, registered lazily at first render.
+    blink_subs: Vec<Subscription>,
 }
 
 impl EventEmitter<InputEvent> for ChatInput {}
@@ -239,7 +253,74 @@ impl ChatInput {
             syntax: None,
             generation: 0,
             cache: std::cell::RefCell::new(None),
+            blink_epoch: Instant::now(),
+            blink_focused: false,
+            blinking: false,
+            blink_subs: Vec::new(),
         }
+    }
+
+    /// Reset the blink phase — keeps the caret solid through edits and
+    /// cursor moves (call wherever content or the selection changes).
+    fn touch_caret(&mut self) {
+        self.blink_epoch = Instant::now();
+    }
+
+    /// Is the caret in its visible half right now? Solid for the first
+    /// half-period after `blink_epoch`, hidden the next, repeating.
+    fn caret_on(&self) -> bool {
+        let half = CARET_BLINK.as_millis().max(1);
+        (self.blink_epoch.elapsed().as_millis() / half) % 2 == 0
+    }
+
+    /// Register focus/blur listeners once (needs a `Window`, so called from
+    /// `render`). Also catches the case where the input is already focused.
+    fn ensure_blink(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.blink_subs.is_empty() {
+            return;
+        }
+        let handle = self.focus_handle.clone();
+        let on_focus = cx.on_focus(&handle, window, |this, _, cx| {
+            this.blink_focused = true;
+            this.touch_caret();
+            this.start_blink(cx);
+            cx.notify();
+        });
+        let on_blur = cx.on_blur(&handle, window, |this, _, cx| {
+            this.blink_focused = false;
+            cx.notify();
+        });
+        self.blink_subs = vec![on_focus, on_blur];
+        if self.focus_handle.is_focused(window) {
+            self.blink_focused = true;
+            self.touch_caret();
+            self.start_blink(cx);
+        }
+    }
+
+    /// Coarse blink ticker: wakes ~2x/sec to repaint, and exits the moment
+    /// focus is lost — no idle vsync spin (G1 audit discipline).
+    fn start_blink(&mut self, cx: &mut Context<Self>) {
+        if self.blinking {
+            return;
+        }
+        self.blinking = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(CARET_BLINK).await;
+                let keep = this.update(cx, |this, cx| {
+                    if this.blink_focused {
+                        cx.notify();
+                    }
+                    this.blink_focused
+                });
+                if !matches!(keep, Ok(true)) {
+                    break;
+                }
+            }
+            let _ = this.update(cx, |this, _| this.blinking = false);
+        })
+        .detach();
     }
 
     /// Code-editor mode: no soft wrap, no row cap, syntax runs supported.
@@ -266,6 +347,7 @@ impl ChatInput {
         self.selected_range = end..end;
         self.marked_range = None;
         self.generation += 1;
+        self.touch_caret();
         cx.emit(InputEvent::Edited);
         cx.notify();
     }
@@ -508,6 +590,7 @@ impl ChatInput {
 
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.selected_range = offset..offset;
+        self.touch_caret();
         cx.notify()
     }
 
@@ -711,6 +794,7 @@ impl EntityInputHandler for ChatInput {
         self.selected_range = range.start + new_text.len()..range.start + new_text.len();
         self.marked_range.take();
         self.generation += 1;
+        self.touch_caret();
         cx.emit(InputEvent::Edited);
         cx.notify();
     }
@@ -741,6 +825,7 @@ impl EntityInputHandler for ChatInput {
             .map(|new_range| new_range.start + range.start..new_range.end + range.end)
             .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
         self.generation += 1;
+        self.touch_caret();
         cx.emit(InputEvent::Edited);
         cx.notify();
     }
@@ -1019,7 +1104,10 @@ impl gpui::Element for TextElement {
                 cx,
             );
         }
+        // Caret paints only while focused AND in the visible half of the
+        // blink cycle (a freshly-focused or actively-typing caret is solid).
         if focus_handle.is_focused(window)
+            && self.input.read(cx).caret_on()
             && let Some(cursor) = prepaint.cursor.take()
         {
             window.paint_quad(cursor);
@@ -1133,7 +1221,8 @@ fn marked_runs(
 }
 
 impl Render for ChatInput {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.ensure_blink(window, cx);
         div()
             .flex_grow()
             .key_context("ChatInput")
