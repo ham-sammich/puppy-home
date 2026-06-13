@@ -3,15 +3,15 @@
 //! `AgentRow` from `pack-card.jsx`.
 
 use gpui::{
-    AnyElement, Entity, FontWeight, IntoElement, ParentElement as _, RenderOnce, Styled as _,
-    Window, div, prelude::*, px,
+    AnyElement, Entity, FocusHandle, FontWeight, IntoElement, ParentElement as _, RenderOnce,
+    Styled as _, Window, div, prelude::*, px,
 };
 
 use crate::gpui_ui::widgets::{self, alpha};
 use crate::gpui_ui::{DashAction, RootView, Tokens};
 use crate::workspace::{InstanceStatus, WorkspaceId};
 
-use super::CardSnapshot;
+use super::{CardSnapshot, InputKind};
 
 /// Column widths (px) for the fixed columns; Directory + Last prompt flex.
 const W_AGENT: f32 = 92.0;
@@ -20,13 +20,18 @@ const W_STATE: f32 = 110.0;
 const W_CLOCK: f32 = 64.0;
 const W_TPS: f32 = 52.0;
 const W_COST: f32 = 56.0;
-const W_ACTIONS: f32 = 120.0;
+const W_ACTIONS: f32 = 184.0;
 
 #[derive(IntoElement)]
 pub struct FleetTable {
     pub t: Tokens,
     pub rows: Vec<CardSnapshot>,
     pub root: Entity<RootView>,
+    /// The one open inline input (steer / new prompt), if it's for a row here.
+    pub input: Option<(WorkspaceId, InputKind, String, bool)>,
+    pub input_focus: FocusHandle,
+    /// A row awaiting a busy-close confirmation.
+    pub close_confirm: Option<WorkspaceId>,
 }
 
 impl RenderOnce for FleetTable {
@@ -68,8 +73,75 @@ impl RenderOnce for FleetTable {
                     .child(head("Cost", Some(W_COST)))
                     .child(head("", Some(W_ACTIONS))),
             )
-            .children(self.rows.into_iter().map(|snap| row(&t, snap, &self.root)))
+            .children(self.rows.into_iter().map(|snap| {
+                let id = snap.id;
+                let name = snap.name.clone();
+                // The active inline input (if any) and busy-close confirm both
+                // expand BELOW the dense row — the row itself stays one line.
+                let inline = self
+                    .input
+                    .as_ref()
+                    .filter(|(iid, ..)| *iid == id)
+                    .map(|(_, kind, text, queue)| (*kind, text.clone(), *queue));
+                let confirming = self.close_confirm == Some(id);
+                let main = row(&t, snap, &self.root);
+                let extra: Option<AnyElement> = if confirming {
+                    Some(close_confirm_bar(&t, id, &name, &self.root))
+                } else {
+                    inline.map(|(kind, text, queue)| {
+                        super::inline_input_row(
+                            &t,
+                            id,
+                            kind,
+                            &text,
+                            queue,
+                            &self.root,
+                            &self.input_focus,
+                        )
+                    })
+                };
+                div().flex().flex_col().child(main).children(extra)
+            }))
     }
+}
+
+/// Inline "<name> is still running" End/Keep bar shown under a List row when
+/// closing a busy puppy (mirrors the grid card's header confirm).
+fn close_confirm_bar(
+    t: &Tokens,
+    id: WorkspaceId,
+    name: &str,
+    root: &Entity<RootView>,
+) -> AnyElement {
+    let root_end = root.clone();
+    let root_keep = root.clone();
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .py_1p5()
+        .bg(alpha(t.error, 0.08))
+        .border_t_1()
+        .border_color(t.line_soft)
+        .child(
+            div()
+                .flex_1()
+                .text_size(px(11.5))
+                .text_color(t.error)
+                .child(format!("{name} is still running")),
+        )
+        .child(
+            widgets::btn(t, "End").id(("row-close-yes", id.0)).on_click(move |_, _, cx| {
+                root_end.update(cx, |r, cx| r.dispatch(DashAction::CloseWorkspace(id), cx));
+            }),
+        )
+        .child(
+            widgets::btn(t, "Keep").id(("row-close-no", id.0)).on_click(move |_, _, cx| {
+                root_keep.update(cx, |r, cx| r.dispatch(DashAction::CancelCloseWorkspace, cx));
+            }),
+        )
+        .into_any_element()
 }
 
 fn row(t: &Tokens, s: CardSnapshot, root: &Entity<RootView>) -> AnyElement {
@@ -116,10 +188,21 @@ fn row(t: &Tokens, s: CardSnapshot, root: &Entity<RootView>) -> AnyElement {
             })
             .into_any_element()
     };
+    // Inline input toggles need the window (focus), so they're separate.
+    let toggle = |label: &str, key: &'static str, kind: InputKind| {
+        let root = root.clone();
+        widgets::btn(t, label)
+            .id((key, id.0))
+            .on_click(move |_, window, cx| {
+                root.update(cx, |r, cx| r.toggle_input(id, kind, window, cx));
+            })
+            .into_any_element()
+    };
     match s.status {
         InstanceStatus::Running | InstanceStatus::Thinking | InstanceStatus::ToolCalling => {
             acts.push(icon("\u{23f8}", "row-pause", DashAction::Pause(id)));
             acts.push(icon("\u{23f9}", "row-stop", DashAction::Stop(id)));
+            acts.push(toggle("\u{1f3af}", "row-steer", InputKind::Steer));
         }
         InstanceStatus::Paused => {
             acts.push(icon("\u{25b6}", "row-resume", DashAction::Resume(id)));
@@ -128,9 +211,14 @@ fn row(t: &Tokens, s: CardSnapshot, root: &Entity<RootView>) -> AnyElement {
         InstanceStatus::Dead => {
             acts.push(icon("\u{21bb}", "row-restart", DashAction::Restart(id)));
         }
+        InstanceStatus::Idle => {
+            acts.push(toggle("\u{2709}", "row-send", InputKind::Send));
+        }
         _ => {}
     }
     acts.push(icon("\u{2192}", "row-open", DashAction::Open(id)));
+    // Close this workspace (resting closes now; busy arms the confirm bar).
+    acts.push(icon("\u{2715}", "row-close", DashAction::RequestCloseWorkspace(id)));
 
     div()
         .id(("fleet-row", id.0))

@@ -1179,6 +1179,11 @@ impl RootView {
             input.text.pop();
         } else if let Some(text) = clip {
             input.text.push_str(&text);
+        } else if ks.key == "space" {
+            // gpui leaves `key_char` empty for the space key on some
+            // platforms, so the printable branch below would drop it —
+            // handle it explicitly (the spacebar bug).
+            input.text.push(' ');
         } else if !ks.modifiers.platform
             && !ks.modifiers.control
             && let Some(ch) = &ks.key_char

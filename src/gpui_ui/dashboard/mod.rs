@@ -16,14 +16,16 @@ pub use header::{attention_banner, pack_header, segmented};
 
 use std::time::Instant;
 
-use gpui::{AnyElement, Entity, IntoElement, ParentElement as _, Rgba, Styled as _, div, px};
+use gpui::{
+    AnyElement, Entity, FocusHandle, IntoElement, KeyDownEvent, Rgba, div, prelude::*, px,
+};
 
 use crate::session::DashboardViewMode;
 use crate::supervisor::Supervisor;
 use crate::workspace::{InstanceStatus, Workspace, WorkspaceId};
 
 use super::widgets;
-use super::{RootView, Tokens};
+use super::{DashAction, RootView, Tokens};
 
 /// Card grid: minimum card width before a row wraps (mock: minmax(420px,1fr)).
 const CARD_MIN_W: f32 = 420.0;
@@ -322,6 +324,9 @@ pub fn fleet(
             t: *t,
             rows: cards,
             root: root.clone(),
+            input,
+            input_focus: input_focus.clone(),
+            close_confirm,
         }
         .into_any_element(),
         DashboardViewMode::Grid => div()
@@ -358,6 +363,115 @@ pub fn fleet(
             }))
             .into_any_element(),
     }
+}
+
+/// The expanded steer / new-prompt input row, shared by the Grid card and
+/// the List table so both can send a prompt / steer inline (#5 feedback).
+/// Minimal key handling (chars, space, backspace, paste, Enter, Escape) —
+/// the full IME-aware input lands with the 2.3 composer.
+pub fn inline_input_row(
+    t: &Tokens,
+    id: WorkspaceId,
+    kind: InputKind,
+    text: &str,
+    queue: bool,
+    root: &Entity<RootView>,
+    focus: &FocusHandle,
+) -> AnyElement {
+    let t = *t;
+    let (tag, hint, send_label) = match kind {
+        InputKind::Steer => ("STEER", "Nudge this agent mid-task\u{2026}", "Nudge"),
+        InputKind::Send => ("SEND", "Send a new prompt\u{2026}", "Send"),
+    };
+    let shown: AnyElement = if text.is_empty() {
+        div()
+            .text_color(t.dim)
+            .child(hint.to_string())
+            .into_any_element()
+    } else {
+        div()
+            .text_color(t.text)
+            .child(format!("{text}\u{258f}"))
+            .into_any_element()
+    };
+    let key_root = root.clone();
+    let steer_root = root.clone();
+    let send_root = root.clone();
+    div()
+        .id(("card-input", id.0))
+        .track_focus(focus)
+        .on_key_down(move |ev: &KeyDownEvent, _, cx| {
+            let ks = &ev.keystroke;
+            let action = if ks.key == "enter" {
+                Some(DashAction::SubmitInput)
+            } else if ks.key == "escape" {
+                Some(DashAction::CloseInput)
+            } else {
+                None
+            };
+            if let Some(a) = action {
+                key_root.update(cx, |r, cx| r.dispatch(a, cx));
+                return;
+            }
+            key_root.update(cx, |r, cx| r.edit_input(ks, cx));
+        })
+        .flex()
+        .items_center()
+        .gap_2()
+        .px_2()
+        .py_1p5()
+        .rounded(px(9.))
+        .bg(t.well)
+        .border_1()
+        .border_color(widgets::alpha(t.accent, 0.5))
+        .child(
+            div()
+                .font_family("JetBrains Mono")
+                .text_size(px(9.5))
+                .text_color(t.accent)
+                .child(tag),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .font_family("JetBrains Mono")
+                .text_size(px(12.))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .child(shown),
+        )
+        .children((kind == InputKind::Steer).then(|| {
+            let mk = |label: &str, on: bool, q: bool, idx: u64| {
+                let root = steer_root.clone();
+                div()
+                    .id(("steer-mode", id.0 * 2 + idx))
+                    .px_1p5()
+                    .py_0p5()
+                    .rounded(px(6.))
+                    .text_size(px(10.5))
+                    .cursor_pointer()
+                    .when(on, |d| d.bg(widgets::alpha(t.accent, 0.18)).text_color(t.accent))
+                    .when(!on, |d| d.text_color(t.weak))
+                    .child(label.to_string())
+                    .on_click(move |_, _, cx| {
+                        root.update(cx, |r, cx| r.dispatch(DashAction::SetSteerQueue(q), cx));
+                    })
+            };
+            div()
+                .flex()
+                .gap_0p5()
+                .child(mk("\u{1f3af} now", !queue, false, 0))
+                .child(mk("\u{1f4e8} queue", queue, true, 1))
+        }))
+        .child(
+            widgets::primary_btn(&t, send_label)
+                .id(("card-input-send", id.0))
+                .on_click(move |_, _, cx| {
+                    send_root.update(cx, |r, cx| r.dispatch(DashAction::SubmitInput, cx));
+                }),
+        )
+        .into_any_element()
 }
 
 #[allow(clippy::too_many_arguments)]

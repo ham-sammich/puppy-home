@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use gpui::{
     Animation, AnimationExt as _, AnyElement, ClickEvent, Entity, FocusHandle, FontWeight,
-    IntoElement, KeyDownEvent, ParentElement as _, RenderOnce, Styled as _, Window, div,
+    IntoElement, ParentElement as _, RenderOnce, Styled as _, Window, div,
     ease_in_out, prelude::*, px, relative,
 };
 
@@ -430,106 +430,19 @@ impl AgentCard {
     /// backspace, paste, Enter, Escape) — the full IME-aware input lands with
     /// the 2.3 composer (see GPUI_NOTES.md).
     fn inline_input(&self) -> AnyElement {
-        let t = self.t;
         let Some((kind, text, queue)) = &self.inline else {
             return div().into_any_element();
         };
-        let id = self.snap.id;
-        let (tag, hint, send_label) = match kind {
-            InputKind::Steer => ("STEER", "Nudge this agent mid-task\u{2026}", "Nudge"),
-            InputKind::Send => ("SEND", "Send a new prompt\u{2026}", "Send"),
-        };
-        let root = self.root.clone();
-        let shown: AnyElement = if text.is_empty() {
-            div()
-                .text_color(t.dim)
-                .child(hint.to_string())
-                .into_any_element()
-        } else {
-            div()
-                .text_color(t.text)
-                .child(format!("{text}\u{258f}"))
-                .into_any_element()
-        };
-        let key_root = self.root.clone();
-        let row = div()
-            .id(("card-input", id.0))
-            .track_focus(&self.input_focus)
-            .on_key_down(move |ev: &KeyDownEvent, _, cx| {
-                let ks = &ev.keystroke;
-                let action = if ks.key == "enter" {
-                    Some(DashAction::SubmitInput)
-                } else if ks.key == "escape" {
-                    Some(DashAction::CloseInput)
-                } else {
-                    None
-                };
-                if let Some(a) = action {
-                    key_root.update(cx, |r, cx| r.dispatch(a, cx));
-                    return;
-                }
-                key_root.update(cx, |r, cx| r.edit_input(ks, cx));
-            })
-            .flex()
-            .items_center()
-            .gap_2()
-            .px_2()
-            .py_1p5()
-            .rounded(px(9.))
-            .bg(t.well)
-            .border_1()
-            .border_color(alpha(t.accent, 0.5))
-            .child(
-                div()
-                    .font_family("JetBrains Mono")
-                    .text_size(px(9.5))
-                    .text_color(t.accent)
-                    .child(tag),
-            )
-            .child(
-                div()
-                    .min_w_0()
-                    .flex_1()
-                    .font_family("JetBrains Mono")
-                    .text_size(px(12.))
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .child(shown),
-            )
-            .children((*kind == InputKind::Steer).then(|| {
-                let mk = |label: &str, on: bool, q: bool, idx: u64| {
-                    let root = root.clone();
-                    div()
-                        .id(("steer-mode", id.0 * 2 + idx))
-                        .px_1p5()
-                        .py_0p5()
-                        .rounded(px(6.))
-                        .text_size(px(10.5))
-                        .cursor_pointer()
-                        .when(on, |d| d.bg(alpha(t.accent, 0.18)).text_color(t.accent))
-                        .when(!on, |d| d.text_color(t.weak))
-                        .child(label.to_string())
-                        .on_click(move |_, _, cx| {
-                            root.update(cx, |r, cx| r.dispatch(DashAction::SetSteerQueue(q), cx));
-                        })
-                };
-                div()
-                    .flex()
-                    .gap_0p5()
-                    .child(mk("\u{1f3af} now", !queue, false, 0))
-                    .child(mk("\u{1f4e8} queue", *queue, true, 1))
-            }))
-            .child(
-                widgets::primary_btn(&t, send_label)
-                    .id(("card-input-send", id.0))
-                    .on_click({
-                        let root = self.root.clone();
-                        move |_, _, cx| {
-                            root.update(cx, |r, cx| r.dispatch(DashAction::SubmitInput, cx));
-                        }
-                    }),
-            );
-        row.into_any_element()
+        // Shared with the List table (single source of truth, #5 feedback).
+        super::inline_input_row(
+            &self.t,
+            self.snap.id,
+            *kind,
+            text,
+            *queue,
+            &self.root,
+            &self.input_focus,
+        )
     }
 
     /// State-dependent actions left, Changes + Open right.
