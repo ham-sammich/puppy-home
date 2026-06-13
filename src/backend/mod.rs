@@ -250,6 +250,38 @@ pub struct SubAgentInfo {
     pub elapsed: f64,
 }
 
+/// The `/context` breakdown the sidecar forwards on each status tick:
+/// conversation history (`used_tokens`) + fixed overhead (split into the
+/// system-prompt / AGENTS.md / tools / MCP / kennel buckets) over the
+/// model's `capacity`, plus the compaction-trigger threshold. All `None`
+/// (absent) when code_puppy can't estimate — honesty over a fake zero.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ContextBreakdown {
+    #[serde(default)]
+    pub percent: f64,
+    #[serde(default)]
+    pub used_tokens: u64,
+    #[serde(default)]
+    pub overhead_tokens: u64,
+    #[serde(default)]
+    pub total_tokens: u64,
+    #[serde(default)]
+    pub capacity: u64,
+    #[serde(default)]
+    pub system_prompt_tokens: u64,
+    #[serde(default)]
+    pub agents_md_tokens: u64,
+    #[serde(default)]
+    pub pydantic_tools_tokens: u64,
+    #[serde(default)]
+    pub mcp_tokens: u64,
+    #[serde(default)]
+    pub kennel_memory_tokens: u64,
+    /// Compaction fires at this fraction of capacity (default 0.85).
+    #[serde(default)]
+    pub compaction_threshold: f64,
+}
+
 /// One selectable option in an interactive question.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AskOption {
@@ -354,6 +386,8 @@ pub enum UiEvent {
         /// Context-window utilization 0–100 (the sidecar delegates to Code
         /// Puppy's own /context estimator); `None` when unknowable.
         ctx_pct: Option<f64>,
+        /// Full /context breakdown for the popover; `None` when unknowable.
+        ctx: Option<ContextBreakdown>,
         /// Cumulative $ cost — priced from the library's bundled models.dev
         /// snapshot; `None` means unknown (e.g. subscription models), not free.
         cost: Option<f64>,
@@ -508,6 +542,8 @@ enum Wire {
         #[serde(default)]
         ctx_pct: Option<f64>,
         #[serde(default)]
+        ctx: Option<ContextBreakdown>,
+        #[serde(default)]
         cost: Option<f64>,
         #[serde(default)]
         cost_estimated: bool,
@@ -646,6 +682,7 @@ impl From<Wire> for UiEvent {
                 last_prompt,
                 total_tokens,
                 ctx_pct,
+                ctx,
                 cost,
                 cost_estimated,
             } => UiEvent::Status {
@@ -657,6 +694,7 @@ impl From<Wire> for UiEvent {
                 last_prompt,
                 total_tokens,
                 ctx_pct,
+                ctx,
                 cost,
                 cost_estimated,
             },
@@ -1436,6 +1474,7 @@ mod tests {
                 last_prompt,
                 total_tokens,
                 ctx_pct,
+                ctx,
                 cost,
                 cost_estimated,
             } => {
@@ -1449,6 +1488,7 @@ mod tests {
                 assert_eq!(total_tokens, 0);
                 // Phase-F fields also default cleanly on old payloads.
                 assert_eq!(ctx_pct, None);
+                assert_eq!(ctx, None);
                 assert_eq!(cost, None);
                 assert!(!cost_estimated);
             }
@@ -1497,6 +1537,26 @@ mod tests {
                 assert_eq!(ctx_pct, Some(37.5));
                 assert_eq!(cost, Some(0.1234));
                 assert!(cost_estimated);
+            }
+            other => panic!("expected Status, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn status_event_parses_ctx_breakdown() {
+        // The /context popover's data: buckets + capacity + threshold.
+        let ev = decode(
+            r#"{"event":"status","stats":"","token_rate":0.0,"sub_agents":[],"ctx_pct":42.0,"ctx":{"percent":42.0,"used_tokens":1000,"overhead_tokens":3000,"total_tokens":4000,"capacity":10000,"system_prompt_tokens":1500,"agents_md_tokens":500,"pydantic_tools_tokens":700,"mcp_tokens":300,"kennel_memory_tokens":0,"compaction_threshold":0.85}}"#,
+        );
+        match ev {
+            UiEvent::Status { ctx, .. } => {
+                let c = ctx.expect("breakdown present");
+                assert_eq!(c.used_tokens, 1000);
+                assert_eq!(c.overhead_tokens, 3000);
+                assert_eq!(c.capacity, 10000);
+                assert_eq!(c.system_prompt_tokens, 1500);
+                assert_eq!(c.pydantic_tools_tokens, 700);
+                assert!((c.compaction_threshold - 0.85).abs() < f64::EPSILON);
             }
             other => panic!("expected Status, got {other:?}"),
         }

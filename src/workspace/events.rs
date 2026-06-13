@@ -163,6 +163,7 @@ impl Workspace {
                 last_prompt,
                 total_tokens,
                 ctx_pct,
+                ctx,
                 cost,
                 cost_estimated,
             } => {
@@ -174,6 +175,7 @@ impl Workspace {
                 self.last_prompt = last_prompt;
                 self.total_tokens = total_tokens;
                 self.ctx_pct = ctx_pct;
+                self.ctx = ctx;
                 self.cost = cost;
                 self.cost_estimated = cost_estimated;
                 self.sync_paused(paused);

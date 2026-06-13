@@ -28,6 +28,8 @@ pub enum ChatPop {
     Context(WorkspaceId),
     /// Composer general slash-command menu (left of the input box).
     Commands(WorkspaceId),
+    /// Composer ctx chip popover: the full /context breakdown (#2).
+    CtxInfo(WorkspaceId),
 }
 
 /// Every dashboard interaction, funneled through [`RootView::dispatch`].

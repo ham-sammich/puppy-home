@@ -16,7 +16,9 @@ use std::time::Instant;
 
 use egui_commonmark::CommonMarkCache;
 
-use crate::backend::{AgentInfo, CodePuppy, CommandInfo, CompletionItem, ModelInfo, UiEvent};
+use crate::backend::{
+    AgentInfo, CodePuppy, CommandInfo, CompletionItem, ContextBreakdown, ModelInfo, UiEvent,
+};
 
 mod ask;
 mod chat;
@@ -154,6 +156,9 @@ pub struct Workspace {
     /// Context-window utilization 0–100 (sidecar /context estimate); `None`
     /// when unknowable. Drives the card's context-progress bar.
     pub ctx_pct: Option<f64>,
+    /// Full /context breakdown (buckets + capacity + compaction threshold)
+    /// for the composer's clickable ctx popover; `None` when unknowable.
+    pub ctx: Option<ContextBreakdown>,
     /// Cumulative $ cost (estimated from bundled models.dev pricing);
     /// `None` means unknown — render "—", never $0.00.
     pub cost: Option<f64>,
@@ -362,6 +367,7 @@ impl Workspace {
             queued_steers: 0,
             total_tokens: 0,
             ctx_pct: None,
+            ctx: None,
             cost: None,
             cost_estimated: false,
             sparks: state::SparkRing::new(state::SPARK_SAMPLES),

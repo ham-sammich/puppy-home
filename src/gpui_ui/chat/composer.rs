@@ -5,7 +5,7 @@
 
 use gpui::{
     AnyElement, Entity, FontWeight, IntoElement, ParentElement as _, Styled as _, div, prelude::*,
-    px,
+    px, relative,
 };
 
 use crate::backend::{CommandInfo, CompletionItem};
@@ -350,6 +350,7 @@ fn status_line(args: &ComposerArgs) -> AnyElement {
 fn ctx_chip(args: &ComposerArgs) -> Option<AnyElement> {
     let t = args.t;
     let pct = args.ws.ctx_pct?;
+    let id = args.ws.id;
     let color = if pct < 60.0 {
         t.weak
     } else if pct < 85.0 {
@@ -357,16 +358,195 @@ fn ctx_chip(args: &ComposerArgs) -> Option<AnyElement> {
     } else {
         t.error
     };
+    let open = matches!(args.pop, Some(ChatPop::CtxInfo(p)) if *p == id);
+    let root = args.root.clone();
+    let chip = div()
+        .id(("ctx-chip", id.0))
+        .font_family("JetBrains Mono")
+        .text_size(px(10.5))
+        .text_color(color)
+        .cursor_pointer()
+        .hover(|d| d.text_color(t.text))
+        .child(format!("ctx {pct:.0}% \u{25be}"))
+        .tooltip(widgets::text_tip(
+            "context window \u{b7} click for the full breakdown".to_string(),
+        ))
+        .on_click(move |_, _, cx| {
+            root.update(cx, |r, cx| {
+                r.dispatch(DashAction::ToggleChatPop(ChatPop::CtxInfo(id)), cx)
+            });
+        });
     Some(
         div()
-            .id(("ctx-chip", args.ws.id.0))
-            .font_family("JetBrains Mono")
-            .text_size(px(10.5))
-            .text_color(color)
-            .child(format!("ctx {pct:.0}%"))
-            .tooltip(widgets::text_tip(format!("context window {pct:.0}% full")))
+            .relative()
+            .child(chip)
+            .children(open.then(|| ctx_popover(args)))
             .into_any_element(),
     )
+}
+
+/// The clickable ctx-chip's popover: code_puppy's `/context` view, native.
+/// A tri-zone bar (overhead | conversation | free) with the compaction
+/// marker, then per-bucket token rows. Honest about the estimate — these
+/// are the same chars/2.5 numbers the `/context` command prints.
+fn ctx_popover(args: &ComposerArgs) -> AnyElement {
+    let t = args.t;
+    let root = args.root.clone();
+    let close = move |panel: gpui::Div| {
+        let root = root.clone();
+        panel.on_mouse_down_out(move |_, _, cx| {
+            root.update(cx, |r, cx| r.dispatch(DashAction::CloseChatPop, cx));
+        })
+    };
+    let Some(c) = args.ws.ctx.clone() else {
+        // Chip shows a % (ctx_pct) but the breakdown hasn't arrived — be
+        // honest rather than render an empty skeleton.
+        let panel = close(div())
+            .occlude()
+            .absolute()
+            .bottom(px(24.))
+            .left_0()
+            .w(px(240.))
+            .p_3()
+            .rounded(px(10.))
+            .bg(t.panel)
+            .border_1()
+            .border_color(t.line_soft)
+            .shadow_lg()
+            .child(
+                div()
+                    .text_size(px(11.5))
+                    .text_color(t.weak)
+                    .child("context breakdown loading\u{2026}"),
+            );
+        return gpui::deferred(panel).with_priority(100).into_any_element();
+    };
+
+    let cap = c.capacity.max(1) as f32;
+    let overhead_frac = (c.overhead_tokens as f32 / cap).clamp(0.0, 1.0);
+    let msg_frac = (c.used_tokens as f32 / cap).clamp(0.0, 1.0);
+    let thr = (c.compaction_threshold as f32).clamp(0.0, 1.0);
+    let free = c.capacity.saturating_sub(c.total_tokens);
+
+    let bar = div()
+        .relative()
+        .h(px(9.))
+        .w_full()
+        .rounded_full()
+        .bg(t.well)
+        .overflow_hidden()
+        .child(
+            div()
+                .flex()
+                .h_full()
+                .w_full()
+                .child(div().h_full().w(relative(overhead_frac)).bg(alpha(t.wait, 0.75)))
+                .child(div().h_full().w(relative(msg_frac)).bg(t.accent)),
+        )
+        .child(
+            // Compaction-trigger marker (code_puppy's `\u{2503}` glyph).
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(relative(thr))
+                .w(px(2.))
+                .bg(t.error),
+        );
+
+    let row = move |label: &str, tokens: u64, dot: gpui::Rgba| {
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(div().size(px(8.)).rounded_full().bg(dot))
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(px(11.))
+                    .text_color(t.text)
+                    .child(label.to_string()),
+            )
+            .child(
+                div()
+                    .font_family("JetBrains Mono")
+                    .text_size(px(10.5))
+                    .text_color(t.weak)
+                    .child(widgets::fmt_k(tokens)),
+            )
+            .into_any_element()
+    };
+
+    let panel = close(div())
+        .occlude()
+        .absolute()
+        .bottom(px(24.))
+        .left_0()
+        .w(px(300.))
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_3()
+        .rounded(px(10.))
+        .bg(t.panel)
+        .border_1()
+        .border_color(t.line_soft)
+        .shadow_lg()
+        .child(
+            div()
+                .flex()
+                .items_baseline()
+                .gap_1p5()
+                .child(
+                    div()
+                        .text_size(px(12.5))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(t.text)
+                        .child("Context window"),
+                )
+                .child(div().flex_1())
+                .child(
+                    div()
+                        .font_family("JetBrains Mono")
+                        .text_size(px(11.))
+                        .text_color(t.weak)
+                        .child(format!("{:.0}%", c.percent)),
+                ),
+        )
+        .child(bar)
+        .child(
+            div()
+                .font_family("JetBrains Mono")
+                .text_size(px(10.))
+                .text_color(t.dim)
+                .child(format!(
+                    "{} / {} tokens \u{b7} {} free",
+                    widgets::fmt_k(c.total_tokens),
+                    widgets::fmt_k(c.capacity),
+                    widgets::fmt_k(free),
+                )),
+        )
+        .child(div().h(px(1.)).w_full().bg(t.line_soft))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(row("Conversation", c.used_tokens, t.accent))
+                .child(row("System prompt", c.system_prompt_tokens, alpha(t.wait, 0.75)))
+                .child(row("AGENTS.md", c.agents_md_tokens, alpha(t.wait, 0.6)))
+                .child(row("Tools", c.pydantic_tools_tokens, alpha(t.wait, 0.45)))
+                .child(row("MCP servers", c.mcp_tokens, alpha(t.wait, 0.35)))
+                .child(row("Kennel memory", c.kennel_memory_tokens, alpha(t.wait, 0.25))),
+        )
+        .child(
+            div()
+                .font_family("JetBrains Mono")
+                .text_size(px(9.5))
+                .text_color(t.dim)
+                .child(format!("\u{2503} compaction @ {:.0}%", thr * 100.0)),
+        );
+    gpui::deferred(panel).with_priority(100).into_any_element()
 }
 
 /// A command is "context/history" (lives in the pill next to the ctx chip)

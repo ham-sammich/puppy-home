@@ -550,6 +550,7 @@ class Bridge:
             pass
 
         cost, cost_estimated = self._cost_estimate()
+        ctx = self._ctx_payload()
         send({
             "event": "status",
             "stats": stats,
@@ -559,7 +560,10 @@ class Bridge:
             "queued": queued,
             "last_prompt": self.last_prompt,
             "total_tokens": self.total_tokens,
-            "ctx_pct": self._ctx_pct(),
+            # `ctx_pct` stays for back-compat (chip color); `ctx` carries the
+            # full per-bucket breakdown for the /context-style popover.
+            "ctx_pct": (ctx or {}).get("percent"),
+            "ctx": ctx,
             # Estimated from the library's bundled models.dev snapshot when
             # the active model is priced there; null = unknown, not free
             # (e.g. subscription models have no per-token price at all).
@@ -567,22 +571,40 @@ class Bridge:
             "cost_estimated": cost_estimated,
         })
 
-    def _ctx_pct(self):
-        """Context-window utilization (0-100) or None when unknowable.
+    def _ctx_payload(self):
+        """Full context-window breakdown, or None when unknowable.
 
         Delegates to Code Puppy's own /context plugin estimator
         (``context_indicator.usage.get_current_usage``): raw chars/2.5
-        heuristic + overhead breakdown over the model's context length,
-        deliberately immune to the token_ratio_learner monkeypatch so the
-        number is stable across model switches. It returns None on any
-        missing piece — we forward that honesty as null.
+        heuristic + per-bucket overhead breakdown over the model's context
+        length, deliberately immune to the token_ratio_learner monkeypatch so
+        the number is stable across model switches. It returns None on any
+        missing piece — we forward that honesty as null. The GUI's chip color
+        reads ``percent``; the popover reads the buckets + compaction marker.
         """
         try:
             from code_puppy.plugins.context_indicator.usage import get_current_usage
             u = get_current_usage()
             if u is None:
                 return None
-            return round(max(0.0, min(100.0, float(u.percent))), 1)
+            try:
+                from code_puppy.config import get_compaction_threshold
+                threshold = float(get_compaction_threshold())
+            except Exception:
+                threshold = 0.85
+            return {
+                "percent": round(max(0.0, min(100.0, float(u.percent))), 1),
+                "used_tokens": int(u.used_tokens),
+                "overhead_tokens": int(u.overhead_tokens),
+                "total_tokens": int(u.total_tokens),
+                "capacity": int(u.capacity),
+                "system_prompt_tokens": int(u.system_prompt_tokens),
+                "agents_md_tokens": int(u.agents_md_tokens),
+                "pydantic_tools_tokens": int(u.pydantic_tools_tokens),
+                "mcp_tokens": int(u.mcp_tokens),
+                "kennel_memory_tokens": int(u.kennel_memory_tokens),
+                "compaction_threshold": threshold,
+            }
         except Exception:
             return None
 
