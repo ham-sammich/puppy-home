@@ -92,7 +92,7 @@ pub fn run() {
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
-                    title: Some(SharedString::from("Code Puppy")),
+                    title: Some(SharedString::from("Doghouse")),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -1426,35 +1426,69 @@ impl RootView {
             .flex_wrap()
             .items_center()
             .gap_2()
-            // Doghouse (this app) version, LEFT of the brand — distinct
-            // from the code_puppy engine version chip on the right (P3).
+            // Brand first, then the two version chips to its right. Each
+            // chip is prefixed so they can't be confused; both open the
+            // About panel (which spells out the full labels). P3.
             .child(
                 div()
-                    .id("tb-app-version")
-                    .px_1p5()
-                    .py_0p5()
-                    .rounded_md()
-                    .bg(t.card)
-                    .border_1()
-                    .border_color(t.line_soft)
-                    .text_size(px(10.5))
-                    .text_color(t.weak)
-                    .cursor_pointer()
-                    .tooltip(widgets::text_tip(
-                        "Doghouse (this app) version — click for details".into(),
-                    ))
-                    .child(format!("v{}", crate::plugin::HOST_VERSION))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.dispatch(DashAction::About(about::AboutAction::Toggle), cx)
-                    })),
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .text_size(px(15.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(t.text)
+                            .child("\u{1f3e0} Doghouse"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(t.weak)
+                            .child(format!("Home for {}", self.puppy_name())),
+                    ),
             )
-            .child(
+            .child({
+                let ver_chip = |id: &'static str, label: String, tip: &'static str| {
+                    div()
+                        .id(id)
+                        .px_1p5()
+                        .py_0p5()
+                        .rounded_md()
+                        .bg(t.card)
+                        .border_1()
+                        .border_color(t.line_soft)
+                        .text_size(px(10.5))
+                        .text_color(t.weak)
+                        .cursor_pointer()
+                        .tooltip(widgets::text_tip(tip.into()))
+                        .child(label)
+                };
+                let cp = self.cp_version_label();
                 div()
-                    .text_size(px(15.))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(t.text)
-                    .child("\u{1f43e} Code Puppy"),
-            )
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        ver_chip(
+                            "tb-app-version",
+                            format!("app v{}", crate::plugin::HOST_VERSION),
+                            "Doghouse (this app) version — click for details",
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.dispatch(DashAction::About(about::AboutAction::Toggle), cx)
+                        })),
+                    )
+                    .child(
+                        ver_chip(
+                            "tb-about",
+                            format!("cp {}", if cp.is_empty() { "v?".into() } else { format!("v{cp}") }),
+                            "code_puppy (agent engine) version + updates",
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.dispatch(DashAction::About(about::AboutAction::Toggle), cx)
+                        })),
+                    )
+            })
             .child(
                 div()
                     .px_2()
@@ -1521,24 +1555,6 @@ impl RootView {
                         cx.listener(|this, _, _, cx| this.dispatch(DashAction::PerfToggle, cx)),
                     ),
             )
-            .child({
-                let ver = self.cp_version_label();
-                widgets::btn(
-                    t,
-                    &if ver.is_empty() {
-                        "v?".to_string()
-                    } else {
-                        format!("v{ver}")
-                    },
-                )
-                .id("tb-about")
-                .tooltip(widgets::text_tip(
-                    "code_puppy (agent engine) version + updates".into(),
-                ))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.dispatch(DashAction::About(about::AboutAction::Toggle), cx)
-                }))
-            })
             .child(
                 widgets::btn(t, "MCP")
                     .id("tb-mcp")
