@@ -162,6 +162,9 @@ pub struct RootView {
     expanded_dirs: HashSet<(u64, PathBuf)>,
     /// Focus the chat input on the next render (set when a chat opens).
     pending_focus: Option<WorkspaceId>,
+    /// Focus the tree-op name input on the next render (set when a
+    /// rename/new-file/new-folder op is armed, so the caret shows up).
+    pending_tree_focus: bool,
     /// `PUPPY_GPUI_SCREEN=chat`: auto-open the first ready workspace's chat
     /// (probe instrumentation, like PUPPY_GPUI_PROMPT).
     probe_chat_screen: bool,
@@ -379,6 +382,7 @@ impl RootView {
             hidden_mode: saved.hidden_mode,
             expanded_dirs: HashSet::new(),
             pending_focus: None,
+            pending_tree_focus: false,
             probe_chat_screen: std::env::var("PUPPY_GPUI_SCREEN").as_deref() == Ok("chat"),
             answer_input: None,
             other_target: None,
@@ -1675,6 +1679,12 @@ impl Render for RootView {
         // One-shot: focus the composer when a chat was just opened.
         if let Some(id) = self.pending_focus.take()
             && let Some(input) = self.chat_inputs.get(&id)
+        {
+            window.focus(&input.read(cx).focus_handle(cx));
+        }
+        // One-shot: focus the tree-op name input when an op was just armed.
+        if std::mem::take(&mut self.pending_tree_focus)
+            && let Some(input) = &self.tree_op_input
         {
             window.focus(&input.read(cx).focus_handle(cx));
         }

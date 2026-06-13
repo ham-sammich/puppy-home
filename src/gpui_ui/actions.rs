@@ -702,6 +702,7 @@ impl RootView {
                 }
                 self.tree_op = Some(TreeOp::Rename(id, path));
                 self.tree_delete_confirm = None;
+                self.pending_tree_focus = true;
             }
             DashAction::TreeNew(id, parent, is_dir) => {
                 self.ensure_tree_op_input(cx);
@@ -710,6 +711,7 @@ impl RootView {
                 }
                 self.tree_op = Some(TreeOp::New(id, parent, is_dir));
                 self.tree_delete_confirm = None;
+                self.pending_tree_focus = true;
             }
             DashAction::TreeOpSubmit => {
                 let Some(op) = self.tree_op.take() else {

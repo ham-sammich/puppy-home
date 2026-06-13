@@ -938,18 +938,26 @@ impl gpui::Element for TextElement {
 
         let mut selections = Vec::new();
         let mut cursor = None;
-        if !placeholder {
-            if selected_range.is_empty() {
-                if let Some(p) = layout.pos_for_offset(cursor_offset) {
-                    cursor = Some(fill(
-                        Bounds::new(
-                            point(bounds.left() + p.x, bounds.top() + p.y),
-                            size(px(2.), layout.line_height),
-                        ),
-                        t.accent,
-                    ));
-                }
-            } else if let (Some(p1), Some(p2)) = (
+        // The caret is drawn whenever there's no selection — INCLUDING an
+        // empty input (placeholder shown). Otherwise a freshly-focused empty
+        // box gives no "you are here" signal until the first keystroke.
+        if selected_range.is_empty() {
+            // Empty content: anchor the caret at the input's start instead of
+            // the (dimmed) placeholder glyph positions.
+            let p = if placeholder {
+                point(px(0.), px(0.))
+            } else {
+                layout.pos_for_offset(cursor_offset).unwrap_or(point(px(0.), px(0.)))
+            };
+            cursor = Some(fill(
+                Bounds::new(
+                    point(bounds.left() + p.x, bounds.top() + p.y),
+                    size(px(2.), layout.line_height),
+                ),
+                t.accent,
+            ));
+        } else if !placeholder {
+            if let (Some(p1), Some(p2)) = (
                 layout.pos_for_offset(selected_range.start),
                 layout.pos_for_offset(selected_range.end),
             ) {
