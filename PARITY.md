@@ -755,3 +755,4 @@ More views
 *Cross-checked against the egui branch's `src/views/` + `src/workspace/`
 module trees on 2026-06-12. Items marked ADDED were not in the approved
 phase list but exist in the egui app and not in `gpui_ui/`.*
+testing file change

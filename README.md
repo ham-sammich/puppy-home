@@ -1,5 +1,5 @@
 # puppy-home
-
+Testing
 A native **windowed** AI agent application written in Rust — an IDE-like shell
 around **Code Puppy**
 ([mpfaffenberger/code_puppy](https://github.com/mpfaffenberger/code_puppy)),
