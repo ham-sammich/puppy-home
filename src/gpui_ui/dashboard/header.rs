@@ -31,7 +31,7 @@ pub fn pack_header(
         .gap_1()
         .text_size(px(13.))
         .text_color(t.weak)
-        .child(div().text_size(px(15.)).child(puppy_avatar.to_string()))
+        .child(crate::gpui_ui::avatars::boxed(puppy_avatar, 22., 6.))
         .child(
             div()
                 .font_weight(FontWeight::SEMIBOLD)

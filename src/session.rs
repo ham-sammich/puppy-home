@@ -232,8 +232,9 @@ pub fn normalize_layout_rects(dock: &mut DockState<SavedTab>) {
     }
 }
 
-/// Per-OS config file location: `<config-dir>/puppy-home/session.json`.
-fn session_path() -> Option<PathBuf> {
+/// Per-OS app data directory: `<config-dir>/puppy-home/`. Where session.json
+/// and other persistent assets (e.g. avatar photos) live.
+pub fn data_dir() -> Option<PathBuf> {
     let base = if cfg!(windows) {
         std::env::var_os("APPDATA").map(PathBuf::from)
     } else if cfg!(target_os = "macos") {
@@ -244,7 +245,12 @@ fn session_path() -> Option<PathBuf> {
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
     };
-    base.map(|b| b.join("puppy-home").join("session.json"))
+    base.map(|b| b.join("puppy-home"))
+}
+
+/// Per-OS config file location: `<config-dir>/puppy-home/session.json`.
+fn session_path() -> Option<PathBuf> {
+    data_dir().map(|b| b.join("session.json"))
 }
 
 /// Load the saved session (empty if missing or unreadable).

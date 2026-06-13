@@ -1671,8 +1671,12 @@ impl RootView {
                     .text_color(t.text)
                     .id("tb-identity")
                     .cursor_pointer()
+                    .flex()
+                    .items_center()
+                    .gap_1p5()
                     .tooltip(widgets::text_tip("Pick avatars".into()))
-                    .child(format!("{} {}", self.puppy_avatar(), self.puppy_name()))
+                    .child(avatars::boxed(self.puppy_avatar(), 16., 4.))
+                    .child(self.puppy_name())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.dispatch(DashAction::Avatar(avatars::AvatarAction::Toggle), cx)
                     })),

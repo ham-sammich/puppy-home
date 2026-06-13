@@ -1048,6 +1048,41 @@ impl RootView {
                             self.save_prefs();
                         }
                     }
+                    AvatarAction::PickPhoto => {
+                        // Native file picker -> copy into the app data dir so
+                        // the avatar survives the source moving (F11).
+                        let kind = self.avatar_ui.target;
+                        let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
+                            files: true,
+                            directories: false,
+                            multiple: false,
+                        });
+                        cx.spawn(async move |this, cx| {
+                            if let Ok(Ok(Some(mut picked))) = paths.await
+                                && let Some(src) = picked.pop()
+                            {
+                                let stored =
+                                    crate::gpui_ui::avatars::store_photo(&src, kind);
+                                let _ = this.update(cx, |root, cx| {
+                                    match stored {
+                                        Some(path) => {
+                                            match kind {
+                                                AvatarKind::User => root.user_avatar = path,
+                                                AvatarKind::Puppy => root.puppy_avatar = path,
+                                            }
+                                            root.save_prefs();
+                                        }
+                                        None => {
+                                            root.last_error =
+                                                Some("Couldn't import that image".into())
+                                        }
+                                    }
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .detach();
+                    }
                 }
             }
             DashAction::ToggleMotion => {

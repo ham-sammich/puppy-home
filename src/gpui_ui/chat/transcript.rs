@@ -280,8 +280,8 @@ fn turn(t: &Tokens, emoji: &str, who: AnyElement, body: AnyElement) -> AnyElemen
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_size(px(15.))
-                .child(emoji.to_string()),
+                .overflow_hidden()
+                .child(crate::gpui_ui::avatars::fill_parent(emoji, 15., 9.)),
         )
         .child(
             div()
@@ -469,13 +469,11 @@ fn tool_label(kind: &str) -> String {
 fn empty_state(t: &Tokens, puppy: &str, avatar: &str, reduce_motion: bool) -> AnyElement {
     let dog: AnyElement = if reduce_motion {
         div()
-            .text_size(px(44.))
-            .child(avatar.to_string())
+            .child(crate::gpui_ui::avatars::boxed(avatar, 66., 16.))
             .into_any_element()
     } else {
         div()
-            .text_size(px(44.))
-            .child(avatar.to_string())
+            .child(crate::gpui_ui::avatars::boxed(avatar, 66., 16.))
             .with_animation(
                 "empty-bob",
                 Animation::new(Duration::from_millis(4200))

@@ -32,7 +32,14 @@ pub fn ask_panel(args: &AskArgs) -> AnyElement {
     if let Some(ask) = args.ws.ask_state() {
         return panel_frame(
             &args.t,
-            format!("{} {} asks", args.puppy_avatar, args.ws.name),
+            format!(
+                "{} {} asks",
+                crate::gpui_ui::avatars::inline(
+                    &args.puppy_avatar,
+                    crate::gpui_ui::avatars::PUPPY_DEFAULT
+                ),
+                args.ws.name
+            ),
             ask_body(args, ask),
             args.reduce_motion,
         );
@@ -40,7 +47,14 @@ pub fn ask_panel(args: &AskArgs) -> AnyElement {
     if let Some(pending) = args.ws.pending_request() {
         return panel_frame(
             &args.t,
-            format!("{} {} needs you", args.puppy_avatar, args.ws.name),
+            format!(
+                "{} {} needs you",
+                crate::gpui_ui::avatars::inline(
+                    &args.puppy_avatar,
+                    crate::gpui_ui::avatars::PUPPY_DEFAULT
+                ),
+                args.ws.name
+            ),
             pending_body(args, pending),
             args.reduce_motion,
         );

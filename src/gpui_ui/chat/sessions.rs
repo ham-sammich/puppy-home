@@ -295,7 +295,14 @@ fn preview_pane(args: &SessionsArgs) -> AnyElement {
                             div()
                                 .text_size(px(10.5))
                                 .text_color(t.accent)
-                                .child(format!("{} {}", args.puppy_avatar, args.puppy)),
+                                .child(format!(
+                "{} {}",
+                crate::gpui_ui::avatars::inline(
+                    &args.puppy_avatar,
+                    crate::gpui_ui::avatars::PUPPY_DEFAULT
+                ),
+                args.puppy
+            )),
                         )
                         .child(markdown::render(&t, &e.text))
                         .into_any_element()

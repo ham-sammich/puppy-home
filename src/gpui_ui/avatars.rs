@@ -13,13 +13,67 @@
 //! wire for this).
 
 use gpui::prelude::*;
-use gpui::{Entity, FontWeight, IntoElement, div, px};
+use gpui::{AnyElement, Entity, FontWeight, IntoElement, div, px};
 
 use crate::gpui_ui::widgets;
 use crate::gpui_ui::{DashAction, RootView, Tokens};
 
 pub const USER_DEFAULT: &str = "\u{1f9d1}";
 pub const PUPPY_DEFAULT: &str = "\u{1f436}";
+
+/// An avatar value is EITHER a single emoji OR an absolute path to a chosen
+/// photo (F11). Emojis have no path separators; a photo always does.
+pub fn is_photo(value: &str) -> bool {
+    value.contains('/') || value.contains('\\')
+}
+
+/// For INLINE TEXT contexts ("{emoji} asks"): a photo path can't be inlined,
+/// so fall back to the kind's default emoji.
+pub fn inline(value: &str, default: &str) -> String {
+    if value.is_empty() || is_photo(value) {
+        default.to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+/// Avatar glyph that FILLS its (already-sized) parent box: the chosen photo
+/// (cover-fit, clipped to `radius`) or the emoji at `font_px` (F11).
+pub fn fill_parent(value: &str, font_px: f32, radius: f32) -> AnyElement {
+    if is_photo(value) {
+        gpui::img(std::path::PathBuf::from(value))
+            .size_full()
+            .rounded(px(radius))
+            .object_fit(gpui::ObjectFit::Cover)
+            .into_any_element()
+    } else {
+        div()
+            .text_size(px(font_px))
+            .child(value.to_string())
+            .into_any_element()
+    }
+}
+
+/// Self-sized avatar glyph (for contexts without a sized container): a
+/// `diameter`-px photo clipped to `radius`, or the centered emoji (F11).
+pub fn boxed(value: &str, diameter: f32, radius: f32) -> AnyElement {
+    if is_photo(value) {
+        gpui::img(std::path::PathBuf::from(value))
+            .size(px(diameter))
+            .rounded(px(radius))
+            .object_fit(gpui::ObjectFit::Cover)
+            .into_any_element()
+    } else {
+        div()
+            .size(px(diameter))
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_size(px(diameter * 0.66))
+            .child(value.to_string())
+            .into_any_element()
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AvatarKind {
@@ -35,6 +89,8 @@ pub enum AvatarAction {
     Pick(String),
     /// Apply whatever's in the custom input to the current target.
     ApplyCustom,
+    /// Open the native file picker and set the current target to a photo (F11).
+    PickPhoto,
 }
 
 /// Panel state (the chosen avatars themselves live on RootView and in
@@ -98,6 +154,33 @@ const CHOICES: &[&str] = &[
     "\u{1f3af}",
 ];
 
+/// Copy a chosen image into `<data-dir>/avatars/` and return its stored
+/// absolute path (F11). `None` if it isn't an image or the copy fails. The
+/// filename carries a timestamp so gpui's image cache never serves a stale
+/// frame after a re-pick.
+pub fn store_photo(src: &std::path::Path, kind: AvatarKind) -> Option<String> {
+    let ext = src.extension()?.to_str()?.to_lowercase();
+    if !matches!(
+        ext.as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
+    ) {
+        return None;
+    }
+    let dir = crate::session::data_dir()?.join("avatars");
+    std::fs::create_dir_all(&dir).ok()?;
+    let who = match kind {
+        AvatarKind::User => "user",
+        AvatarKind::Puppy => "puppy",
+    };
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let dest = dir.join(format!("{who}-{stamp}.{ext}"));
+    std::fs::copy(src, &dest).ok()?;
+    Some(dest.to_string_lossy().into_owned())
+}
+
 fn act(
     root: &Entity<RootView>,
     a: AvatarAction,
@@ -134,9 +217,13 @@ pub fn panel(
                 d.bg(widgets::alpha(t.accent, 0.15)).border_color(t.accent)
             })
             .when(!on, |d| d.border_color(t.line_soft))
+            .flex()
+            .items_center()
+            .gap_1p5()
             .text_size(px(12.))
             .text_color(if on { t.accent } else { t.weak })
-            .child(format!("{current} {label}"))
+            .child(boxed(current, 18., 5.))
+            .child(label)
             .on_click(act(root, AvatarAction::Target(kind)))
     };
 
@@ -214,6 +301,11 @@ pub fn panel(
                         .id("avatar-custom")
                         .on_click(act(root, AvatarAction::ApplyCustom)),
                 ),
+        )
+        .child(
+            widgets::btn(t, "\u{1f5bc} Choose photo\u{2026}")
+                .id("avatar-photo")
+                .on_click(act(root, AvatarAction::PickPhoto)),
         )
         .child(
             div()
