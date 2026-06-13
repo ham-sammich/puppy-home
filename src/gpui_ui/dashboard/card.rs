@@ -130,7 +130,7 @@ impl AgentCard {
                     div()
                         .text_size(px(10.5))
                         .text_color(t.error)
-                        .child("End process?"),
+                        .child(format!("{} is still running", self.snap.name)),
                 )
                 .child(
                     widgets::primary_btn(&t, "End")
@@ -660,7 +660,9 @@ impl RenderOnce for AgentCard {
         // most clearly between same-rank cards — tabs give the linear view.)
         let card_id = s.id;
         let drag_tok = t;
-        let drag_label = s.name.clone();
+        let drag_emoji = s.emoji.to_string();
+        let drag_name = s.name.clone();
+        let drag_status = s.label.to_string();
         let drag_color = s.color;
         let drop_hi = alpha(t.accent, 0.18);
         let root_drop = self.root.clone();
@@ -676,9 +678,11 @@ impl RenderOnce for AgentCard {
             .border_color(border)
             .when(s.live, |d| d.shadow_md())
             .on_drag(card_id, move |_dragged, _pos, _win, cx| {
-                cx.new(|_| widgets::DragGhost {
+                cx.new(|_| widgets::CardGhost {
                     t: drag_tok,
-                    label: drag_label.clone(),
+                    emoji: drag_emoji.clone(),
+                    name: drag_name.clone(),
+                    label: drag_status.clone(),
                     color: drag_color,
                 })
             })

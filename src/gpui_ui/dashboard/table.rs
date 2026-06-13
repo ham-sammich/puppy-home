@@ -9,7 +9,7 @@ use gpui::{
 
 use crate::gpui_ui::widgets::{self, alpha};
 use crate::gpui_ui::{DashAction, RootView, Tokens};
-use crate::workspace::InstanceStatus;
+use crate::workspace::{InstanceStatus, WorkspaceId};
 
 use super::CardSnapshot;
 
@@ -74,6 +74,15 @@ impl RenderOnce for FleetTable {
 
 fn row(t: &Tokens, s: CardSnapshot, root: &Entity<RootView>) -> AnyElement {
     let id = s.id;
+    // Drag-reorder (#5): rows are drag handles too, carrying the same
+    // card-shaped ghost as the grid so List view reorders identically.
+    let drag_tok = *t;
+    let drag_emoji = s.emoji.to_string();
+    let drag_name = s.name.clone();
+    let drag_status = s.label.to_string();
+    let drag_color = s.color;
+    let drop_hi = alpha(t.accent, 0.18);
+    let root_drop = root.clone();
     let mono = |txt: String, color| {
         div()
             .font_family("JetBrains Mono")
@@ -124,6 +133,7 @@ fn row(t: &Tokens, s: CardSnapshot, root: &Entity<RootView>) -> AnyElement {
     acts.push(icon("\u{2192}", "row-open", DashAction::Open(id)));
 
     div()
+        .id(("fleet-row", id.0))
         .flex()
         .items_center()
         .gap_2()
@@ -132,6 +142,22 @@ fn row(t: &Tokens, s: CardSnapshot, root: &Entity<RootView>) -> AnyElement {
         .border_t_1()
         .border_color(t.line_soft)
         .hover(|d| d.bg(t.panel))
+        .on_drag(id, move |_dragged, _pos, _win, cx| {
+            cx.new(|_| widgets::CardGhost {
+                t: drag_tok,
+                emoji: drag_emoji.clone(),
+                name: drag_name.clone(),
+                label: drag_status.clone(),
+                color: drag_color,
+            })
+        })
+        .drag_over::<WorkspaceId>(move |style, _, _, _| style.bg(drop_hi))
+        .on_drop::<WorkspaceId>(move |dragged, _, cx| {
+            let moved = *dragged;
+            root_drop.update(cx, |r, cx| {
+                r.dispatch(DashAction::ReorderWorkspace { moved, target: id }, cx)
+            });
+        })
         .child(
             div()
                 .flex_1()

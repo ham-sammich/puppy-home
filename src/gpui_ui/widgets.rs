@@ -7,11 +7,80 @@
 use std::time::{Duration, Instant};
 
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, Context, Div, IntoElement, Path, Render, Rgba,
-    Window, canvas, div, ease_in_out, point, prelude::*, px,
+    Animation, AnimationExt as _, AnyElement, Context, Div, FontWeight, IntoElement, Path, Render,
+    Rgba, Window, canvas, div, ease_in_out, point, prelude::*, px,
 };
 
 use super::tokens::Tokens;
+
+/// Card-shaped drag preview (#5 feedback): dragging a dashboard card or list
+/// row should look like you're carrying the CARD, not the little tab pill.
+/// A compact avatar + name + status-dot rendition that reads as the real one.
+pub struct CardGhost {
+    pub t: Tokens,
+    pub emoji: String,
+    pub name: String,
+    pub label: String,
+    pub color: Rgba,
+}
+
+impl Render for CardGhost {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let t = self.t;
+        div()
+            .w(px(248.))
+            .flex()
+            .items_center()
+            .gap_2p5()
+            .p_3()
+            .rounded(px(13.))
+            .bg(t.card)
+            .border_1()
+            .border_color(alpha(self.color, 0.6))
+            .shadow_lg()
+            .child(
+                div()
+                    .size(px(34.))
+                    .flex_none()
+                    .rounded(px(11.))
+                    .bg(t.well)
+                    .border_1()
+                    .border_color(alpha(self.color, 0.5))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(17.))
+                    .child(self.emoji.clone()),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(t.text)
+                            .child(self.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1p5()
+                            .child(div().size(px(7.)).rounded_full().bg(self.color))
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(self.color)
+                                    .child(self.label.clone()),
+                            ),
+                    ),
+            )
+    }
+}
 
 /// A lightweight floating preview rendered under the cursor while a tab or
 /// dashboard card is being dragged (#5). gpui's `on_drag` wants an
