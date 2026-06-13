@@ -2052,7 +2052,10 @@ impl Render for RootView {
                     .clone()
                     .map(|e| div().text_size(px(12.)).text_color(t.error).child(e)),
             )
-            .child(body)
+            // Body takes the REMAINING height (not 100%, which would push its
+            // scroll viewport's bottom below the window) so the dashboard
+            // grid / chat transcript scroll correctly (F3).
+            .child(div().flex_1().min_h_0().child(body))
             .children(self.manager_open.map(|kind| {
                 let ws = self.serving_ws();
                 managers_ui::overlay(&managers_ui::MgrArgs {
