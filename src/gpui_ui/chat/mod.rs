@@ -91,6 +91,8 @@ pub struct ChatArgs<'a> {
     /// Rename/new name input, shared by the header root-create panel and the
     /// floating context menu (only one tree op is armed at a time).
     pub tree_op_input: Option<&'a Entity<ChatInput>>,
+    /// The @File picker's editable path bar (F6).
+    pub picker_path_input: Option<&'a Entity<ChatInput>>,
     /// A header-initiated "new at workspace root" op is armed (F5):
     /// `Some(is_dir)` while naming, independent of any right-click row.
     pub tree_root_new: Option<bool>,
@@ -148,6 +150,7 @@ pub fn chat_screen(args: &ChatArgs) -> AnyElement {
         images: args.images.clone(),
         palette_sel: args.palette_sel,
         steer_queue: args.steer_queue,
+        picker_path_input: args.picker_path_input,
     });
 
     let answer = ask::ask_panel(&ask::AskArgs {

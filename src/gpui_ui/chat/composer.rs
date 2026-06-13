@@ -29,6 +29,8 @@ pub struct ComposerArgs<'a> {
     pub palette_sel: usize,
     /// Dock steer toggle state (false = now, true = queue).
     pub steer_queue: bool,
+    /// The @File picker's editable path bar (F6).
+    pub picker_path_input: Option<&'a Entity<ChatInput>>,
 }
 
 /// The whole bottom dock: palette + status line + skin + footer.
@@ -112,10 +114,10 @@ fn at_file_btn(args: &ComposerArgs) -> AnyElement {
     };
     let picker = open_dir.map(|dir| {
         let root_entity = args.root.clone();
-        let ws_root = args.ws.root.clone();
         let mut rows: Vec<AnyElement> = Vec::new();
-        if dir != ws_root {
-            let parent = dir.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        // Always offer "up" while a parent exists — you're no longer trapped
+        // under the workspace root; go all the way to the drive root (F6).
+        if let Some(parent) = dir.parent().map(|p| p.to_path_buf()) {
             let root = args.root.clone();
             rows.push(
                 div()
@@ -178,6 +180,22 @@ fn at_file_btn(args: &ComposerArgs) -> AnyElement {
                 );
             }
         }
+        // Editable path bar (F6): type/paste any folder, or a drive like
+        // `D:\`, then Enter to jump there. Reflects the current dir.
+        let path_bar = args.picker_path_input.map(|inp| {
+            div()
+                .flex_none()
+                .px_1p5()
+                .py_0p5()
+                .rounded(px(6.))
+                .bg(t.well)
+                .border_1()
+                .border_color(t.line_soft)
+                .font_family("JetBrains Mono")
+                .text_size(px(11.))
+                .child(inp.clone())
+                .into_any_element()
+        });
         let panel = div()
             .occlude()
             .absolute()
@@ -185,8 +203,6 @@ fn at_file_btn(args: &ComposerArgs) -> AnyElement {
             .left_0()
             .w(px(300.))
             .max_h(px(280.))
-            .id("picker-scroll")
-            .overflow_y_scroll()
             .flex()
             .flex_col()
             .gap_0p5()
@@ -199,7 +215,19 @@ fn at_file_btn(args: &ComposerArgs) -> AnyElement {
             .on_mouse_down_out(move |_, _, cx| {
                 root_entity.update(cx, |r, cx| r.dispatch(DashAction::CloseChatPop, cx));
             })
-            .children(rows);
+            .children(path_bar)
+            .child(
+                // Listing scrolls; the path bar above stays pinned.
+                div()
+                    .id("picker-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap_0p5()
+                    .children(rows),
+            );
         gpui::deferred(panel).with_priority(100)
     });
     div()

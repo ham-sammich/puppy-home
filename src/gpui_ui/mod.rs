@@ -240,6 +240,9 @@ pub struct RootView {
     /// Active tree operation (rename / new file / new folder) + its input.
     pub(crate) tree_op: Option<TreeOp>,
     pub(crate) tree_op_input: Option<Entity<ChatInput>>,
+    /// Editable path bar for the @File picker — lets you jump to any folder
+    /// or drive instead of being trapped under the workspace root (F6).
+    pub(crate) picker_path_input: Option<Entity<ChatInput>>,
     pub(crate) tree_delete_confirm: Option<(WorkspaceId, PathBuf, bool)>,
     /// Window-space anchor for the floating tree context menu (set on
     /// right-click; read only while `chat_pop` is a `TreeMenu`).
@@ -438,6 +441,7 @@ impl RootView {
             editor_close_confirm: None,
             tree_op: None,
             tree_op_input: None,
+            picker_path_input: None,
             tree_delete_confirm: None,
             tree_menu_pos: None,
             commit_inputs: HashMap::new(),
@@ -621,6 +625,32 @@ impl RootView {
         });
         self.tree_op_input = Some(entity);
         self.chat_subs.push(sub);
+    }
+
+    /// The @File picker's path bar (created on first open); Enter jumps to
+    /// the typed folder/drive (F6).
+    pub(crate) fn ensure_picker_path_input(&mut self, cx: &mut Context<Self>) {
+        if self.picker_path_input.is_some() {
+            return;
+        }
+        let entity = cx.new(|cx| ChatInput::new("path or drive (e.g. D:\\)\u{2026}", cx));
+        let sub = cx.subscribe(&entity, |this, _, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Submitted) {
+                this.dispatch(DashAction::PickerGoPath, cx);
+            }
+        });
+        self.picker_path_input = Some(entity);
+        self.chat_subs.push(sub);
+    }
+
+    /// Reflect the picker's current directory into its path bar so it reads
+    /// like a breadcrumb you can edit (F6).
+    pub(crate) fn seed_picker_path(&mut self, dir: &std::path::Path, cx: &mut Context<Self>) {
+        self.ensure_picker_path_input(cx);
+        if let Some(input) = self.picker_path_input.clone() {
+            let text = dir.to_string_lossy().into_owned();
+            input.update(cx, |i, cx| i.set_text(text, cx));
+        }
     }
 
     /// Filter box for the sessions browser (created on first open).
@@ -1850,6 +1880,7 @@ impl Render for RootView {
                         .map(|(_, ix)| ix),
                     markers: ws.tree_markers(),
                     tree_op_input: self.tree_op_input.as_ref(),
+                    picker_path_input: self.picker_path_input.as_ref(),
                     // Header-initiated "new at root" op for THIS workspace,
                     // distinguished from per-row ops by the absent TreeMenu pop.
                     tree_root_new: match (&self.tree_op, &self.chat_pop) {

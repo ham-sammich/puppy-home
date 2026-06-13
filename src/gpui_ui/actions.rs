@@ -104,6 +104,8 @@ pub enum DashAction {
     PickerOpen(WorkspaceId),
     /// Navigate the @File picker into a directory.
     PickerDir(WorkspaceId, PathBuf),
+    /// Jump the @File picker to the path typed in its path bar (F6).
+    PickerGoPath,
     /// Insert an `@<path>` reference for the picked file.
     PickerPick(WorkspaceId, PathBuf),
     /// Drop a pending pasted image before sending.
@@ -511,11 +513,28 @@ impl RootView {
             DashAction::PickerOpen(id) => {
                 let root_dir = self.supervisor.get(id).map(|w| w.root.clone());
                 if let Some(dir) = root_dir {
+                    self.seed_picker_path(&dir, cx);
                     self.chat_pop = Some(ChatPop::FilePicker(id, dir));
                 }
             }
             DashAction::PickerDir(id, dir) => {
+                self.seed_picker_path(&dir, cx);
                 self.chat_pop = Some(ChatPop::FilePicker(id, dir));
+            }
+            DashAction::PickerGoPath => {
+                // Jump to the path typed in the picker's path bar (F6): any
+                // folder or drive, not just dirs under the workspace root.
+                if let Some(ChatPop::FilePicker(id, _)) = self.chat_pop.clone() {
+                    let text = self
+                        .picker_path_input
+                        .as_ref()
+                        .map(|i| i.read(cx).text().trim().to_string())
+                        .unwrap_or_default();
+                    if !text.is_empty() {
+                        self.chat_pop =
+                            Some(ChatPop::FilePicker(id, std::path::PathBuf::from(text)));
+                    }
+                }
             }
             DashAction::PickerPick(id, path) => {
                 self.chat_pop = None;
