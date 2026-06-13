@@ -30,6 +30,8 @@ pub struct AgentCard {
     pub inline: Option<(InputKind, String, bool)>,
     pub input_focus: FocusHandle,
     pub reduce_motion: bool,
+    /// This card is awaiting a close confirmation (busy puppy, #6).
+    pub close_confirm: bool,
 }
 
 impl AgentCard {
@@ -106,6 +108,52 @@ impl AgentCard {
             .child(super::model_pill::model_pill(
                 &self.t, &self.snap, &self.root,
             ))
+            .child(self.close_control())
+    }
+
+    /// Close affordance (#6): a `\u{2715}` that closes a resting puppy at
+    /// once; for a busy one it arms an inline "End process?" confirm so we
+    /// never silently kill a running turn.
+    fn close_control(&self) -> AnyElement {
+        let t = self.t;
+        let id = self.snap.id;
+        if self.close_confirm {
+            return div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .flex_none()
+                .child(
+                    div()
+                        .text_size(px(10.5))
+                        .text_color(t.error)
+                        .child("End process?"),
+                )
+                .child(
+                    widgets::primary_btn(&t, "End")
+                        .id(("card-close-yes", id.0))
+                        .on_click(self.on(DashAction::CloseWorkspace(id))),
+                )
+                .child(
+                    widgets::btn(&t, "Keep")
+                        .id(("card-close-no", id.0))
+                        .on_click(self.on(DashAction::CancelCloseWorkspace)),
+                )
+                .into_any_element();
+        }
+        div()
+            .id(("card-close", id.0))
+            .flex_none()
+            .px_1p5()
+            .rounded(px(7.))
+            .text_size(px(15.))
+            .text_color(t.weak)
+            .cursor_pointer()
+            .hover(|d| d.text_color(t.error).bg(t.well))
+            .child("\u{2715}")
+            .tooltip(widgets::text_tip("Close this workspace".into()))
+            .on_click(self.on(DashAction::RequestCloseWorkspace(id)))
+            .into_any_element()
     }
 
     /// State label + tool / question / error context + the right-side clock.

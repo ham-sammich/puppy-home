@@ -244,6 +244,8 @@ pub struct RootView {
     /// or drive instead of being trapped under the workspace root (F6).
     pub(crate) picker_path_input: Option<Entity<ChatInput>>,
     pub(crate) tree_delete_confirm: Option<(WorkspaceId, PathBuf, bool)>,
+    /// Dashboard card awaiting a close confirmation (busy puppy only).
+    pub(crate) card_close_confirm: Option<WorkspaceId>,
     /// Window-space anchor for the floating tree context menu (set on
     /// right-click; read only while `chat_pop` is a `TreeMenu`).
     pub(crate) tree_menu_pos: Option<gpui::Point<gpui::Pixels>>,
@@ -446,6 +448,7 @@ impl RootView {
             tree_op_input: None,
             picker_path_input: None,
             tree_delete_confirm: None,
+            card_close_confirm: None,
             tree_menu_pos: None,
             commit_inputs: HashMap::new(),
             git_list_mode: HashSet::new(),
@@ -2302,6 +2305,7 @@ impl RootView {
                                     input_snap,
                                     &self.input_focus,
                                     self.reduce_motion,
+                                    self.card_close_confirm,
                                 ))
                             }),
                     ),

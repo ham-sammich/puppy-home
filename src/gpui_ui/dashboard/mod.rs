@@ -302,6 +302,7 @@ pub fn fleet_stats(sup: &Supervisor) -> FleetStats {
 }
 
 /// The fleet body for the active view mode.
+#[allow(clippy::too_many_arguments)]
 pub fn fleet(
     t: &Tokens,
     mode: DashboardViewMode,
@@ -310,6 +311,7 @@ pub fn fleet(
     input: Option<(WorkspaceId, InputKind, String, bool)>,
     input_focus: &gpui::FocusHandle,
     reduce_motion: bool,
+    close_confirm: Option<WorkspaceId>,
 ) -> AnyElement {
     // Stable sort: within a rank, cards keep supervisor (insertion) order, so
     // a freshly spawned workspace lands at the END and STAYS there instead of
@@ -334,6 +336,7 @@ pub fn fleet(
                     &input,
                     input_focus,
                     reduce_motion,
+                    close_confirm,
                 ))
             }))
             .into_any_element(),
@@ -350,12 +353,14 @@ pub fn fleet(
                     &input,
                     input_focus,
                     reduce_motion,
+                    close_confirm,
                 ))
             }))
             .into_any_element(),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn card_for(
     t: &Tokens,
     snap: CardSnapshot,
@@ -363,11 +368,13 @@ fn card_for(
     input: &Option<(WorkspaceId, InputKind, String, bool)>,
     input_focus: &gpui::FocusHandle,
     reduce_motion: bool,
+    close_confirm: Option<WorkspaceId>,
 ) -> card::AgentCard {
     let inline = input
         .as_ref()
         .filter(|(id, ..)| *id == snap.id)
         .map(|(_, kind, text, queue)| (*kind, text.clone(), *queue));
+    let close_confirm = close_confirm == Some(snap.id);
     card::AgentCard {
         t: *t,
         snap,
@@ -375,6 +382,7 @@ fn card_for(
         inline,
         input_focus: input_focus.clone(),
         reduce_motion,
+        close_confirm,
     }
 }
 

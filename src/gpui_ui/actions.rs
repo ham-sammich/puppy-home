@@ -9,7 +9,7 @@ use gpui::prelude::*;
 use gpui::{Context, Keystroke, Pixels, Point, Window};
 
 use crate::session::{ComposerStyle, DashboardViewMode};
-use crate::workspace::WorkspaceId;
+use crate::workspace::{InstanceStatus, WorkspaceId};
 
 use super::dashboard::{CardInput, InputKind};
 use super::{RootView, Screen, chat, den};
@@ -62,6 +62,11 @@ pub enum DashAction {
     Changes(WorkspaceId),
     ShowDashboard,
     CloseWorkspace(WorkspaceId),
+    /// Dashboard close request: resting/dead closes now; a busy puppy arms a
+    /// confirm first (so we never silently kill a running process).
+    RequestCloseWorkspace(WorkspaceId),
+    /// Abandon a pending dashboard close confirmation.
+    CancelCloseWorkspace,
     SetView(DashboardViewMode),
     ToggleMotion,
     // -- chat --
@@ -301,8 +306,24 @@ impl RootView {
                 self.screen = Screen::Dashboard;
                 self.chat_pop = None;
             }
+            DashAction::RequestCloseWorkspace(id) => {
+                // Resting (Idle) or already-dead = no live process to kill, so
+                // close immediately; anything else asks first.
+                let safe = self
+                    .supervisor
+                    .get(id)
+                    .map(|w| matches!(w.status, InstanceStatus::Idle | InstanceStatus::Dead))
+                    .unwrap_or(true);
+                if safe {
+                    self.dispatch(DashAction::CloseWorkspace(id), cx);
+                } else {
+                    self.card_close_confirm = Some(id);
+                }
+            }
+            DashAction::CancelCloseWorkspace => self.card_close_confirm = None,
             DashAction::CloseWorkspace(id) => {
                 let name = self.ws_name(id);
+                self.card_close_confirm = None;
                 self.supervisor.close(id);
                 self.chat_inputs.remove(&id);
                 if self.screen == Screen::Chat(id) {
