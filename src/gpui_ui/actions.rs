@@ -100,6 +100,8 @@ pub enum DashAction {
     TreeCopyPath(WorkspaceId, PathBuf, bool),
     /// Reveal a tree entry in the OS file manager (is_dir picks select-vs-open).
     TreeReveal(PathBuf, bool),
+    /// Copy arbitrary text to the clipboard (chat message / code block copy).
+    CopyText(String),
     ToggleDir(WorkspaceId, PathBuf),
     StarterPrompt(WorkspaceId, String),
     // -- needs-you answers --
@@ -435,6 +437,11 @@ impl RootView {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.clone()));
                 self.toast(format!("\u{1f4cb} {text}"), accent);
                 self.chat_pop = None;
+            }
+            DashAction::CopyText(text) => {
+                let n = text.chars().count();
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                self.toast(format!("\u{1f4cb} Copied {n} chars"), accent);
             }
             DashAction::TreeReveal(path, is_dir) => {
                 crate::proc::reveal_in_file_manager(&path, is_dir);

@@ -131,12 +131,14 @@ fn render_entry(args: &TranscriptArgs, idx: usize, entry: &Entry) -> AnyElement 
             &args.user_avatar,
             who(&t, "you", None),
             markdown_plain(&t, text),
+            Some(copy_btn(&t, &args.root, text.clone(), idx as u64)),
         ),
         Entry::Agent(text) => turn(
             &t,
             &args.puppy_avatar,
             agent_who(&t, args),
             markdown::render(&t, text),
+            Some(copy_btn(&t, &args.root, text.clone(), idx as u64)),
         ),
         Entry::Note(text) => div()
             .text_size(px(12.))
@@ -206,6 +208,7 @@ fn render_message(args: &TranscriptArgs, idx: usize, msg: &BackendMessage) -> An
             &args.puppy_avatar,
             agent_who(&t, args),
             markdown::render(&t, &msg.text),
+            Some(copy_btn(&t, &args.root, msg.text.clone(), idx as u64)),
         );
     }
     if msg.kind == "DiffMessage"
@@ -270,8 +273,36 @@ fn render_message(args: &TranscriptArgs, idx: usize, msg: &BackendMessage) -> An
         .into_any_element()
 }
 
-/// A turn row: 30px avatar + (who line, body).
-fn turn(t: &Tokens, emoji: &str, who: AnyElement, body: AnyElement) -> AnyElement {
+/// A small hover-highlighted "copy" affordance that puts `text` on the
+/// clipboard (chat copy, #feedback). `key` keys the stateful element id.
+fn copy_btn(t: &Tokens, root: &Entity<RootView>, text: String, key: u64) -> AnyElement {
+    let root = root.clone();
+    div()
+        .id(("copy-turn", key))
+        .flex_none()
+        .px_1p5()
+        .py_0p5()
+        .rounded(px(6.))
+        .text_size(px(10.5))
+        .text_color(t.dim)
+        .cursor_pointer()
+        .hover(|d| d.bg(t.well).text_color(t.text))
+        .child("\u{1f4cb} copy")
+        .on_click(move |_, _, cx| {
+            root.update(cx, |r, cx| r.dispatch(DashAction::CopyText(text.clone()), cx));
+        })
+        .into_any_element()
+}
+
+/// A turn row: 30px avatar + (who line, body). `actions` sits at the right of
+/// the who line (e.g. the copy button).
+fn turn(
+    t: &Tokens,
+    emoji: &str,
+    who: AnyElement,
+    body: AnyElement,
+    actions: Option<AnyElement>,
+) -> AnyElement {
     div()
         .flex()
         .items_start()
@@ -297,7 +328,15 @@ fn turn(t: &Tokens, emoji: &str, who: AnyElement, body: AnyElement) -> AnyElemen
                 .flex()
                 .flex_col()
                 .gap_0p5()
-                .child(who)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(who)
+                        .child(div().flex_1())
+                        .children(actions),
+                )
                 .child(body),
         )
         .into_any_element()
