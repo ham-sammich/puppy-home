@@ -2195,6 +2195,12 @@ impl RootView {
         let t = self.tokens;
         let root_keep = root.clone();
         let root_quit = root.clone();
+        // Name the actual puppy (or count them when more than one is busy).
+        let names = self.supervisor.running_turn_names();
+        let headline = match names.as_slice() {
+            [one] => format!("{one} is still running"),
+            many => format!("{} puppies are still running", many.len()),
+        };
         let scrim = div()
             .occlude()
             .absolute()
@@ -2220,7 +2226,7 @@ impl RootView {
                             .text_size(px(15.))
                             .font_weight(gpui::FontWeight::BOLD)
                             .text_color(t.text)
-                            .child("A puppy is still working"),
+                            .child(headline),
                     )
                     .child(
                         div()

@@ -210,6 +210,29 @@ impl Supervisor {
         })
     }
 
+    /// Names of the puppies currently mid-turn (for the quit-confirm copy).
+    /// Prefers the puppy's announced name, falling back to the workspace name.
+    pub fn running_turn_names(&self) -> Vec<String> {
+        self.iter()
+            .filter(|w| {
+                matches!(
+                    w.status,
+                    InstanceStatus::Running
+                        | InstanceStatus::Thinking
+                        | InstanceStatus::ToolCalling
+                        | InstanceStatus::Paused
+                )
+            })
+            .map(|w| {
+                if w.puppy_name.is_empty() {
+                    w.name.clone()
+                } else {
+                    w.puppy_name.clone()
+                }
+            })
+            .collect()
+    }
+
     /// How many workspaces are blocked waiting for user input.
     pub fn waiting_count(&self) -> usize {
         self.workspaces
