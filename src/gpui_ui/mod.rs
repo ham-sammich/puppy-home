@@ -157,6 +157,8 @@ pub struct RootView {
     show_all_chat: HashSet<WorkspaceId>,
     /// Workspaces with the explorer hidden (default = shown).
     tree_closed: HashSet<WorkspaceId>,
+    /// Explorer hidden-entry policy, app-wide (F4; default Show).
+    hidden_mode: crate::session::HiddenMode,
     expanded_dirs: HashSet<(u64, PathBuf)>,
     /// Focus the chat input on the next render (set when a chat opens).
     pending_focus: Option<WorkspaceId>,
@@ -371,6 +373,7 @@ impl RootView {
             expanded_entries: HashSet::new(),
             show_all_chat: HashSet::new(),
             tree_closed: HashSet::new(),
+            hidden_mode: saved.hidden_mode,
             expanded_dirs: HashSet::new(),
             pending_focus: None,
             probe_chat_screen: std::env::var("PUPPY_GPUI_SCREEN").as_deref() == Ok("chat"),
@@ -1034,6 +1037,7 @@ impl RootView {
         let mut s = session::load();
         s.dashboard_view = self.dash_mode;
         s.reduce_motion = self.reduce_motion;
+        s.hidden_mode = self.hidden_mode;
         s.composer_style = self.composer_style;
         s.user_avatar = self.user_avatar.clone();
         s.puppy_avatar = self.puppy_avatar.clone();
@@ -1422,6 +1426,28 @@ impl RootView {
             .flex_wrap()
             .items_center()
             .gap_2()
+            // Doghouse (this app) version, LEFT of the brand — distinct
+            // from the code_puppy engine version chip on the right (P3).
+            .child(
+                div()
+                    .id("tb-app-version")
+                    .px_1p5()
+                    .py_0p5()
+                    .rounded_md()
+                    .bg(t.card)
+                    .border_1()
+                    .border_color(t.line_soft)
+                    .text_size(px(10.5))
+                    .text_color(t.weak)
+                    .cursor_pointer()
+                    .tooltip(widgets::text_tip(
+                        "Doghouse (this app) version — click for details".into(),
+                    ))
+                    .child(format!("v{}", crate::plugin::HOST_VERSION))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.dispatch(DashAction::About(about::AboutAction::Toggle), cx)
+                    })),
+            )
             .child(
                 div()
                     .text_size(px(15.))
@@ -1506,7 +1532,9 @@ impl RootView {
                     },
                 )
                 .id("tb-about")
-                .tooltip(widgets::text_tip("Code Puppy version + updates".into()))
+                .tooltip(widgets::text_tip(
+                    "code_puppy (agent engine) version + updates".into(),
+                ))
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.dispatch(DashAction::About(about::AboutAction::Toggle), cx)
                 }))
@@ -1712,6 +1740,7 @@ impl Render for RootView {
                         .as_ref()
                         .is_some_and(|p| p.ws == Some(id)),
                     show_all: self.show_all_chat.contains(&id),
+                    hidden_mode: self.hidden_mode,
                     expanded: &self.expanded_entries,
                     reduce_motion: self.reduce_motion,
                     tree_open: !self.tree_closed.contains(&id),

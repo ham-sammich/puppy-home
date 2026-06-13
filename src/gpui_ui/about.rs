@@ -253,26 +253,40 @@ pub fn panel(
         }
     };
 
+    // Two DISTINCT versions, each explicitly labeled so they can't be
+    // confused (the toolbar chip used to show the code_puppy version with
+    // no label, reading like it was the app's own — P3).
+    let ver_line = |label: &str, sub: &str, ver: String| {
+        div()
+            .flex()
+            .items_baseline()
+            .gap_2()
+            .child(
+                div()
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(t.text)
+                    .child(label.to_string()),
+            )
+            .child(div().text_size(px(10.5)).text_color(t.weak).child(sub.to_string()))
+            .child(div().text_color(t.weak).child(ver))
+    };
     let mut body = div()
         .flex()
         .flex_col()
         .gap_2()
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(t.text)
-                        .child("Code Puppy"),
-                )
-                .child(div().text_color(t.weak).child(format!(
-                    "installed: {}",
-                    if current.is_empty() { "?" } else { current }
-                ))),
-        )
+        .child(ver_line(
+            "Doghouse",
+            "(this app)",
+            format!("v{}", crate::plugin::HOST_VERSION),
+        ))
+        .child(ver_line(
+            "code_puppy",
+            "(agent engine)",
+            format!(
+                "installed: {}",
+                if current.is_empty() { "?" } else { current }
+            ),
+        ))
         .child(div().text_size(px(11.)).text_color(t.weak).child(
             "Sidecars resolve code-puppy through uv at spawn; updating \
              refreshes uv's cache, then restart workspaces to apply.",

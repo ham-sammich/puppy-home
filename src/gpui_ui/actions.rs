@@ -77,6 +77,8 @@ pub enum DashAction {
     ToggleDiff(WorkspaceId, usize),
     ShowOlder(WorkspaceId),
     ToggleTree(WorkspaceId),
+    /// Cycle the explorer's hidden-entry policy (Show -> Dim -> Hide, F4).
+    CycleHidden,
     ToggleDir(WorkspaceId, PathBuf),
     StarterPrompt(WorkspaceId, String),
     // -- needs-you answers --
@@ -366,6 +368,9 @@ impl RootView {
                 if !self.tree_closed.remove(&id) {
                     self.tree_closed.insert(id);
                 }
+            }
+            DashAction::CycleHidden => {
+                self.hidden_mode = self.hidden_mode.next();
             }
             DashAction::ToggleDir(id, path) => {
                 let key = (id.0, path);

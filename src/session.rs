@@ -32,6 +32,9 @@ pub struct Session {
     /// Disable decorative animation app-wide (pulses, ring spins, bobs).
     #[serde(default)]
     pub reduce_motion: bool,
+    /// How the file explorer treats hidden (dot-prefixed) entries (F4).
+    #[serde(default)]
+    pub hidden_mode: HiddenMode,
     /// Your avatar emoji in transcripts (empty = the \u{1f9d1} default).
     /// Owned by the redesign shells' pickers (QW8); present here so
     /// session.json round-trips losslessly across all branches.
@@ -40,6 +43,33 @@ pub struct Session {
     /// Your puppy's avatar emoji (empty = the \u{1f436} default).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub puppy_avatar: String,
+}
+
+/// How the file explorer treats hidden (dot-prefixed) entries (F4).
+/// Default `Show` — developer tooling lives in dotdirs (`.github`,
+/// `.vscode`, `.cargo`), so hiding them outright was the wrong default.
+/// Persisted per machine; UI glyph/tooltip live in the explorer module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HiddenMode {
+    /// Render hidden entries like any other (default).
+    #[default]
+    Show,
+    /// Render them, but dimmed, so they recede visually.
+    Dim,
+    /// Omit them from the tree entirely.
+    Hide,
+}
+
+impl HiddenMode {
+    /// The explorer toggle cycles Show -> Dim -> Hide -> Show.
+    pub fn next(self) -> Self {
+        match self {
+            HiddenMode::Show => HiddenMode::Dim,
+            HiddenMode::Dim => HiddenMode::Hide,
+            HiddenMode::Hide => HiddenMode::Show,
+        }
+    }
 }
 
 /// Which composer skin the chat dock renders. One shared input state

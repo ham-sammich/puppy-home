@@ -14,8 +14,35 @@ use gpui::{AnyElement, Entity, IntoElement, ParentElement as _, Styled as _, div
 
 use crate::gpui_ui::input::ChatInput;
 use crate::gpui_ui::{ChatPop, DashAction, RootView, Tokens};
-use crate::session::ComposerStyle;
+use crate::session::{ComposerStyle, HiddenMode};
 use crate::workspace::Workspace;
+
+/// UI surface for the persisted [`HiddenMode`] (the enum + cycle logic
+/// live in `session`; these are the explorer toggle's presentation).
+trait HiddenModeUi {
+    fn glyph(self) -> &'static str;
+    fn tip(self) -> &'static str;
+}
+
+impl HiddenModeUi for HiddenMode {
+    /// Glyph for the toggle button (filled = show, ringed = dim, empty = hide).
+    fn glyph(self) -> &'static str {
+        match self {
+            HiddenMode::Show => "\u{25c9}",
+            HiddenMode::Dim => "\u{25ce}",
+            HiddenMode::Hide => "\u{25cb}",
+        }
+    }
+
+    /// Tooltip describing what a click will do next.
+    fn tip(self) -> &'static str {
+        match self {
+            HiddenMode::Show => "Hidden files: shown — click to dim",
+            HiddenMode::Dim => "Hidden files: dimmed — click to hide",
+            HiddenMode::Hide => "Hidden files: hidden — click to show",
+        }
+    }
+}
 
 pub struct ChatArgs<'a> {
     pub t: Tokens,
@@ -29,6 +56,8 @@ pub struct ChatArgs<'a> {
     pub user_avatar: String,
     pub puppy_avatar: String,
     pub show_all: bool,
+    /// Explorer hidden-entry policy (F4).
+    pub hidden_mode: HiddenMode,
     pub expanded: &'a HashSet<(u64, usize)>,
     pub reduce_motion: bool,
     pub tree_open: bool,
@@ -428,10 +457,35 @@ fn explorer_or_rail(args: &ChatArgs) -> AnyElement {
                         .child("EXPLORER"),
                 )
                 .child(div().flex_1())
+                .child(hidden_toggle(args))
                 .child(toggle),
         )
         .child(tree_panel(args))
         .child(changes_panel(args))
+        .into_any_element()
+}
+
+/// The explorer's hidden-entry cycle button (Show -> Dim -> Hide, F4).
+fn hidden_toggle(args: &ChatArgs) -> AnyElement {
+    let t = args.t;
+    let id = args.ws.id;
+    let mode = args.hidden_mode;
+    let root = args.root.clone();
+    div()
+        .id(("tree-hidden-toggle", id.0))
+        .px_1p5()
+        .py_0p5()
+        .mr_1()
+        .rounded(px(6.))
+        .text_size(px(12.))
+        .text_color(if mode == HiddenMode::Hide { t.weak } else { t.accent })
+        .cursor_pointer()
+        .hover(|d| d.bg(t.well))
+        .tooltip(crate::gpui_ui::widgets::text_tip(mode.tip().into()))
+        .child(mode.glyph())
+        .on_click(move |_, _, cx| {
+            root.update(cx, |r, cx| r.dispatch(DashAction::CycleHidden, cx));
+        })
         .into_any_element()
 }
 
@@ -595,12 +649,14 @@ fn push_dir_rows(args: &ChatArgs, dir: &std::path::Path, depth: usize, rows: &mu
         (!a.is_dir, a.name.to_lowercase()).cmp(&(!b.is_dir, b.name.to_lowercase()))
     });
     for entry in entries {
-        if entry.name.starts_with('.') {
-            continue; // dotfiles stay out of the lazy tree (egui parity-ish)
+        let hidden = entry.name.starts_with('.');
+        if hidden && args.hidden_mode == HiddenMode::Hide {
+            continue; // user chose to hide dot-entries (F4)
         }
         if rows.len() > MAX_ROWS {
             return;
         }
+        let dim_hidden = hidden && args.hidden_mode == HiddenMode::Dim;
         let open = entry.is_dir && args.expanded_dirs.contains(&(id.0, entry.path.clone()));
         let glyph = if entry.is_dir {
             if open { "\u{25be}" } else { "\u{25b8}" }
@@ -617,7 +673,13 @@ fn push_dir_rows(args: &ChatArgs, dir: &std::path::Path, depth: usize, rows: &mu
             .pr_2()
             .py_0p5()
             .text_size(px(11.5))
-            .text_color(if entry.is_dir { t.text } else { t.weak })
+            .text_color(if dim_hidden {
+                t.dim
+            } else if entry.is_dir {
+                t.text
+            } else {
+                t.weak
+            })
             .whitespace_nowrap()
             .overflow_hidden()
             .text_ellipsis()

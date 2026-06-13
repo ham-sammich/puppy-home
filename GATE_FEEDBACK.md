@@ -27,7 +27,7 @@ the cross-device handoff — the Mac-side agent should read it too.
 | F1 | SSH remote folder browser flashes a console window on every folder click | `views/remote_connect.rs` -> `ssh.rs` | FIXED on this box: `hide_console` moved into `base_ssh()` |
 | F2 | SSH connect dialog: at default window size the Connect button is off-screen after picking a folder via the browser (no scroll) | remote connect dialog layout | make dialog body scrollable / anchor action row |
 | F3 | App cuts off items at the bottom of (some) views; can't scroll them into view, must resize the window | global layout | find which views lack scroll containers |
-| F4 | Workspace explorer: hidden directories (dotdirs) not shown | file tree | add toggle or show-by-default |
+| F4 | Workspace explorer: hidden directories (dotdirs) not shown | file tree | DONE: now shown by default + explorer header toggle cycling Show/Dim/Hide (HiddenMode in session.rs, persisted). |
 | F5 | Workspace explorer: no way to create/add files or folders | file tree | context menu: New File / New Folder |
 | F6 | Local file browser (file reference picker) can't navigate to arbitrary folders | file picker | needs path input / drive switching |
 | F7 | New workspace card: screen flashes on add, and the card appends to the END of the list while the eye expects top-left | dashboard | fix flash; consider insert-at-front or scroll-to-new |
@@ -48,6 +48,6 @@ the cross-device handoff — the Mac-side agent should read it too.
 |---|------|-------|
 | P1 | **Rename app to "Doghouse"** | branding sweep: window title, brand chip, README, cargo bin name?, %APPDATA% dir migration (!), den identity strings |
 | P2 | Release versioning for Doghouse + eventually **in-app updates** | needs a release pipeline decision first (GitHub Releases + self-update check?) |
-| P3 | Show app version to the LEFT of the "Code Puppy" brand text (top-left toolbar) | quick UI tweak; supersede via P1 branding pass |
+| P3 | Show app version to the LEFT of the "Code Puppy" brand text (top-left toolbar) | DONE: Doghouse (app, HOST_VERSION) chip added left of brand; About panel now labels BOTH versions clearly -- "Doghouse (this app)" vs "code_puppy (agent engine)". Right chip tooltip fixed to name the engine version. |
 | P4 | Whistle action uses a horn emoji (postal horn U+1F4EF); want a whistle | Unicode has NO whistle emoji at all. Closest stand-ins: whistling-face vibe (kissing face U+1F617 + dash U+1F4A8), megaphone U+1F4E3, or ship a tiny SVG whistle icon. Decide during P1 branding pass. |
 | P5 | Remember window size (and position?) on reopen | persist in session.json alongside the rest of session restore |
