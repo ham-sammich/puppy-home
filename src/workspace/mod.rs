@@ -69,6 +69,10 @@ pub struct Workspace {
     pub id: WorkspaceId,
     pub root: PathBuf,
     pub name: String,
+    /// Hidden, throwaway session (e.g. the Agent Creator chat): driven by the
+    /// supervisor like any other, but never shown on the dashboard fleet,
+    /// never persisted, and never the headline puppy (F8).
+    pub ephemeral: bool,
     pub backend: Option<CodePuppy>,
     rx: Receiver<UiEvent>,
 
@@ -297,6 +301,7 @@ impl Workspace {
             id,
             root,
             name,
+            ephemeral: false,
             backend: Some(backend),
             rx,
             transcript: Vec::new(),

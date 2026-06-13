@@ -110,9 +110,13 @@ pub enum MgrAction {
     AgentToolsNone,
     AgentFormat,
     AgentSubmit,
-    /// Spawn a fresh home-dir session driven by code_puppy's built-in
-    /// `agent-creator` agent (QW7) — conversational agent building.
+    /// Open the Agent Creator: a hidden ephemeral session driven by
+    /// code_puppy's built-in `agent-creator` agent, shown in its own modal
+    /// (NOT a dashboard workspace) (F8).
     AgentCreatorOpen,
+    /// Close the Agent Creator modal: kill the ephemeral session and return
+    /// to the agents list (F8).
+    AgentCreatorClose,
     // models (QW4)
     ModelSetActive(String),
     ModelsEditorOpen,
@@ -149,11 +153,14 @@ impl RootView {
     /// First workspace with a ready sidecar (managers talk through it) —
     /// the egui `serving_workspace` invariant.
     pub(crate) fn first_ready_ws(&self) -> Option<WorkspaceId> {
-        self.supervisor.iter().find(|w| w.is_ready()).map(|w| w.id)
+        self.supervisor
+            .iter_visible()
+            .find(|w| w.is_ready())
+            .map(|w| w.id)
     }
 
     pub(crate) fn serving_ws(&self) -> Option<&Workspace> {
-        self.supervisor.iter().find(|w| w.is_ready())
+        self.supervisor.iter_visible().find(|w| w.is_ready())
     }
 
     pub(crate) fn ensure_mgr_inputs(&mut self, cx: &mut gpui::Context<Self>) {

@@ -48,7 +48,7 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use gpui::{
-    App, Application, Bounds, Context, Entity, FocusHandle, Focusable as _, FontWeight,
+    AnyElement, App, Application, Bounds, Context, Entity, FocusHandle, Focusable as _, FontWeight,
     IntoElement, ParentElement as _, Rgba, SharedString, Styled as _, TitlebarOptions, Window,
     WindowBounds, WindowOptions, div, point, prelude::*, px, size,
 };
@@ -284,6 +284,9 @@ pub struct RootView {
     pub(crate) skills_wizard: Option<crate::views::skills_wizard::Wizard>,
     pub(crate) agent_wizard: Option<crate::views::agent_wizard::Wizard>,
     pub(crate) agent_delete_confirm: Option<String>,
+    /// The live Agent Creator chat session (an ephemeral workspace), shown
+    /// in its own modal over the agents manager. `None` = not creating (F8).
+    pub(crate) agent_creator_session: Option<WorkspaceId>,
     // -- remote connect state --
     pub(crate) remote: Option<remote::RemoteState>,
     pub(crate) remote_pending: Option<remote::RemotePending>,
@@ -469,6 +472,7 @@ impl RootView {
             mcp_wizard: None,
             skills_wizard: None,
             agent_wizard: None,
+            agent_creator_session: None,
             agent_delete_confirm: None,
             remote: None,
             remote_pending: None,
@@ -738,7 +742,7 @@ impl RootView {
         if self.answer_input.is_some() {
             return;
         }
-        let needed = self.supervisor.iter().any(|w| {
+        let needed = self.supervisor.iter_visible().any(|w| {
             w.ask_state().is_some()
                 || matches!(
                     w.pending_request().map(|p| &p.kind),
@@ -860,7 +864,7 @@ impl RootView {
         if !self.probe_chat_screen {
             return;
         }
-        let Some(id) = self.supervisor.iter().find(|w| w.is_ready()).map(|w| w.id) else {
+        let Some(id) = self.supervisor.iter_visible().find(|w| w.is_ready()).map(|w| w.id) else {
             return;
         };
         self.probe_chat_screen = false;
@@ -1106,7 +1110,7 @@ impl RootView {
         s.window_maximized = self.win_maximized;
         s.workspaces = self
             .supervisor
-            .iter()
+            .iter_visible()
             .map(|w| session::WorkspaceEntry {
                 path: w.root.to_string_lossy().into_owned(),
                 agent: (!w.agent.is_empty()).then(|| w.agent.clone()),
@@ -1132,7 +1136,7 @@ impl RootView {
         let sig: String = format!(
             "{:?}|{:?}|{}",
             self.supervisor
-                .iter()
+                .iter_visible()
                 .map(|w| (&w.root, &w.agent, &w.model, &w.autosave))
                 .collect::<Vec<_>>(),
             win,
@@ -1149,12 +1153,109 @@ impl RootView {
     /// remote host's puppy — that identity belongs to its workspace's own
     /// surfaces, never the app-global headline (B13.8).
     fn puppy_name(&self) -> String {
-        headline_puppy(self.supervisor.iter().map(|w| {
+        headline_puppy(self.supervisor.iter_visible().map(|w| {
             // SSH-fallback sidecars run LOCALLY — their announcement IS the
             // local puppy, so they stay headline-eligible (B13.8 semantics).
             (w.puppy_name.as_str(), w.is_remote() && !w.remote_fallback())
         }))
         .to_string()
+    }
+
+    /// The Agent Creator modal (F8): a focused chat with code_puppy's
+    /// built-in `agent-creator` agent, running on a HIDDEN ephemeral session.
+    /// Floats above the agents manager; "Done" kills the session (no card).
+    fn agent_creator_modal(&self, t: &Tokens, entity: &Entity<RootView>) -> Option<AnyElement> {
+        let id = self.agent_creator_session?;
+        let ws = self.supervisor.get(id)?;
+        let input = self.chat_inputs.get(&id)?.clone();
+        let puppy = ws_puppy(ws);
+
+        let transcript = chat::transcript::transcript_panel(&chat::transcript::TranscriptArgs {
+            t: *t,
+            ws,
+            root: entity.clone(),
+            puppy: puppy.clone(),
+            user_avatar: self.user_avatar().to_string(),
+            puppy_avatar: self.puppy_avatar().to_string(),
+            show_all: true,
+            expanded: &self.expanded_entries,
+            collapsed_thinking: &self.collapsed_thinking,
+            reduce_motion: self.reduce_motion,
+        });
+        let dock = chat::composer::composer_dock(&chat::composer::ComposerArgs {
+            t: *t,
+            ws,
+            root: entity.clone(),
+            input,
+            style: self.composer_style,
+            pop: self.chat_pop.as_ref(),
+            puppy,
+            images: Vec::new(),
+            palette_sel: self.palette_sel,
+            steer_queue: self.chat_steer_queue,
+            picker_path_input: self.picker_path_input.as_ref(),
+        });
+
+        let header = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .text_size(px(15.))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(t.text)
+                    .child("\u{1fa84} Agent Creator"),
+            )
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(t.dim)
+                    .child("chat to build an agent \u{00b7} closing discards the session"),
+            )
+            .child(div().flex_1())
+            .child(
+                widgets::btn(t, "Done")
+                    .id("agent-creator-done")
+                    .on_click(managers_ui::act(entity, managers::MgrAction::AgentCreatorClose)),
+            );
+
+        let panel = div()
+            .occlude()
+            .w(px(760.))
+            .max_w_full()
+            .h(px(620.))
+            .max_h_full()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .rounded(px(13.))
+            .bg(t.panel)
+            .border_1()
+            .border_color(t.line_soft)
+            .shadow_lg()
+            .child(header)
+            .child(div().flex_1().min_h_0().child(transcript))
+            .child(dock);
+
+        Some(
+            gpui::deferred(
+                div()
+                    .absolute()
+                    .inset_0()
+                    // Occlude so backdrop clicks don't leak to the agents
+                    // manager beneath (its on_mouse_down_out would close it).
+                    .occlude()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(widgets::alpha(t.bg, 0.6))
+                    .child(panel),
+            )
+            .with_priority(240)
+            .into_any_element(),
+        )
     }
 
     /// Fire the probe prompt once the first sidecar reports ready.
@@ -1405,7 +1506,7 @@ impl RootView {
                 d.state.plans.len()
             )
         });
-        if self.supervisor.is_empty() {
+        if self.supervisor.visible_is_empty() {
             return den_part.unwrap_or_else(|| "no workspaces".to_string());
         }
         let mut line = self
@@ -1976,6 +2077,8 @@ impl Render for RootView {
                     cfg_edit_key: self.cfg_edit_key.as_deref(),
                 })
             }))
+            // Agent Creator chat modal — floats above the agents manager (F8).
+            .children(self.agent_creator_modal(&t, &cx.entity()))
             .children(self.remote.as_ref().map(|st| {
                 remote_ui::overlay(
                     t,
@@ -2101,12 +2204,12 @@ impl RootView {
         // Snapshots: catalog only for the card whose popover is open.
         let cards: Vec<dashboard::CardSnapshot> = self
             .supervisor
-            .iter()
+            .iter_visible()
             .map(|ws| dashboard::snapshot(ws, &t, self.model_popover == Some(ws.id), &puppy))
             .collect();
         let waiting: Vec<(WorkspaceId, String, Option<String>)> = self
             .supervisor
-            .iter()
+            .iter_visible()
             .filter(|w| w.status == crate::workspace::InstanceStatus::WaitingForInput)
             .map(|w| (w.id, w.name.clone(), w.pending_question().map(String::from)))
             .collect();

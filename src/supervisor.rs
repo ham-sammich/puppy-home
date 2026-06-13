@@ -126,6 +126,33 @@ impl Supervisor {
         self.workspaces.values()
     }
 
+    /// Workspaces the user should SEE: skips hidden/ephemeral sessions like
+    /// the Agent Creator chat (which is still pumped via `drain`, just not
+    /// surfaced on the dashboard, persisted, or counted) (F8).
+    pub fn iter_visible(&self) -> impl Iterator<Item = &Workspace> {
+        self.workspaces.values().filter(|w| !w.ephemeral)
+    }
+
+    /// Count of visible (non-ephemeral) workspaces.
+    pub fn visible_len(&self) -> usize {
+        self.workspaces.values().filter(|w| !w.ephemeral).count()
+    }
+
+    /// True when there are no VISIBLE workspaces (an ephemeral creator
+    /// session alone still shows the empty dashboard).
+    pub fn visible_is_empty(&self) -> bool {
+        !self.workspaces.values().any(|w| !w.ephemeral)
+    }
+
+    /// Open a hidden, throwaway session (Agent Creator) rooted at `root`.
+    pub fn open_ephemeral(&mut self, root: PathBuf) -> Result<WorkspaceId, String> {
+        let id = self.open(root)?;
+        if let Some(ws) = self.workspaces.get_mut(&id) {
+            ws.ephemeral = true;
+        }
+        Ok(id)
+    }
+
     pub fn len(&self) -> usize {
         self.workspaces.len()
     }

@@ -29,30 +29,49 @@ impl RootView {
             // workspace: supervisor.open never dedupes, so no existing
             // chat gets its agent hijacked.
             MgrAction::AgentCreatorOpen => {
-                let Some(home) = std::env::var_os("HOME")
-                    .or_else(|| std::env::var_os("USERPROFILE"))
-                    .map(std::path::PathBuf::from)
-                else {
+                // Root the hidden session at the serving workspace's folder
+                // when there is one, else the home dir — so it has a real cwd
+                // without inventing a stray top-level workspace.
+                let root = self
+                    .serving_ws()
+                    .map(|w| w.root.clone())
+                    .or_else(|| {
+                        std::env::var_os("HOME")
+                            .or_else(|| std::env::var_os("USERPROFILE"))
+                            .map(std::path::PathBuf::from)
+                    });
+                let Some(root) = root else {
                     self.last_error = Some("No home directory found".into());
                     return;
                 };
-                match self.supervisor.open(home) {
+                match self.supervisor.open_ephemeral(root) {
                     Ok(id) => {
                         if let Some(ws) = self.supervisor.get_mut(id) {
                             ws.set_agent_live("agent-creator");
                         }
-                        self.manager_open = None;
                         self.ensure_chat_input(id, cx);
-                        self.screen = crate::gpui_ui::Screen::Chat(id);
+                        // Stay in the manager context: the creator chat opens
+                        // as a modal ON TOP, never a dashboard card (F8).
+                        self.agent_creator_session = Some(id);
                         self.pending_focus = Some(id);
                         self.toast(
-                            "Agent Creator session \u{2014} describe the agent you want built"
-                                .into(),
+                            "Agent Creator \u{2014} describe the agent you want built".into(),
                             accent,
                         );
                     }
                     Err(e) => self.last_error = Some(e),
                 }
+            }
+            MgrAction::AgentCreatorClose => {
+                // Kill the ephemeral sidecar (drop -> child killed; no orphan)
+                // and refresh the agents list so a freshly built agent shows.
+                if let Some(id) = self.agent_creator_session.take() {
+                    self.supervisor.close(id);
+                    self.chat_inputs.remove(&id);
+                    self.pending_focus = None;
+                }
+                self.mgr_last_request = None;
+                self.mgr_upkeep();
             }
             MgrAction::AgentSelect(name) => {
                 self.mgr_selected = Some(name.clone());

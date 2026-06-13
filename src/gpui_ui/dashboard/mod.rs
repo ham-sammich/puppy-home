@@ -269,7 +269,7 @@ pub struct FleetStats {
 
 pub fn fleet_stats(sup: &Supervisor) -> FleetStats {
     let mut s = FleetStats {
-        dirs: sup.len(),
+        dirs: sup.visible_len(),
         running: 0,
         napping: 0,
         waiting: 0,
@@ -280,7 +280,7 @@ pub fn fleet_stats(sup: &Supervisor) -> FleetStats {
         cost: None,
         cost_estimated: false,
     };
-    for ws in sup.iter() {
+    for ws in sup.iter_visible() {
         match ws.status {
             InstanceStatus::Running | InstanceStatus::Thinking | InstanceStatus::ToolCalling => {
                 s.running += 1;
