@@ -1052,6 +1052,13 @@ pub fn tab_strip(
             let on = active_chat == Some(id);
             let root_open = root.clone();
             let root_close = root.clone();
+            let root_drop = root.clone();
+            // Drag-reorder (#5): the tab is the drag handle; the ghost mirrors
+            // its dot + name, and dropping onto any tab moves the dragged one
+            // in front of it via the supervisor's order vec.
+            let tok = *t;
+            let ghost_label = name.clone();
+            let drop_hi = crate::gpui_ui::widgets::alpha(t.accent, 0.18);
             div()
                 .id(("tab-ws", id.0))
                 .flex()
@@ -1063,6 +1070,20 @@ pub fn tab_strip(
                 .text_size(px(12.))
                 .font_family("JetBrains Mono")
                 .cursor_pointer()
+                .on_drag(id, move |_dragged, _pos, _win, cx| {
+                    cx.new(|_| crate::gpui_ui::widgets::DragGhost {
+                        t: tok,
+                        label: ghost_label.clone(),
+                        color,
+                    })
+                })
+                .drag_over::<WorkspaceId>(move |style, _, _, _| style.bg(drop_hi))
+                .on_drop::<WorkspaceId>(move |dragged, _, cx| {
+                    let moved = *dragged;
+                    root_drop.update(cx, |r, cx| {
+                        r.dispatch(DashAction::ReorderWorkspace { moved, target: id }, cx)
+                    });
+                })
                 .when(on, |d| {
                     d.bg(t.card)
                         .text_color(t.text)

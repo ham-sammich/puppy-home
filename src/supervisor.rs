@@ -18,6 +18,11 @@ const AGG_SAMPLE_EVERY: Duration = Duration::from_secs(1);
 
 pub struct Supervisor {
     workspaces: BTreeMap<WorkspaceId, Workspace>,
+    /// User-facing order (drag-reorder, #5). The map keeps O(log n) lookups;
+    /// this Vec is the single source of truth for iteration order, so tabs,
+    /// dashboard cards, and session save/restore all agree. Every id in the
+    /// map is in here exactly once (maintained by adopt/close).
+    order: Vec<WorkspaceId>,
     next_id: u64,
     /// Wakes the frontend when a backend thread has fresh events.
     waker: Arc<dyn UiWaker>,
@@ -31,6 +36,7 @@ impl Supervisor {
     pub fn new(waker: Arc<dyn UiWaker>) -> Self {
         Supervisor {
             workspaces: BTreeMap::new(),
+            order: Vec::new(),
             next_id: 1,
             waker,
             agg_sparks: SparkRing::new(SPARK_SAMPLES),
@@ -63,12 +69,32 @@ impl Supervisor {
         self.next_id += 1;
         self.workspaces
             .insert(id, Workspace::new(id, root, remote, fs, git, backend, rx));
+        self.order.push(id);
         id
     }
 
     /// Close a workspace (drops the handle → shuts down + kills the child).
     pub fn close(&mut self, id: WorkspaceId) {
         self.workspaces.remove(&id);
+        self.order.retain(|x| *x != id);
+    }
+
+    /// Drag-reorder (#5): move `moved` to sit immediately BEFORE `target` in
+    /// the user-facing order. No-ops on self-drop or unknown ids; if the
+    /// target vanished mid-drag, the moved one parks at the end rather than
+    /// disappearing.
+    pub fn reorder(&mut self, moved: WorkspaceId, target: WorkspaceId) {
+        if moved == target {
+            return;
+        }
+        let Some(from) = self.order.iter().position(|x| *x == moved) else {
+            return;
+        };
+        let id = self.order.remove(from);
+        match self.order.iter().position(|x| *x == target) {
+            Some(to) => self.order.insert(to, id),
+            None => self.order.push(id),
+        }
     }
 
     /// Relaunch a dead workspace's sidecar (the card's "Restart" action).
@@ -123,14 +149,14 @@ impl Supervisor {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Workspace> {
-        self.workspaces.values()
+        self.order.iter().filter_map(|id| self.workspaces.get(id))
     }
 
     /// Workspaces the user should SEE: skips hidden/ephemeral sessions like
     /// the Agent Creator chat (which is still pumped via `drain`, just not
     /// surfaced on the dashboard, persisted, or counted) (F8).
     pub fn iter_visible(&self) -> impl Iterator<Item = &Workspace> {
-        self.workspaces.values().filter(|w| !w.ephemeral)
+        self.iter().filter(|w| !w.ephemeral)
     }
 
     /// Count of visible (non-ephemeral) workspaces.
@@ -202,5 +228,31 @@ mod tests {
         assert_eq!(sup.aggregate_sparks().len(), 3);
         // No workspaces open -> the aggregate is a flat zero line.
         assert!(sup.aggregate_sparks().iter().all(|&v| v == 0.0));
+    }
+
+    #[test]
+    fn reorder_moves_before_target() {
+        let mut sup = Supervisor::new(Arc::new(NoopWaker));
+        // Drive the order vec directly — reorder() is pure list surgery and
+        // needs no live sidecars to exercise.
+        sup.order = vec![WorkspaceId(1), WorkspaceId(2), WorkspaceId(3)];
+        // Drop 3 onto 1 -> 3 lands immediately before 1.
+        sup.reorder(WorkspaceId(3), WorkspaceId(1));
+        assert_eq!(
+            sup.order,
+            vec![WorkspaceId(3), WorkspaceId(1), WorkspaceId(2)]
+        );
+        // Dropping onto itself is a no-op.
+        sup.reorder(WorkspaceId(3), WorkspaceId(3));
+        assert_eq!(
+            sup.order,
+            vec![WorkspaceId(3), WorkspaceId(1), WorkspaceId(2)]
+        );
+        // Target gone mid-drag -> moved parks at the end, never vanishes.
+        sup.reorder(WorkspaceId(3), WorkspaceId(99));
+        assert_eq!(
+            sup.order,
+            vec![WorkspaceId(1), WorkspaceId(2), WorkspaceId(3)]
+        );
     }
 }

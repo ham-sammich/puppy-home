@@ -13,7 +13,7 @@ use gpui::{
 
 use crate::gpui_ui::widgets::{self, alpha};
 use crate::gpui_ui::{DashAction, RootView, Tokens};
-use crate::workspace::InstanceStatus;
+use crate::workspace::{InstanceStatus, WorkspaceId};
 
 use super::{CardSnapshot, InputKind};
 
@@ -639,7 +639,18 @@ impl RenderOnce for AgentCard {
         } else {
             alpha(s.color, 0.35)
         };
+        // Drag-reorder (#5): the whole card is a drag handle; dropping onto
+        // another card moves this one before it in the shared order vec.
+        // (On the dashboard the status-rank sort still leads, so a drop reads
+        // most clearly between same-rank cards — tabs give the linear view.)
+        let card_id = s.id;
+        let drag_tok = t;
+        let drag_label = s.name.clone();
+        let drag_color = s.color;
+        let drop_hi = alpha(t.accent, 0.18);
+        let root_drop = self.root.clone();
         let card = div()
+            .id(("agent-card", card_id.0))
             .flex()
             .flex_col()
             .gap_2()
@@ -649,6 +660,20 @@ impl RenderOnce for AgentCard {
             .border_1()
             .border_color(border)
             .when(s.live, |d| d.shadow_md())
+            .on_drag(card_id, move |_dragged, _pos, _win, cx| {
+                cx.new(|_| widgets::DragGhost {
+                    t: drag_tok,
+                    label: drag_label.clone(),
+                    color: drag_color,
+                })
+            })
+            .drag_over::<WorkspaceId>(move |style, _, _, _| style.bg(drop_hi))
+            .on_drop::<WorkspaceId>(move |dragged, _, cx| {
+                let moved = *dragged;
+                root_drop.update(cx, |r, cx| {
+                    r.dispatch(DashAction::ReorderWorkspace { moved, target: card_id }, cx)
+                });
+            })
             .child(self.header())
             .child(self.state_line())
             .child(self.last_prompt())

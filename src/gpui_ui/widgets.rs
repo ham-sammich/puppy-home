@@ -7,11 +7,42 @@
 use std::time::{Duration, Instant};
 
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, Div, IntoElement, Path, Rgba, canvas, div,
-    ease_in_out, point, prelude::*, px,
+    Animation, AnimationExt as _, AnyElement, Context, Div, IntoElement, Path, Render, Rgba,
+    Window, canvas, div, ease_in_out, point, prelude::*, px,
 };
 
 use super::tokens::Tokens;
+
+/// A lightweight floating preview rendered under the cursor while a tab or
+/// dashboard card is being dragged (#5). gpui's `on_drag` wants an
+/// `Entity<impl Render>`, so this is the smallest thing that satisfies it:
+/// the dragged workspace's color dot + name in a little floating pill.
+pub struct DragGhost {
+    pub t: Tokens,
+    pub label: String,
+    pub color: Rgba,
+}
+
+impl Render for DragGhost {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let t = self.t;
+        div()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .px_2p5()
+            .py_1()
+            .rounded(px(8.))
+            .bg(t.card)
+            .border_1()
+            .border_color(alpha(t.accent, 0.8))
+            .shadow_lg()
+            .text_size(px(12.))
+            .text_color(t.text)
+            .child(div().size(px(7.)).rounded_full().bg(self.color))
+            .child(self.label.clone())
+    }
+}
 
 /// "41k" token formatting: 999 → "999", 1k–10k one decimal, then whole k / M.
 pub fn fmt_k(n: u64) -> String {

@@ -64,6 +64,12 @@ pub enum DashAction {
     Changes(WorkspaceId),
     ShowDashboard,
     CloseWorkspace(WorkspaceId),
+    /// Drag-reorder (#5): move `moved` to sit just before `target` in the
+    /// user-facing order (tabs + dashboard cards + persisted session).
+    ReorderWorkspace {
+        moved: WorkspaceId,
+        target: WorkspaceId,
+    },
     /// Dashboard close request: resting/dead closes now; a busy puppy arms a
     /// confirm first (so we never silently kill a running process).
     RequestCloseWorkspace(WorkspaceId),
@@ -321,6 +327,9 @@ impl RootView {
                 } else {
                     self.card_close_confirm = Some(id);
                 }
+            }
+            DashAction::ReorderWorkspace { moved, target } => {
+                self.supervisor.reorder(moved, target);
             }
             DashAction::CancelCloseWorkspace => self.card_close_confirm = None,
             DashAction::CloseWorkspace(id) => {
