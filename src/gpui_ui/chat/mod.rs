@@ -93,6 +93,9 @@ pub struct ChatArgs<'a> {
     /// Rename/new input (shown inside the context panel when an op is armed).
     pub tree_op_input: Option<&'a Entity<ChatInput>>,
     pub tree_op_armed: bool,
+    /// A header-initiated "new at workspace root" op is armed (F5):
+    /// `Some(is_dir)` while naming, independent of any right-click row.
+    pub tree_root_new: Option<bool>,
     /// Delete awaiting confirmation (path shown in the panel).
     pub tree_delete_pending: Option<PathBuf>,
     // -- git pass-through --
@@ -457,12 +460,112 @@ fn explorer_or_rail(args: &ChatArgs) -> AnyElement {
                         .child("EXPLORER"),
                 )
                 .child(div().flex_1())
+                .child(new_root_btn(args, false))
+                .child(new_root_btn(args, true))
                 .child(hidden_toggle(args))
                 .child(toggle),
         )
         .child(tree_panel(args))
         .child(changes_panel(args))
         .into_any_element()
+}
+
+/// EXPLORER-header button to create a file/folder at the workspace ROOT (F5).
+/// The right-click row menu only covers existing entries; this is the missing
+/// entry point for top-level (and empty-repo) creation.
+fn new_root_btn(args: &ChatArgs, is_dir: bool) -> AnyElement {
+    let t = args.t;
+    let id = args.ws.id;
+    let root_path = args.ws.root.clone();
+    let root = args.root.clone();
+    let (label, tip, key): (&str, &str, &str) = if is_dir {
+        ("\u{ff0b}dir", "New folder at workspace root", "tree-new-root-dir")
+    } else {
+        ("\u{ff0b}file", "New file at workspace root", "tree-new-root-file")
+    };
+    div()
+        .id((key, id.0))
+        .px_1p5()
+        .py_0p5()
+        .mr_1()
+        .rounded(px(6.))
+        .text_size(px(10.5))
+        .text_color(t.weak)
+        .cursor_pointer()
+        .hover(|d| d.bg(t.well))
+        .tooltip(crate::gpui_ui::widgets::text_tip(tip.into()))
+        .child(label.to_string())
+        .on_click(move |_, _, cx| {
+            let p = root_path.clone();
+            root.update(cx, |r, cx| r.dispatch(DashAction::TreeNew(id, p.clone(), is_dir), cx));
+        })
+        .into_any_element()
+}
+
+/// Inline name input for a header-initiated root create (F5). Mirrors the
+/// per-row panel's input, but stands alone since there's no right-clicked row.
+fn tree_root_op_panel(args: &ChatArgs) -> Option<AnyElement> {
+    let t = args.t;
+    let is_dir = args.tree_root_new?;
+    let input = args.tree_op_input?;
+    let root = args.root.clone();
+    Some(
+        div()
+            .mx_1()
+            .mb_1()
+            .p_1p5()
+            .rounded(px(8.))
+            .bg(t.well)
+            .border_1()
+            .border_color(alpha_accent(&t))
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(div().text_size(px(10.)).text_color(t.weak).child(
+                        if is_dir {
+                            "New folder at root \u{2014} name + Enter"
+                        } else {
+                            "New file at root \u{2014} name + Enter"
+                        },
+                    ))
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .id(("tree-root-op-cancel", args.ws.id.0))
+                            .px_1p5()
+                            .py_0p5()
+                            .rounded(px(6.))
+                            .text_size(px(10.5))
+                            .text_color(t.weak)
+                            .cursor_pointer()
+                            .hover(|d| d.bg(t.card))
+                            .child("\u{2715}")
+                            .on_click(move |_, _, cx| {
+                                root.update(cx, |r, cx| {
+                                    r.dispatch(DashAction::TreeOpCancel, cx)
+                                });
+                            }),
+                    ),
+            )
+            .child(
+                div()
+                    .px_1p5()
+                    .py_0p5()
+                    .rounded(px(6.))
+                    .bg(t.card)
+                    .border_1()
+                    .border_color(alpha_accent(&t))
+                    .font_family("JetBrains Mono")
+                    .text_size(px(11.))
+                    .child(input.clone()),
+            )
+            .into_any_element(),
+    )
 }
 
 /// The explorer's hidden-entry cycle button (Show -> Dim -> Hide, F4).
@@ -501,6 +604,7 @@ fn tree_panel(args: &ChatArgs) -> AnyElement {
         .flex()
         .flex_col()
         .py_1()
+        .children(tree_root_op_panel(args))
         .children(tree_op_panel(args))
         .children(rows)
         .into_any_element()

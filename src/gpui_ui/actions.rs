@@ -131,6 +131,8 @@ pub enum DashAction {
     TreeRename(WorkspaceId, PathBuf),
     TreeNew(WorkspaceId, PathBuf, bool),
     TreeOpSubmit,
+    /// Abandon an armed rename/new op without performing it (F5).
+    TreeOpCancel,
     TreeDelete(WorkspaceId, PathBuf, bool),
     TreeDeleteConfirm,
     // -- git surface --
@@ -706,6 +708,10 @@ impl RootView {
                     Some(Err(e)) => self.toast(e, self.tokens.error),
                     None => {}
                 }
+                self.chat_pop = None;
+            }
+            DashAction::TreeOpCancel => {
+                self.tree_op = None;
                 self.chat_pop = None;
             }
             DashAction::TreeDelete(id, path, is_dir) => {

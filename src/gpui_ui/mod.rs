@@ -1797,6 +1797,17 @@ impl Render for RootView {
                     },
                     tree_op_input: self.tree_op_input.as_ref(),
                     tree_op_armed: self.tree_op.is_some(),
+                    // Header-initiated "new at root" op for THIS workspace,
+                    // distinguished from per-row ops by the absent TreeMenu pop.
+                    tree_root_new: match (&self.tree_op, &self.chat_pop) {
+                        (Some(TreeOp::New(tid, _, is_dir)), pop)
+                            if *tid == id
+                                && !matches!(pop, Some(ChatPop::TreeMenu(..))) =>
+                        {
+                            Some(*is_dir)
+                        }
+                        _ => None,
+                    },
                     tree_delete_pending: self
                         .tree_delete_confirm
                         .as_ref()

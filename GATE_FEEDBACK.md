@@ -28,7 +28,7 @@ the cross-device handoff — the Mac-side agent should read it too.
 | F2 | SSH connect dialog: at default window size the Connect button is off-screen after picking a folder via the browser (no scroll) | remote connect dialog layout | make dialog body scrollable / anchor action row |
 | F3 | App cuts off items at the bottom of (some) views; can't scroll them into view, must resize the window | global layout | find which views lack scroll containers |
 | F4 | Workspace explorer: hidden directories (dotdirs) not shown | file tree | DONE: now shown by default + explorer header toggle cycling Show/Dim/Hide (HiddenMode in session.rs, persisted). |
-| F5 | Workspace explorer: no way to create/add files or folders | file tree | context menu: New File / New Folder |
+| F5 | Workspace explorer: no way to create/add files or folders | file tree | DONE: per-row right-click New File/Folder/Rename/Delete were wired but undiscoverable + had no root entry point. Added visible "+file/+dir" buttons in the EXPLORER header that create at the workspace root (works in empty repos), with inline name input + cancel (TreeOpCancel). |
 | F6 | Local file browser (file reference picker) can't navigate to arbitrary folders | file picker | needs path input / drive switching |
 | F7 | New workspace card: screen flashes on add, and the card appends to the END of the list while the eye expects top-left | dashboard | fix flash; consider insert-at-front or scroll-to-new |
 | F8 | Agent creator opens a NEW WORKSPACE; should stay localized inside the agent modal ("create with agent creator" button) | agents manager | |
