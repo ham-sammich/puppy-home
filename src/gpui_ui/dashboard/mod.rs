@@ -311,10 +311,9 @@ pub fn fleet(
     input_focus: &gpui::FocusHandle,
     reduce_motion: bool,
 ) -> AnyElement {
-    // Reverse first so a STABLE sort keeps the newest workspace at the front
-    // of its rank — a freshly spawned card lands top-left and stays, instead
-    // of being appended to the tail and jumping bands as it boots (F7).
-    cards.reverse();
+    // Stable sort: within a rank, cards keep supervisor (insertion) order, so
+    // a freshly spawned workspace lands at the END and STAYS there instead of
+    // bouncing to the top while it boots — Starting ranks with Idle (F7).
     cards.sort_by_key(|c| rank(c.status));
     match mode {
         DashboardViewMode::List => table::FleetTable {
