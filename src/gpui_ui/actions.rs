@@ -1016,7 +1016,10 @@ impl RootView {
                         self.avatar_ui.open = !self.avatar_ui.open;
                         if self.avatar_ui.open && self.avatar_input.is_none() {
                             let entity = cx.new(|cx| {
-                                crate::gpui_ui::input::ChatInput::new("any emoji\u{2026}", cx)
+                                crate::gpui_ui::input::ChatInput::new(
+                                    "paste any other emoji\u{2026}",
+                                    cx,
+                                )
                             });
                             let sub = cx
                                 .subscribe(&entity, |_, _, _: &crate::gpui_ui::InputEvent, cx| {

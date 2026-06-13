@@ -312,7 +312,12 @@ pub fn panel(
                 .gap_1p5()
                 .child(
                     div()
+                        // min_w_0 + overflow_hidden so the text input shrinks
+                        // to the row instead of reporting its full content
+                        // width and overflowing the panel.
                         .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
                         .px_2()
                         .py_1()
                         .rounded(px(8.))
