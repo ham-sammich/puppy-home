@@ -1674,7 +1674,9 @@ impl RootView {
                     .flex()
                     .items_center()
                     .gap_1p5()
-                    .tooltip(widgets::text_tip("Pick avatars".into()))
+                    .tooltip(widgets::text_tip(
+                        "Change profile pictures (photo or emoji)".into(),
+                    ))
                     .child(avatars::boxed(self.puppy_avatar(), 16., 4.))
                     .child(self.puppy_name())
                     .on_click(cx.listener(|this, _, _, cx| {

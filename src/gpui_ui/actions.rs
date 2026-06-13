@@ -1049,18 +1049,28 @@ impl RootView {
                         }
                     }
                     AvatarAction::PickPhoto => {
-                        // Native file picker -> copy into the app data dir so
-                        // the avatar survives the source moving (F11).
+                        // gpui's path prompt can't filter extensions, so use
+                        // rfd with an image-only filter. rfd must run OFF the
+                        // render loop (its own native modal pump) — same
+                        // worker-thread pattern the egui branch uses (F11).
                         let kind = self.avatar_ui.target;
-                        let paths = cx.prompt_for_paths(gpui::PathPromptOptions {
-                            files: true,
-                            directories: false,
-                            multiple: false,
+                        let (tx, rx) =
+                            futures::channel::oneshot::channel::<Option<std::path::PathBuf>>();
+                        std::thread::spawn(move || {
+                            let picked = rfd::FileDialog::new()
+                                .set_title("Choose a profile picture")
+                                .add_filter(
+                                    "Images",
+                                    &[
+                                        "png", "jpg", "jpeg", "jfif", "webp", "gif", "bmp",
+                                        "tif", "tiff", "ico",
+                                    ],
+                                )
+                                .pick_file();
+                            let _ = tx.send(picked);
                         });
                         cx.spawn(async move |this, cx| {
-                            if let Ok(Ok(Some(mut picked))) = paths.await
-                                && let Some(src) = picked.pop()
-                            {
+                            if let Ok(Some(src)) = rx.await {
                                 let stored =
                                     crate::gpui_ui::avatars::store_photo(&src, kind);
                                 let _ = this.update(cx, |root, cx| {

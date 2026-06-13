@@ -160,9 +160,11 @@ const CHOICES: &[&str] = &[
 /// frame after a re-pick.
 pub fn store_photo(src: &std::path::Path, kind: AvatarKind) -> Option<String> {
     let ext = src.extension()?.to_str()?.to_lowercase();
+    // Keep in sync with the rfd picker filter; only formats the `image`
+    // crate (gpui's decoder) can actually render.
     if !matches!(
         ext.as_str(),
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
+        "png" | "jpg" | "jpeg" | "jfif" | "webp" | "gif" | "bmp" | "tif" | "tiff" | "ico"
     ) {
         return None;
     }
@@ -266,10 +268,22 @@ pub fn panel(
         .occlude()
         .child(
             div()
-                .font_weight(FontWeight::BOLD)
-                .text_size(px(12.5))
-                .text_color(t.text)
-                .child("Avatars"),
+                .flex()
+                .flex_col()
+                .gap_0p5()
+                .child(
+                    div()
+                        .font_weight(FontWeight::BOLD)
+                        .text_size(px(13.5))
+                        .text_color(t.text)
+                        .child("Profile pictures"),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.5))
+                        .text_color(t.dim)
+                        .child("Upload a photo or pick an emoji \u{2014} for you and your puppy"),
+                ),
         )
         .child(
             div()
@@ -277,6 +291,18 @@ pub fn panel(
                 .gap_1p5()
                 .child(target_chip("you".into(), AvatarKind::User, user_avatar))
                 .child(target_chip("puppy".into(), AvatarKind::Puppy, puppy_avatar)),
+        )
+        // Photo upload is the headline action — primary button, up top.
+        .child(
+            widgets::primary_btn(t, "\u{1f5bc} Upload a photo\u{2026}")
+                .id("avatar-photo")
+                .on_click(act(root, AvatarAction::PickPhoto)),
+        )
+        .child(
+            div()
+                .text_size(px(10.5))
+                .text_color(t.dim)
+                .child("or pick an emoji:"),
         )
         .child(grid)
         .child(
@@ -301,11 +327,6 @@ pub fn panel(
                         .id("avatar-custom")
                         .on_click(act(root, AvatarAction::ApplyCustom)),
                 ),
-        )
-        .child(
-            widgets::btn(t, "\u{1f5bc} Choose photo\u{2026}")
-                .id("avatar-photo")
-                .on_click(act(root, AvatarAction::PickPhoto)),
         )
         .child(
             div()
