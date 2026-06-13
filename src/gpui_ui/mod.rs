@@ -628,13 +628,33 @@ impl RootView {
                 &entity,
                 move |this, input, event: &InputEvent, cx| match event {
                     InputEvent::Edited => {
+                        // Update the buffer immediately (cheap), but DEBOUNCE the
+                        // full-file syntect re-highlight: running it on every
+                        // keystroke is what made the editor laggy (#1a). The
+                        // typed char paints from the input's own re-render; the
+                        // coloring catches up ~120ms after you pause.
                         let text = input.read(cx).text().to_string();
-                        let runs = editor::highlight(&text, &path, this.tokens.dark);
                         if let Some(ws) = this.supervisor.get_mut(id) {
-                            ws.set_file_content(&path, text);
+                            ws.set_file_content(&path, text.clone());
                         }
-                        input.update(cx, |i, cx| i.set_syntax(runs, cx));
                         cx.notify();
+                        let input = input.clone();
+                        let path = path.clone();
+                        let dark = this.tokens.dark;
+                        cx.spawn(async move |_this, cx| {
+                            cx.background_executor()
+                                .timer(std::time::Duration::from_millis(120))
+                                .await;
+                            // Only the keystroke whose snapshot still matches the
+                            // live text reshapes — intermediate ones bail.
+                            let _ = input.update(cx, |i, cx| {
+                                if i.text() == text {
+                                    let runs = editor::highlight(&text, &path, dark);
+                                    i.set_syntax(runs, cx);
+                                }
+                            });
+                        })
+                        .detach();
                     }
                     InputEvent::Save => {
                         this.dispatch(DashAction::EditorSave(id, path.clone()), cx);

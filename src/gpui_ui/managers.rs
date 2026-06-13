@@ -178,14 +178,29 @@ impl RootView {
                 &entity,
                 |this: &mut Self, input, ev: &crate::gpui_ui::InputEvent, cx| {
                     if matches!(ev, crate::gpui_ui::InputEvent::Edited) {
-                        // Live highlighting for the paste buffer (JSON or md).
+                        // Debounced highlighting for the paste buffer (JSON/md):
+                        // re-highlighting a big pasted config on every keystroke
+                        // is laggy (#1a) -- catch up ~120ms after a pause.
                         let text = input.read(cx).text().to_string();
-                        let runs = crate::gpui_ui::editor::highlight(
-                            &text,
-                            std::path::Path::new(paste_file(this.manager_open)),
-                            this.tokens.dark,
-                        );
-                        input.update(cx, |i, cx| i.set_syntax(runs, cx));
+                        let file = paste_file(this.manager_open);
+                        let dark = this.tokens.dark;
+                        let input = input.clone();
+                        cx.spawn(async move |_this, cx| {
+                            cx.background_executor()
+                                .timer(std::time::Duration::from_millis(120))
+                                .await;
+                            let _ = input.update(cx, |i, cx| {
+                                if i.text() == text {
+                                    let runs = crate::gpui_ui::editor::highlight(
+                                        &text,
+                                        std::path::Path::new(file),
+                                        dark,
+                                    );
+                                    i.set_syntax(runs, cx);
+                                }
+                            });
+                        })
+                        .detach();
                     }
                     cx.notify();
                 },
