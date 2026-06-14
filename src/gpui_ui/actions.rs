@@ -40,6 +40,8 @@ pub enum DashAction {
     Stop(WorkspaceId),
     Restart(WorkspaceId),
     SetModel(WorkspaceId, String),
+    /// Open the in-app browser pointed at a detected dev-server URL (#6 chip).
+    OpenDevUrl(String),
     /// Submit the open inline input (steer / new prompt).
     SubmitInput,
     CloseInput,
@@ -264,6 +266,10 @@ impl RootView {
                     self.toast(format!("{name} \u{2192} {model}"), accent);
                 }
                 self.model_popover = None;
+            }
+            DashAction::OpenDevUrl(url) => {
+                self.opened_dev_urls.insert(url.clone()); // chip-opened counts as opened
+                self.open_browser_to(&url, cx);
             }
             DashAction::SubmitInput => self.submit_input(),
             DashAction::CloseInput => self.card_input = None,

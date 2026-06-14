@@ -85,19 +85,7 @@ impl RootView {
                 }
             }
             BrowserAction::Go | BrowserAction::Launch => {
-                // Wake ticker (started once): the drain loop is event-driven,
-                // but overlay discipline (hide-on-minimize) needs it to
-                // breathe even when nothing else generates events.
-                if !self.browser_ticker {
-                    self.browser_ticker = true;
-                    let waker = self.waker.clone();
-                    std::thread::spawn(move || {
-                        loop {
-                            std::thread::sleep(std::time::Duration::from_millis(700));
-                            waker.wake();
-                        }
-                    });
-                }
+                self.ensure_browser_ticker();
                 let Some(id) = self.browser_tab else { return };
                 let text = self
                     .browser_url_input
@@ -159,6 +147,83 @@ impl RootView {
             BrowserAction::PluginsToggle => self.plugins_open = !self.plugins_open,
         }
         cx.notify();
+    }
+
+    /// Start the browser drain-loop waker ticker exactly once. The drain loop
+    /// is event-driven, but overlay discipline (hide-on-minimize) needs a
+    /// heartbeat even when nothing else generates events.
+    pub(crate) fn ensure_browser_ticker(&mut self) {
+        if self.browser_ticker {
+            return;
+        }
+        self.browser_ticker = true;
+        let waker = self.waker.clone();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(700));
+                waker.wake();
+            }
+        });
+    }
+
+    /// Open the browser surface and point it at `url` (a dev-server chip click
+    /// or the #6 auto-open). Lazily creates the tab + URL bar via `Open`.
+    pub(crate) fn open_browser_to(&mut self, url: &str, cx: &mut gpui::Context<Self>) {
+        if !self.browser.is_available() {
+            return;
+        }
+        self.dispatch_browser(BrowserAction::Open, cx); // tab + url input + screen
+        self.ensure_browser_ticker();
+        if let Some(id) = self.browser_tab {
+            self.browser.navigate_to(id, url);
+            if let Some(input) = &self.browser_url_input {
+                let u = url.to_string();
+                input.update(cx, |i, cx| i.set_text(u, cx));
+            }
+        }
+        cx.notify();
+    }
+
+    /// Throttled scan of the active workspace's terminal + recent transcript
+    /// for local dev-server URLs: refresh the chip row and AUTO-OPEN the first
+    /// newly-seen one (each URL auto-opens at most once). Ported from the egui
+    /// `render_chat` dev-server chips, which never made it into the GPUI shell.
+    pub(crate) fn dev_url_upkeep(&mut self, cx: &mut gpui::Context<Self>) {
+        if !self.browser.is_available() {
+            self.detected_dev_urls.clear();
+            return;
+        }
+        let now = std::time::Instant::now();
+        if self
+            .last_dev_scan
+            .is_some_and(|t| now.duration_since(t) < std::time::Duration::from_millis(800))
+        {
+            return;
+        }
+        self.last_dev_scan = Some(now);
+        let Some(text) = self.serving_ws().map(|ws| ws.dev_url_scan_text()) else {
+            self.detected_dev_urls.clear();
+            return;
+        };
+        // Drop our own CDP debugging ports and de-dupe by host:port so chips
+        // only show real dev servers.
+        let cdp: std::collections::HashSet<String> =
+            self.browser.cdp_hostports().into_iter().collect();
+        let mut seen = std::collections::HashSet::new();
+        let urls: Vec<String> = crate::browser::detect_dev_urls(&text)
+            .into_iter()
+            .filter(|u| {
+                let hp = crate::browser::host_port(u);
+                !cdp.contains(&hp) && seen.insert(hp)
+            })
+            .collect();
+        self.detected_dev_urls = urls.clone();
+        for u in urls {
+            if self.opened_dev_urls.insert(u.clone()) {
+                self.open_browser_to(&u, cx);
+                break; // one auto-open per scan; the rest stay chips
+            }
+        }
     }
 
     /// The browser screen body (install panel or toolbar + viewport note).

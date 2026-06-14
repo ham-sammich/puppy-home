@@ -339,6 +339,14 @@ pub struct RootView {
     pub(crate) browser_url_input: Option<Entity<ChatInput>>,
     /// Dashboard plugins-section expanded? (egui default_open = true)
     pub(crate) plugins_open: bool,
+    /// Dev-server URLs detected in the active workspace's terminal/transcript
+    /// (the chip row). Recomputed on a throttle by `dev_url_upkeep`.
+    pub(crate) detected_dev_urls: Vec<String>,
+    /// Dev-server URLs we've already auto-opened — so each one auto-opens at
+    /// most once (the rest stay one-click chips). (#6 browser auto-open.)
+    pub(crate) opened_dev_urls: std::collections::HashSet<String>,
+    /// Throttle clock for the dev-URL scan.
+    pub(crate) last_dev_scan: Option<Instant>,
     // -- perf HUD --
     pub(crate) perf: perf_ui::GpuiPerf,
     // -- den pack-sync (activity broadcast + Tier-2 breadcrumb) --
@@ -519,6 +527,9 @@ impl RootView {
             theme_inputs: Vec::new(),
             browser: BrowserManager::discover(),
             browser_tab: None,
+            detected_dev_urls: Vec::new(),
+            opened_dev_urls: std::collections::HashSet::new(),
+            last_dev_scan: None,
             browser_url_input: None,
             plugins_open: true,
             perf: perf_ui::GpuiPerf::default(),
@@ -1910,6 +1921,7 @@ impl Render for RootView {
         }
         self.apply_terminal_resize();
         self.browser_embed_upkeep(window);
+        self.dev_url_upkeep(cx);
 
         // One-shot: focus the composer when a chat was just opened.
         if let Some(id) = self.pending_focus.take()
@@ -2079,6 +2091,7 @@ impl Render for RootView {
                     term_focused: self.term_focus.is_focused(window),
                     term_colors: &self.term_colors,
                     term_resize: self.term_resize.clone(),
+                    dev_urls: &self.detected_dev_urls,
                     logs_open: self.logs_open.contains(&id),
                     collapsed_thinking: &self.collapsed_thinking,
                     sessions: (self.sessions_open == Some(id)).then(|| {

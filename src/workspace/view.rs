@@ -709,7 +709,7 @@ impl Workspace {
 
     /// Text to scan for dev-server URLs: the embedded terminal's screen plus the
     /// recent transcript (the agent often prints "running at http://localhost…").
-    fn dev_url_scan_text(&self) -> String {
+    pub(crate) fn dev_url_scan_text(&self) -> String {
         let mut s = String::new();
         if let Some(t) = &self.terminal {
             s.push_str(&t.screen_text());

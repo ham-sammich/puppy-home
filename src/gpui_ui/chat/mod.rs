@@ -110,6 +110,10 @@ pub struct ChatArgs<'a> {
     pub term_focused: bool,
     pub term_colors: &'a crate::gpui_ui::terminal::TermColors,
     pub term_resize: crate::gpui_ui::terminal::ResizeSlot,
+    /// Local dev-server URLs detected for this workspace — one-click "Open
+    /// localhost:NNNN" chips in the toolbar (#6). Empty unless the browser
+    /// plugin is installed.
+    pub dev_urls: &'a [String],
 }
 
 /// The whole chat screen body (below the tab strip).
@@ -357,6 +361,29 @@ fn ws_toolbar(args: &ChatArgs) -> AnyElement {
         }))
         .children(args.ws.is_remote().then(|| creds_btn(args)))
         .children(args.ws.is_git_repo().then_some(git_btn))
+        .children(args.dev_urls.iter().enumerate().map(|(i, url)| {
+            // "Open localhost:5173" chip (ported from egui render_chat). The
+            // first new URL also auto-opens; clicking re-opens any of them.
+            let root = args.root.clone();
+            let url = url.clone();
+            let label = format!("\u{1f310} {}", crate::browser::host_port(&url));
+            div()
+                .id(("ws-dev-url", id.0 + i as u64))
+                .px_2()
+                .py_0p5()
+                .rounded(px(7.))
+                .text_size(px(11.5))
+                .text_color(t.accent)
+                .cursor_pointer()
+                .hover(|d| d.bg(t.well))
+                .tooltip(crate::gpui_ui::widgets::text_tip(format!(
+                    "Open {url} in the in-app browser"
+                )))
+                .child(label)
+                .on_click(move |_, _, cx| {
+                    root.update(cx, |r, cx| r.dispatch(DashAction::OpenDevUrl(url.clone()), cx));
+                })
+        }))
         .child(crate::gpui_ui::terminal::terminal_toggle_btn(
             &t,
             id,

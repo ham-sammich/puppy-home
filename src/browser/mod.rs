@@ -968,7 +968,7 @@ pub fn file_url(path: &std::path::Path) -> String {
 }
 
 /// The `host:port` of a URL, for compact tab titles/chips.
-fn host_port(url: &str) -> String {
+pub(crate) fn host_port(url: &str) -> String {
     let after = url.split("://").nth(1).unwrap_or(url);
     after
         .split(['/', '?', '#'])
