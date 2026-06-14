@@ -1003,19 +1003,26 @@ pub(crate) fn host_port(url: &str) -> String {
         .to_string()
 }
 
-/// Scan text (e.g. terminal output) for local dev-server URLs to offer opening.
+/// Where a candidate URL token ends (first whitespace/bracket/quote).
+fn url_token_end(rest: &str) -> usize {
+    rest.find(|c: char| {
+        c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '(' | ')' | '<' | '>')
+    })
+    .unwrap_or(rest.len())
+}
+
+/// Scan text (e.g. terminal output / agent chatter) for local dev-server URLs
+/// to offer opening. Catches full `http(s)://` URLs AND scheme-less mentions
+/// like `localhost:8000/x` (agents often print those bare) — assumed http.
 pub fn detect_dev_urls(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
+    // 1) Full http(s):// URLs.
     for scheme in ["http://", "https://"] {
         let mut from = 0;
         while let Some(rel) = text[from..].find(scheme) {
             let abs = from + rel;
             let rest = &text[abs..];
-            let end = rest
-                .find(|c: char| {
-                    c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '(' | ')' | '<' | '>')
-                })
-                .unwrap_or(rest.len());
+            let end = url_token_end(rest);
             let url = rest[..end]
                 .trim_end_matches(['.', ',', ';', ':', '!', '?', '/'])
                 .to_string();
@@ -1023,6 +1030,34 @@ pub fn detect_dev_urls(text: &str) -> Vec<String> {
                 out.push(url);
             }
             from = abs + scheme.len();
+        }
+    }
+    // 2) Scheme-less local hosts, e.g. "serve it at localhost:8000/haiku.html".
+    //    Require a ':port' right after the host, and skip occurrences that are
+    //    actually part of a scheme:// URL (already handled above).
+    for host in ["localhost", "127.0.0.1", "0.0.0.0"] {
+        let mut from = 0;
+        while let Some(rel) = text[from..].find(host) {
+            let abs = from + rel;
+            let after = &text[abs..];
+            let tail = &after[host.len()..];
+            let preceded_by_scheme = text[..abs].ends_with("://");
+            // Need host:DIGIT, and not glued to a larger token / scheme URL.
+            let is_port = tail
+                .strip_prefix(':')
+                .and_then(|s| s.chars().next())
+                .is_some_and(|c| c.is_ascii_digit());
+            if preceded_by_scheme || !is_port {
+                from = abs + host.len();
+                continue;
+            }
+            let end = url_token_end(after);
+            let token = after[..end].trim_end_matches(['.', ',', ';', ':', '!', '?', '/']);
+            let url = format!("http://{token}");
+            if !out.contains(&url) {
+                out.push(url);
+            }
+            from = abs + host.len();
         }
     }
     out
@@ -1048,9 +1083,22 @@ mod tests {
 
     #[test]
     fn detects_multiple_and_dedups() {
+        // The scheme'd 127.0.0.1 dedups; the bare 0.0.0.0:8080 is now also
+        // picked up (assumed http) so agents that print bare hosts still work.
         let t = "run on http://127.0.0.1:3000 and again http://127.0.0.1:3000/ also 0.0.0.0:8080";
         let urls = detect_dev_urls(t);
-        assert_eq!(urls, vec!["http://127.0.0.1:3000"]);
+        assert_eq!(
+            urls,
+            vec!["http://127.0.0.1:3000", "http://0.0.0.0:8080"]
+        );
+    }
+
+    #[test]
+    fn detects_scheme_less_localhost() {
+        // The exact shape code_puppy printed: "serve it at localhost:8000/x".
+        let t = "I can fire up server.py and serve it at localhost:8000/haiku.html .";
+        let urls = detect_dev_urls(t);
+        assert_eq!(urls, vec!["http://localhost:8000/haiku.html"]);
     }
 
     #[test]

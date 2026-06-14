@@ -309,6 +309,8 @@ pub struct RootView {
     pub(crate) skills_wizard: Option<crate::views::skills_wizard::Wizard>,
     pub(crate) agent_wizard: Option<crate::views::agent_wizard::Wizard>,
     pub(crate) agent_delete_confirm: Option<String>,
+    /// Agent wizard: the model dropdown is open.
+    pub(crate) agent_model_menu: bool,
     /// The live Agent Creator chat session (an ephemeral workspace), shown
     /// in its own modal over the agents manager. `None` = not creating (F8).
     pub(crate) agent_creator_session: Option<WorkspaceId>,
@@ -511,6 +513,7 @@ impl RootView {
             mcp_wizard: None,
             skills_wizard: None,
             agent_wizard: None,
+            agent_model_menu: false,
             agent_creator_session: None,
             agent_delete_confirm: None,
             remote: None,
@@ -2167,6 +2170,7 @@ impl Render for RootView {
                     skills_wizard: self.skills_wizard.as_ref(),
                     agent_wizard: self.agent_wizard.as_ref(),
                     agent_delete_confirm: self.agent_delete_confirm.as_deref(),
+                    agent_model_menu: self.agent_model_menu,
                     models_editor: self.models_editor,
                     cfg_entries: &self.cfg_entries,
                     cfg_edit_key: self.cfg_edit_key.as_deref(),

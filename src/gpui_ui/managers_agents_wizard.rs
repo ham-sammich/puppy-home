@@ -5,7 +5,7 @@
 use gpui::{AnyElement, IntoElement, ParentElement as _, Styled as _, div, prelude::*, px};
 
 use crate::gpui_ui::Tokens;
-use crate::gpui_ui::managers::{F_B, F_C, F_D, F_E, F_F, F_NAME, F_TOOLF, MgrAction};
+use crate::gpui_ui::managers::{F_B, F_C, F_E, F_F, F_NAME, F_TOOLF, MgrAction};
 use crate::gpui_ui::managers_ui::{
     MgrArgs, act, field, mode_toggle, mono_block, option_card, paste_panel, small, step_strip,
 };
@@ -77,13 +77,7 @@ pub(crate) fn wizard_body(args: &MgrArgs, ws: &Workspace, w: &agent_wizard::Wiza
                     args.inputs.get(F_C),
                     false,
                 ))
-                .child(field(
-                    &t,
-                    "model \u{2014} optional, blank uses the global model",
-                    args.inputs.get(F_D),
-                    false,
-                ))
-                .child(model_picker(args, ws, w))
+                .child(model_dropdown(args, ws, w))
                 .child(small(&t, "Where to save", t.weak))
                 .child(scope_cards("agent-scope"))
                 .children(w.editing.then(|| {
@@ -219,53 +213,104 @@ pub(crate) fn wizard_body(args: &MgrArgs, ws: &Workspace, w: &agent_wizard::Wiza
         .into_any_element()
 }
 
-/// A pick-list of this Code Puppy's announced models that seeds the free-text
-/// model field. Empty when the sidecar reported no catalog (field stays free).
-fn model_picker(args: &MgrArgs, ws: &Workspace, w: &agent_wizard::Wizard) -> AnyElement {
+/// A real dropdown of this Code Puppy's announced models (the model field is
+/// no longer free-text; w.model is the source of truth). Paste mode still
+/// accepts any model string for off-catalog values.
+fn model_dropdown(args: &MgrArgs, ws: &Workspace, w: &agent_wizard::Wizard) -> AnyElement {
     let t = args.t;
     let catalog = ws.model_catalog();
-    if catalog.is_empty() {
-        return div().into_any_element();
-    }
     let cur = w.model.trim().to_string();
-    let chip = |id: u64, label: String, on: bool, model: String| {
-        div()
-            .id(("agent-model-chip", id))
-            .px_2()
-            .py_0p5()
-            .rounded_full()
-            .bg(if on { alpha(t.accent, 0.16) } else { t.well })
-            .border_1()
-            .border_color(if on {
-                alpha(t.accent, 0.7)
-            } else {
-                t.line_soft
-            })
-            .font_family("JetBrains Mono")
-            .text_size(px(11.))
-            .text_color(if on { t.accent } else { t.weak })
-            .cursor_pointer()
-            .hover(|d| d.border_color(alpha(t.accent, 0.5)))
-            .child(label)
-            .on_click(act(&args.root, MgrAction::AgentSetModel(model)))
-            .into_any_element()
+    let open = args.agent_model_menu;
+    let current_label = if cur.is_empty() {
+        "global default".to_string()
+    } else {
+        cur.clone()
     };
-    let mut row = div().flex().flex_wrap().gap_1().child(chip(
-        0,
-        "global default".to_string(),
-        cur.is_empty(),
-        String::new(),
-    ));
-    for (i, m) in catalog.iter().enumerate() {
-        let on = cur == m.name;
-        row = row.child(chip(i as u64 + 1, m.name.clone(), on, m.name.clone()));
-    }
-    div()
+
+    let button = div()
+        .id("agent-model-dd")
+        .flex()
+        .items_center()
+        .gap_1p5()
+        .px_2()
+        .py_1()
+        .rounded(px(8.))
+        .bg(t.well)
+        .border_1()
+        .border_color(if open {
+            alpha(t.accent, 0.7)
+        } else {
+            t.line_soft
+        })
+        .cursor_pointer()
+        .hover(|d| d.border_color(alpha(t.accent, 0.5)))
+        .child(
+            div()
+                .flex_1()
+                .font_family("JetBrains Mono")
+                .text_size(px(11.5))
+                .text_color(t.text)
+                .child(current_label),
+        )
+        .child(small(&t, if open { "\u{25b4}" } else { "\u{25be}" }, t.weak))
+        .on_click(act(&args.root, MgrAction::AgentModelMenu));
+
+    let mut col = div()
         .flex()
         .flex_col()
         .gap_0p5()
-        .child(small(&t, "or pick from this Code Puppy's models:", t.dim))
-        .child(row)
+        .child(small(
+            &t,
+            "model \u{2014} pick one, or leave on the global default",
+            t.weak,
+        ))
+        .child(button);
+
+    if open {
+        let mut menu = div()
+            .id("agent-model-menu")
+            .flex()
+            .flex_col()
+            .gap_0p5()
+            .max_h(px(220.))
+            .overflow_y_scroll()
+            .p_1()
+            .rounded(px(8.))
+            .bg(t.card)
+            .border_1()
+            .border_color(t.line_soft)
+            .child(model_option(args, 0, "global default", "", cur.is_empty()));
+        for (i, m) in catalog.iter().enumerate() {
+            menu = menu.child(model_option(args, i as u64 + 1, &m.name, &m.name, cur == m.name));
+        }
+        if catalog.is_empty() {
+            menu = menu.child(small(
+                &t,
+                "No models reported \u{2014} use Paste mode to set one.",
+                t.dim,
+            ));
+        }
+        col = col.child(menu);
+    }
+    col.into_any_element()
+}
+
+/// One row in the model dropdown.
+fn model_option(args: &MgrArgs, id: u64, label: &str, model: &str, on: bool) -> AnyElement {
+    let t = args.t;
+    div()
+        .id(("agent-model-opt", id))
+        .px_2()
+        .py_1()
+        .rounded(px(6.))
+        .cursor_pointer()
+        .when(on, |d| d.bg(alpha(t.accent, 0.16)))
+        .hover(|d| d.bg(t.well))
+        .font_family("JetBrains Mono")
+        .text_size(px(11.5))
+        .text_color(if on { t.accent } else { t.text })
+        .child(label.to_string())
+        .on_click(act(&args.root, MgrAction::AgentSetModel(model.to_string())))
         .into_any_element()
 }
 

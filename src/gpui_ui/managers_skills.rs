@@ -432,12 +432,29 @@ fn wizard_body(args: &MgrArgs, w: &skills_wizard::Wizard) -> AnyElement {
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(field(
+                .child(small(
                     &t,
                     "SKILL.md body (markdown; the frontmatter is added on save):",
-                    args.inputs.get(F_C),
-                    true,
+                    t.weak,
                 ))
+                // A roomy editor box that fills the modal (flex-col so the
+                // input's flex_grow makes the WHOLE box clickable, not just the
+                // text lines) and grows further for long content.
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .min_h(px(340.))
+                        .px_2()
+                        .py_1()
+                        .rounded(px(8.))
+                        .bg(t.well)
+                        .border_1()
+                        .border_color(t.line_soft)
+                        .font_family("JetBrains Mono")
+                        .text_size(px(11.5))
+                        .children(args.inputs.get(F_C).map(|i| i.clone())),
+                )
                 .into_any_element(),
             _ => div()
                 .flex()

@@ -104,7 +104,9 @@ pub enum MgrAction {
     AgentMode(bool),
     AgentStep(i32),
     AgentScope(bool), // true = project
-    /// Pick a model for the agent from the catalog (seeds the model field).
+    /// Toggle the agent wizard's model dropdown open/closed.
+    AgentModelMenu,
+    /// Pick a model for the agent from the catalog dropdown.
     /// Empty string = use the global default.
     AgentSetModel(String),
     AgentToggleTool(String),

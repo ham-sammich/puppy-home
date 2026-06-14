@@ -114,9 +114,13 @@ impl RootView {
                 self.seed(F_E, w.system_prompt.clone(), cx);
                 self.seed(F_F, w.user_prompt.clone(), cx);
                 self.seed(F_TOOLF, String::new(), cx);
+                self.agent_model_menu = false;
                 self.agent_wizard = Some(w);
             }
-            MgrAction::AgentWizardCancel => self.agent_wizard = None,
+            MgrAction::AgentWizardCancel => {
+                self.agent_wizard = None;
+                self.agent_model_menu = false;
+            }
             MgrAction::AgentMode(paste) => {
                 self.read_agent_inputs(cx);
                 let mut seed = None;
@@ -156,13 +160,17 @@ impl RootView {
                     w.scope = if project { Scope::Project } else { Scope::User };
                 }
             }
+            MgrAction::AgentModelMenu => {
+                self.agent_model_menu = !self.agent_model_menu;
+            }
             MgrAction::AgentSetModel(model) => {
-                // Picker click: drive the free-text model field (the source of
-                // truth on submit) and keep the wizard mirror in sync.
+                // Dropdown pick: w.model is the source of truth (no F_D field
+                // anymore). Keep F_D seeded too so paste-mode round-trips.
                 self.seed(F_D, model.clone(), cx);
                 if let Some(w) = &mut self.agent_wizard {
                     w.model = model;
                 }
+                self.agent_model_menu = false;
             }
             MgrAction::AgentToggleTool(tool) => {
                 if let Some(w) = &mut self.agent_wizard {
@@ -264,14 +272,14 @@ impl RootView {
         let name = self.mgr_input_text(F_NAME, cx);
         let display = self.mgr_input_text(F_B, cx);
         let desc = self.mgr_input_text(F_C, cx);
-        let model = self.mgr_input_text(F_D, cx);
         let sys = self.mgr_input_text(F_E, cx);
         let user = self.mgr_input_text(F_F, cx);
         if let Some(w) = &mut self.agent_wizard {
             w.name = name;
             w.display_name = display;
             w.description = desc;
-            w.model = model;
+            // w.model is owned by the dropdown (AgentSetModel) / paste parse,
+            // not the hidden F_D input.
             w.system_prompt = sys;
             w.user_prompt = user;
         }

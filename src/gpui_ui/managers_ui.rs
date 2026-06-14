@@ -31,6 +31,8 @@ pub struct MgrArgs<'a> {
     pub skills_wizard: Option<&'a crate::views::skills_wizard::Wizard>,
     pub agent_wizard: Option<&'a crate::views::agent_wizard::Wizard>,
     pub agent_delete_confirm: Option<&'a str>,
+    /// Agent wizard: the model dropdown is open.
+    pub agent_model_menu: bool,
     /// Models manager: the extra_models.json editor is open (QW4).
     pub models_editor: bool,
     /// Config manager: parsed puppy.cfg entries + the row being edited (QW5).
