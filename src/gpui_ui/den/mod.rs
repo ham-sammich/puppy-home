@@ -76,6 +76,11 @@ pub struct DenArgs<'a> {
     pub task_target: Option<TaskTarget>,
     pub show_all_feed: bool,
     pub reduce_motion: bool,
+    /// OUR local avatars (photo-capable) so our own roster card can show a
+    /// chosen photo pfp — only emoji cross the wire, so remote members render
+    /// the transmitted emoji while we render our real avatar locally.
+    pub user_avatar: String,
+    pub puppy_avatar: String,
     /// Open workspace roots that contain a plans.md (the Share picker).
     pub sharable_plans: Vec<(String, std::path::PathBuf)>,
     /// Set when WE host the relay: the shareable `ip:port` (QW6).

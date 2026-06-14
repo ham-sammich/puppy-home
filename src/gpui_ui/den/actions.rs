@@ -239,6 +239,16 @@ impl RootView {
         cx.notify();
     }
 
+    /// Reset per-den broadcast de-dup state so the FIRST pump after (re)joining
+    /// ALWAYS re-broadcasts our roster to the new room. Without this, a second
+    /// den in the same app session sees "no change" (stale `den_roster_last`)
+    /// and never sends our agents -> everyone (including us) shows
+    /// "no agents reported yet".
+    fn reset_den_broadcast_state(&mut self) {
+        self.den_roster_last.clear();
+        self.den_roster_at = None;
+    }
+
     /// Connect to the relay with the join form's values.
     /// Host flow: spawn the relay, then join our own den on localhost.
     fn den_host_start(&mut self, cx: &mut Context<Self>) {
@@ -294,6 +304,7 @@ impl RootView {
                             sparks: Default::default(),
                         });
                         self.den_host = Some(host);
+                        self.reset_den_broadcast_state();
                         self.den_join_error = None;
                         self.den_show_all_feed = false;
                         self.screen = Screen::Den;
@@ -352,6 +363,7 @@ impl RootView {
                     alive: true,
                     sparks: Default::default(),
                 });
+                self.reset_den_broadcast_state();
                 self.den_join_error = None;
                 self.den_show_all_feed = false;
                 self.screen = Screen::Den;
@@ -587,6 +599,8 @@ impl RootView {
                 task_target: self.den_task_target,
                 show_all_feed: self.den_show_all_feed,
                 reduce_motion: self.reduce_motion,
+                user_avatar: self.user_avatar().to_string(),
+                puppy_avatar: self.puppy_avatar().to_string(),
                 sharable_plans: sharable,
                 hosting: self.den_host.as_ref().map(|h| h.share_addr.clone()),
             });

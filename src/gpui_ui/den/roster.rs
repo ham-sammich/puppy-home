@@ -69,8 +69,16 @@ pub fn roster_panel(args: &DenArgs) -> AnyElement {
                                 .flex()
                                 .items_center()
                                 .justify_center()
+                                .overflow_hidden()
                                 .text_size(px(13.))
-                                .child(user_av.to_string()),
+                                .child(if me {
+                                    // Our own card: render our real avatar
+                                    // (photo or emoji); remote members only
+                                    // ever sent an emoji.
+                                    avatars::fill_parent(args.user_avatar.as_str(), 13., 13.)
+                                } else {
+                                    div().child(user_av.to_string()).into_any_element()
+                                }),
                         )
                         .child(
                             div()
@@ -82,11 +90,31 @@ pub fn roster_panel(args: &DenArgs) -> AnyElement {
                         .children(me.then(|| tag(&t, "you")))
                         .children(m.host.then(|| tag(&t, "host")))
                         .children((!m.puppy.is_empty()).then(|| {
+                            // Our own puppy can be a photo; others are emoji.
+                            let glyph: AnyElement = if me && avatars::is_photo(&args.puppy_avatar) {
+                                div()
+                                    .size(px(14.))
+                                    .flex_none()
+                                    .rounded(px(3.))
+                                    .overflow_hidden()
+                                    .child(avatars::fill_parent(
+                                        args.puppy_avatar.as_str(),
+                                        11.,
+                                        3.,
+                                    ))
+                                    .into_any_element()
+                            } else {
+                                div().child(puppy_av.to_string()).into_any_element()
+                            };
                             div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
                                 .font_family("JetBrains Mono")
                                 .text_size(px(11.))
                                 .text_color(t.weak)
-                                .child(format!("{} {}", puppy_av, m.puppy))
+                                .child(glyph)
+                                .child(m.puppy.clone())
                         }))
                         .child(div().flex_1())
                         .child(div().size(px(8.)).rounded_full().bg(match m.presence {
