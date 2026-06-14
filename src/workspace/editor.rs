@@ -41,6 +41,7 @@ impl Workspace {
                 // save_file restores the original style.
                 let (content, crlf) = split_eol(raw);
                 FileBuffer {
+                    saved: content.clone(),
                     content,
                     crlf,
                     dirty: false,
@@ -50,6 +51,7 @@ impl Workspace {
             }
             Err(e) => FileBuffer {
                 content: String::new(),
+                saved: String::new(),
                 crlf: false,
                 dirty: false,
                 load_error: Some(e.to_string()),

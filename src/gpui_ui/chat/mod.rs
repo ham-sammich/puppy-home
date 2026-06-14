@@ -86,8 +86,6 @@ pub struct ChatArgs<'a> {
     // -- editor area + tree state --
     /// The active file tab's code input (if the active tab is a file).
     pub editor_input: Option<&'a Entity<ChatInput>>,
-    /// Tab index awaiting a dirty-close second click.
-    pub editor_close_confirm: Option<usize>,
     /// A/M/D markers per absolute path (ws.tree_markers()).
     pub markers: HashMap<PathBuf, char>,
     /// Rename/new name input, shared by the header root-create panel and the
@@ -197,7 +195,6 @@ pub fn chat_screen(args: &ChatArgs) -> AnyElement {
                         ws: args.ws,
                         root: args.root.clone(),
                         active_input: args.editor_input,
-                        close_confirm: args.editor_close_confirm,
                         browser_available: args.browser_available,
                         commit_input: args.commit_input,
                         git_list_mode: args.git_list_mode,

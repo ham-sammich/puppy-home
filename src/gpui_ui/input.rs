@@ -67,8 +67,23 @@ actions!(
         EscapeKey,
         TabKey,
         SaveFile,
+        Undo,
+        Redo,
     ]
 );
+
+/// Max retained undo snapshots (full-content copies; bounded so a long
+/// editing session can't grow memory without limit).
+const UNDO_CAP: usize = 256;
+
+/// A point-in-time editor state for undo/redo. Captures content + caret so
+/// undo restores both the text and where you were.
+#[derive(Clone)]
+struct EditSnapshot {
+    content: String,
+    selected_range: Range<usize>,
+    selection_reversed: bool,
+}
 
 /// Register the composer key bindings (call once at app startup).
 pub fn bind_keys(cx: &mut App) {
@@ -80,9 +95,10 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("right", Right, CTX),
         KeyBinding::new("up", Up, CTX),
         KeyBinding::new("down", Down, CTX),
-        KeyBinding::new("shift-left", SelectLeft, CTX),
+                KeyBinding::new("shift-left", SelectLeft, CTX),
         KeyBinding::new("shift-right", SelectRight, CTX),
         KeyBinding::new("cmd-a", SelectAll, CTX),
+        KeyBinding::new("ctrl-a", SelectAll, CTX),
         KeyBinding::new("home", Home, CTX),
         KeyBinding::new("end", End, CTX),
         KeyBinding::new("cmd-left", Home, CTX),
@@ -99,6 +115,12 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-v", Paste, CTX),
         KeyBinding::new("cmd-c", Copy, CTX),
         KeyBinding::new("cmd-x", Cut, CTX),
+        // Windows/Linux use ctrl for clipboard + select-all; bind both so the
+        // editor + composer copy/paste/cut work off-macOS (G3 gate finding —
+        // only cmd-* was bound, so Ctrl+C/V/X/A silently did nothing).
+        KeyBinding::new("ctrl-v", Paste, CTX),
+        KeyBinding::new("ctrl-c", Copy, CTX),
+        KeyBinding::new("ctrl-x", Cut, CTX),
         KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, CTX),
         KeyBinding::new("enter", Submit, CTX),
         KeyBinding::new("shift-enter", Newline, CTX),
@@ -106,6 +128,13 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("tab", TabKey, CTX),
         KeyBinding::new("cmd-s", SaveFile, CTX),
         KeyBinding::new("ctrl-s", SaveFile, CTX),
+        // Undo/redo: cmd on macOS, ctrl elsewhere. ctrl-y is the common
+        // Windows redo; cmd/ctrl-shift-z covers the rest.
+        KeyBinding::new("cmd-z", Undo, CTX),
+        KeyBinding::new("ctrl-z", Undo, CTX),
+        KeyBinding::new("cmd-shift-z", Redo, CTX),
+        KeyBinding::new("ctrl-shift-z", Redo, CTX),
+        KeyBinding::new("ctrl-y", Redo, CTX),
     ]);
 }
 
@@ -214,6 +243,12 @@ pub struct ChatInput {
     blinking: bool,
     /// Focus/blur subscriptions, registered lazily at first render.
     blink_subs: Vec<Subscription>,
+    // -- undo/redo --
+    undo_stack: Vec<EditSnapshot>,
+    redo_stack: Vec<EditSnapshot>,
+    /// True while a run of single-character typing is being coalesced into
+    /// one undo step (so undo reverts a whole word, not one keystroke).
+    typing_run: bool,
 }
 
 impl EventEmitter<InputEvent> for ChatInput {}
@@ -257,6 +292,9 @@ impl ChatInput {
             blink_focused: false,
             blinking: false,
             blink_subs: Vec::new(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            typing_run: false,
         }
     }
 
@@ -346,6 +384,11 @@ impl ChatInput {
         let end = self.content.len();
         self.selected_range = end..end;
         self.marked_range = None;
+        // Programmatic load (e.g. opening a file) is not an undoable edit:
+        // start the history fresh so undo can't reach the previous buffer.
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.typing_run = false;
         self.generation += 1;
         self.touch_caret();
         cx.emit(InputEvent::Edited);
@@ -588,8 +631,58 @@ impl ChatInput {
         }
     }
 
+    /// Snapshot the CURRENT buffer state onto the undo stack and invalidate
+    /// the redo stack (a fresh edit forks history). Bounded by `UNDO_CAP`.
+    fn push_undo(&mut self) {
+        self.undo_stack.push(self.snapshot());
+        if self.undo_stack.len() > UNDO_CAP {
+            self.undo_stack.remove(0);
+        }
+        self.redo_stack.clear();
+    }
+
+    fn snapshot(&self) -> EditSnapshot {
+        EditSnapshot {
+            content: self.content.clone(),
+            selected_range: self.selected_range.clone(),
+            selection_reversed: self.selection_reversed,
+        }
+    }
+
+    fn apply_snapshot(&mut self, s: EditSnapshot, cx: &mut Context<Self>) {
+        self.content = s.content;
+        let len = self.content.len();
+        // Defensive clamp: a snapshot's range is valid for its own content,
+        // but clamp anyway so no future change can ever panic-slice.
+        self.selected_range = s.selected_range.start.min(len)..s.selected_range.end.min(len);
+        self.selection_reversed = s.selection_reversed;
+        self.marked_range = None;
+        self.typing_run = false;
+        self.generation += 1;
+        self.touch_caret();
+        cx.emit(InputEvent::Edited);
+        cx.notify();
+    }
+
+    fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(prev) = self.undo_stack.pop() {
+            let cur = self.snapshot();
+            self.redo_stack.push(cur);
+            self.apply_snapshot(prev, cx);
+        }
+    }
+
+    fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(next) = self.redo_stack.pop() {
+            let cur = self.snapshot();
+            self.undo_stack.push(cur);
+            self.apply_snapshot(next, cx);
+        }
+    }
+
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.selected_range = offset..offset;
+        self.typing_run = false; // a cursor move ends the current typing run
         self.touch_caret();
         cx.notify()
     }
@@ -626,6 +719,7 @@ impl ChatInput {
             self.selection_reversed = !self.selection_reversed;
             self.selected_range = self.selected_range.end..self.selected_range.start;
         }
+        self.typing_run = false; // selecting ends the current typing run
         cx.notify()
     }
 
@@ -789,6 +883,15 @@ impl EntityInputHandler for ChatInput {
             .map(|r| self.range_from_utf16(r))
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
+        // Undo bookkeeping: snapshot the pre-edit state, coalescing a run of
+        // single-char insertions into one step. Replacements, deletions,
+        // pastes and newlines each start a fresh undo group.
+        let is_typing =
+            range.start == range.end && new_text != "\n" && new_text.chars().count() == 1;
+        if !(is_typing && self.typing_run) {
+            self.push_undo();
+        }
+        self.typing_run = is_typing;
         self.content =
             self.content[0..range.start].to_owned() + new_text + &self.content[range.end..];
         self.selected_range = range.start + new_text.len()..range.start + new_text.len();
@@ -1249,6 +1352,8 @@ impl Render for ChatInput {
             .on_action(cx.listener(Self::show_character_palette))
             .on_action(cx.listener(Self::submit))
             .on_action(cx.listener(Self::save_file))
+            .on_action(cx.listener(Self::undo))
+            .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::newline))
             .on_action(cx.listener(Self::escape))
             .on_action(cx.listener(Self::tab))

@@ -579,13 +579,25 @@ impl Workspace {
         })
     }
 
-    /// Replace an open file's buffer content (marks it dirty).
+    /// Replace an open file's buffer content. Dirty is derived from the saved
+    /// baseline, so editing back to (or undoing/pasting) the original content
+    /// clears the unsaved marker instead of latching it on forever.
     pub(crate) fn set_file_content(&mut self, path: &std::path::Path, text: String) {
         if let Some(b) = self.open_files.get_mut(path)
             && b.content != text
         {
             b.content = text;
-            b.dirty = true;
+            b.dirty = b.content != b.saved;
+        }
+    }
+
+    /// Throw away an open file's unsaved edits, resetting it to the last-saved
+    /// (or freshly-loaded) content. Used by the editor's "Discard & Close".
+    pub(crate) fn discard_file(&mut self, path: &std::path::Path) {
+        if let Some(b) = self.open_files.get_mut(path) {
+            b.content = b.saved.clone();
+            b.dirty = false;
+            b.save_error = None;
         }
     }
 
@@ -598,6 +610,7 @@ impl Workspace {
         let bytes = editor::restore_eol(&b.content, b.crlf);
         match self.fs.write(path, &bytes) {
             Ok(()) => {
+                b.saved = b.content.clone();
                 b.dirty = false;
                 b.save_error = None;
                 true

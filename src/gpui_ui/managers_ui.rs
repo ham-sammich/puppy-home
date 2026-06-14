@@ -73,10 +73,18 @@ pub(crate) fn field(
         .gap_0p5()
         .child(small(t, label, t.weak))
         .children(input.map(|i| {
-            // flex-col so the input's flex_grow fills the box vertically: the
-            // WHOLE padded box (and a tall field's empty area) is clickable to
-            // focus, not just the one text line (#feedback: click-to-focus).
+            // A stable per-label id so a `tall` box is a STATEFUL element —
+            // gpui only scrolls stateful elements, and we want tall text areas
+            // to scroll internally (#feedback: "make the text area scrollable").
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(label, &mut h);
+            let fid = std::hash::Hasher::finish(&h);
+            // flex-col so the input's flex_grow fills the box vertically (the
+            // WHOLE padded box is clickable to focus); a fixed height + scroll
+            // when `tall` so long content scrolls inside the box instead of
+            // shoving the modal around.
             div()
+                .id(("mgr-field", fid))
                 .flex()
                 .flex_col()
                 .px_2()
@@ -87,7 +95,7 @@ pub(crate) fn field(
                 .border_color(t.line_soft)
                 .font_family("JetBrains Mono")
                 .text_size(px(11.5))
-                .when(tall, |d| d.min_h(px(90.)))
+                .when(tall, |d| d.h(px(160.)).min_h_0().overflow_y_scroll())
                 .child(i.clone())
         }))
         .into_any_element()

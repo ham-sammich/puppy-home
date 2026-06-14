@@ -103,6 +103,216 @@ def log(text: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Claude Code OAuth: serialize token refresh across sidecar processes.
+#
+# Every puppy-home workspace runs its OWN sidecar process, but they all share a
+# single OAuth token file (~/.code_puppy/claude_code_oauth.json). The code_puppy
+# plugin only coordinates refreshes *within* a process (module globals + an
+# asyncio.Lock), so concurrent instances refresh at the same instant. Anthropic
+# ROTATES the refresh token on every refresh, so the second concurrent refresh
+# fails with HTTP 400 and the racing file writes can poison the shared token --
+# which is exactly why fresh workspaces "fail to load" and the first prompt 400s.
+#
+# We wrap the plugin's refresh_access_token with a cross-process file lock plus a
+# double-check: whoever wins the lock refreshes once; everyone else re-reads the
+# now-fresh token and skips the network entirely (never spending a rotated refresh
+# token twice). This covers BOTH the startup refresh and the 2-minute heartbeat,
+# and lives entirely in puppy-home so it survives code_puppy reinstalls.
+# ---------------------------------------------------------------------------
+class CrossProcessLock:
+    """Best-effort cross-process mutex built on atomic exclusive file creation.
+
+    ``O_CREAT | O_EXCL`` is atomic on every OS we target, so the first process to
+    create the lock file owns it. A holder that dies is recovered via a staleness
+    timeout. If we cannot acquire within ``timeout`` we proceed anyway -- a
+    slightly-racy refresh beats blocking a workspace forever (and the caller
+    still double-checks the token before spending it).
+    """
+
+    def __init__(self, path: str, timeout: float = 40.0, stale_after: float = 90.0):
+        self.path = path
+        self.timeout = timeout
+        self.stale_after = stale_after
+        self._fd: Optional[int] = None
+
+    def __enter__(self) -> "CrossProcessLock":
+        deadline = time.time() + self.timeout
+        while True:
+            try:
+                self._fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                try:
+                    os.write(self._fd, str(os.getpid()).encode())
+                except OSError:
+                    pass
+                return self
+            except FileExistsError:
+                try:
+                    if time.time() - os.path.getmtime(self.path) > self.stale_after:
+                        os.unlink(self.path)  # holder almost certainly died
+                        continue
+                except OSError:
+                    pass
+                if time.time() >= deadline:
+                    return self  # gave up waiting; caller falls back, still safe
+                time.sleep(0.05)
+
+    def __exit__(self, *exc: Any) -> bool:
+        fd, self._fd = self._fd, None
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.unlink(self.path)
+            except OSError:
+                pass
+        return False
+
+
+def install_oauth_refresh_guard() -> None:
+    """Wrap Claude Code OAuth refresh with a cross-process lock + double-check.
+
+    Idempotent and best-effort: when the OAuth plugin isn't present (non-OAuth
+    setups) or anything goes sideways, the original behaviour is left untouched.
+    """
+    try:
+        from code_puppy.plugins.claude_code_oauth import utils as ccu
+    except Exception:
+        return  # plugin not installed -> nothing to guard
+    if getattr(ccu, "_puppy_home_refresh_guarded", False):
+        return
+    try:
+        original_refresh = ccu.refresh_access_token
+        lock_path = os.path.join(
+            os.path.dirname(str(ccu.get_token_storage_path())),
+            "claude_code_oauth.refresh.lock",
+        )
+    except Exception:
+        log("oauth refresh guard install failed:\n" + traceback.format_exc())
+        return
+
+    def guarded_refresh(force: bool = False):
+        with CrossProcessLock(lock_path):
+            # Double-check INSIDE the lock: a sibling may have just refreshed
+            # while we waited, leaving the token fresh -- in which case we must
+            # NOT spend our (now-rotated) refresh token a second time.
+            if not force:
+                try:
+                    tokens = ccu.load_stored_tokens()
+                    if tokens and not ccu.is_token_expired(tokens):
+                        return tokens.get("access_token")
+                except Exception:
+                    pass
+            return original_refresh(force=force)
+
+    guarded_refresh.__wrapped__ = original_refresh  # type: ignore[attr-defined]
+    ccu.refresh_access_token = guarded_refresh
+    ccu._puppy_home_refresh_guarded = True
+    log("installed cross-process OAuth refresh guard")
+
+
+# ---------------------------------------------------------------------------
+# History repair: enforce tool_use/tool_result ADJACENCY.
+#
+# Anthropic requires every tool_result to directly follow the tool_use that
+# called it. code_puppy's prune_interrupted_tool_calls only compares the SET of
+# call ids vs the SET of return ids, so it is blind to two real corruptions we
+# see in autosaved sessions:
+#   * ordering -- a tool_result whose tool_use exists but isn't the previous msg
+#   * duplication -- the SAME tool_result re-appended across several messages
+#     (sets collapse the copies, so prune sees nothing wrong)
+# Either one yields: 400 "unexpected tool_use_id ... must have a corresponding
+# tool_use block in the previous message". We drop those orphan/duplicate return
+# parts (keeping any real UserPromptParts in the same message), then let the
+# stock set-based prune mop up any tool_use left without a return.
+# ---------------------------------------------------------------------------
+def repair_tool_call_adjacency(messages: Any) -> Any:
+    """Remove tool_result parts not answered by the immediately-preceding call."""
+    if not messages:
+        return messages
+    try:
+        import dataclasses
+
+        from code_puppy.agents._history import _classify_tool_part
+    except Exception:
+        return messages
+
+    changed = False
+    out: list = []
+    for msg in messages:
+        parts = list(getattr(msg, "parts", []) or [])
+        if not any(_classify_tool_part(p) == "return" for p in parts):
+            out.append(msg)
+            continue
+        # Call ids offered by the previous message we actually KEPT (so dropping
+        # a fully-orphaned message correctly shifts adjacency to the one before).
+        prev_call_ids = set()
+        if out:
+            for p in getattr(out[-1], "parts", []) or []:
+                if _classify_tool_part(p) == "call":
+                    cid = getattr(p, "tool_call_id", None)
+                    if cid:
+                        prev_call_ids.add(cid)
+        kept: list = []
+        seen: set = set()
+        for p in parts:
+            if _classify_tool_part(p) == "return":
+                cid = getattr(p, "tool_call_id", None)
+                if cid in prev_call_ids and cid not in seen:
+                    seen.add(cid)
+                    kept.append(p)
+                else:
+                    changed = True  # orphaned or duplicate return -> drop
+            else:
+                kept.append(p)  # preserve real user prompts / other parts
+        if not kept:
+            changed = True
+            continue  # whole message was orphan returns -> drop it
+        if len(kept) != len(parts):
+            try:
+                msg = dataclasses.replace(msg, parts=kept)
+            except TypeError:
+                try:
+                    msg.parts = kept  # type: ignore[attr-defined]
+                except (AttributeError, TypeError):
+                    pass
+        out.append(msg)
+    return out if changed else messages
+
+
+def history_tool_violations(messages: Any) -> list:
+    """List Anthropic tool-adjacency violations in a history (for diagnostics)."""
+    try:
+        from code_puppy.agents._history import _classify_tool_part
+    except Exception:
+        return []
+    bad: list = []
+    for i, m in enumerate(messages or []):
+        prev_calls = set()
+        if i > 0:
+            for p in getattr(messages[i - 1], "parts", []) or []:
+                if _classify_tool_part(p) == "call":
+                    prev_calls.add(getattr(p, "tool_call_id", None))
+        seen: set = set()
+        for p in getattr(m, "parts", []) or []:
+            if _classify_tool_part(p) == "return":
+                cid = getattr(p, "tool_call_id", None)
+                if cid not in prev_calls:
+                    bad.append({"msg": i, "tool_call_id": str(cid), "why": "no tool_use in prev msg"})
+                elif cid in seen:
+                    bad.append({"msg": i, "tool_call_id": str(cid), "why": "duplicate tool_result"})
+                seen.add(cid)
+    return bad
+
+
+def is_tool_history_400(exc: Exception) -> bool:
+    """True if an exception looks like Anthropic rejecting tool_use/tool_result pairing."""
+    s = str(exc).lower()
+    return "tool_use" in s and "tool_result" in s
+
+
+# ---------------------------------------------------------------------------
 # Message serialization
 # ---------------------------------------------------------------------------
 def _summarize(kind: str, payload: dict) -> str:
@@ -368,6 +578,11 @@ class Bridge:
 
         ensure_config_exists()
         load_api_keys_to_environment()
+
+        # Serialize Claude Code OAuth refresh across sidecar processes BEFORE the
+        # agent (and thus the first token refresh) is built. See
+        # install_oauth_refresh_guard for the full rationale.
+        install_oauth_refresh_guard()
 
         # New structured bus: mark a renderer active so emit() flows to the
         # outgoing queue instead of being buffered, then poll it ourselves.
@@ -1626,23 +1841,126 @@ class Bridge:
 
         A history with a tool_result whose tool_use is missing (e.g. from a
         cancelled tool call or a resumed/auto-saved partial turn) makes the model
-        reject the request with a 400. Code Puppy ships the repair; we apply it
-        before each run, on session load, and before autosave."""
+        reject the request with a 400. Code Puppy ships a set-based repair; we run
+        our adjacency repair FIRST (it catches duplicated/misordered tool_results
+        the set-based one is blind to), then theirs. Applied before each run, on
+        session load, and before autosave."""
+        hist = self.agent.get_message_history()
+        if not hist:
+            return
+        original_len = len(hist)
+        cleaned = hist
+        # Step-isolated: a failure in any one repair must not skip the others.
+        for step in (repair_tool_call_adjacency, self._prune_step, self._sanitize_ids_step):
+            try:
+                cleaned = step(cleaned)
+            except Exception:
+                log("history sanitize step failed:\n" + traceback.format_exc())
         try:
-            from code_puppy.agents._history import (
-                prune_interrupted_tool_calls,
-                sanitize_tool_call_ids,
-            )
-            hist = self.agent.get_message_history()
-            if not hist:
-                return
-            cleaned = sanitize_tool_call_ids(prune_interrupted_tool_calls(hist))
-            if cleaned is not hist or len(cleaned) != len(hist):
+            if cleaned is not hist or len(cleaned) != original_len:
                 self.agent.set_message_history(cleaned)
-                if len(cleaned) != len(hist):
-                    log(f"pruned interrupted tool calls: {len(hist)} -> {len(cleaned)} msgs")
+                if len(cleaned) != original_len:
+                    log(f"sanitized history: {original_len} -> {len(cleaned)} msgs")
         except Exception:
-            log("history sanitize failed:\n" + traceback.format_exc())
+            log("set sanitized history failed:\n" + traceback.format_exc())
+
+    def _install_adjacency_processor(self) -> None:
+        """Append our adjacency repair as the LAST pydantic-ai history_processor.
+
+        This is the real fix for the recurring tool_use/tool_result 400. Our
+        pre-run ``_sanitize_history`` cleans ``agent._message_history``, but
+        code_puppy installs ``history_processors=[compaction, steer]`` that run
+        AFTER us, immediately before the request is serialized. The compaction
+        processor re-appends "incoming" messages by hash and only finishes with
+        ``sanitize_tool_call_ids`` -- which is blind to tool adjacency -- so it
+        can reintroduce a duplicated/orphaned tool_result we just removed. By
+        appending ``repair_tool_call_adjacency`` as the final processor, the
+        exact list about to hit the wire is repaired last. Idempotent + re-run
+        every turn so it survives agent/model rebuilds (which reset the list).
+        """
+        try:
+            pa = (getattr(self.agent, "_code_generation_agent", None)
+                  or getattr(self.agent, "pydantic_agent", None))
+            if pa is None:
+                # Force a build so we can attach (run_with_mcp would build it
+                # anyway, but then our processor would miss the first turn).
+                from code_puppy.agents._builder import build_pydantic_agent
+                build_pydantic_agent(self.agent)
+                pa = getattr(self.agent, "_code_generation_agent", None)
+            procs = getattr(pa, "history_processors", None)
+            if procs is None:
+                log("adjacency processor: agent exposes no history_processors")
+                return
+            if any(getattr(p, "_pp_adjacency", False) for p in procs):
+                return  # already installed on this (re)build
+
+            def _adjacency_processor(messages: Any) -> Any:
+                # No RunContext annotation -> pydantic-ai uses the 1-arg form.
+                try:
+                    return repair_tool_call_adjacency(messages)
+                except Exception:
+                    log("adjacency processor failed:\n" + traceback.format_exc())
+                    return messages
+
+            _adjacency_processor._pp_adjacency = True  # type: ignore[attr-defined]
+            new = list(procs) + [_adjacency_processor]
+            try:
+                pa.history_processors = new
+            except Exception:
+                if isinstance(procs, list):
+                    procs.append(_adjacency_processor)
+                else:
+                    log("adjacency processor: history_processors not writable")
+        except Exception:
+            log("install adjacency processor failed:\n" + traceback.format_exc())
+
+    @staticmethod
+    def _prune_step(messages: Any) -> Any:
+        from code_puppy.agents._history import prune_interrupted_tool_calls
+        return prune_interrupted_tool_calls(messages)
+
+    @staticmethod
+    def _sanitize_ids_step(messages: Any) -> Any:
+        from code_puppy.agents._history import sanitize_tool_call_ids
+        return sanitize_tool_call_ids(messages)
+
+    def _dump_bad_history(self, tag: str) -> None:
+        """Write the current agent history (structure only) + violations to disk so
+        a recurring tool-pairing 400 can be diagnosed from ground truth."""
+        try:
+            import datetime
+            import json as _json
+            from code_puppy.agents._history import _classify_tool_part
+            hist = self.agent.get_message_history() or []
+            rows = []
+            for i, m in enumerate(hist):
+                parts = [
+                    {
+                        "type": type(p).__name__,
+                        "kind": _classify_tool_part(p),
+                        "tool_call_id": getattr(p, "tool_call_id", None),
+                        "tool_name": getattr(p, "tool_name", None),
+                    }
+                    for p in (getattr(m, "parts", []) or [])
+                ]
+                rows.append({"i": i, "msg": type(m).__name__, "parts": parts})
+            payload = {
+                "tag": tag,
+                "when": datetime.datetime.now().isoformat(),
+                "count": len(hist),
+                "autosave": self.last_prompt,
+                "violations": history_tool_violations(hist),
+                "messages": rows,
+            }
+            path = os.path.join(
+                os.path.expanduser("~"), ".code_puppy", f"bad_history_{tag}.json"
+            )
+            with open(path, "w", encoding="utf-8") as fh:
+                _json.dump(payload, fh, indent=2, default=str)
+            log(f"dumped problematic history -> {path} "
+                f"({len(hist)} msgs, {len(payload['violations'])} violations)")
+        except Exception:
+            log("history dump failed:\n" + traceback.format_exc())
 
     def _autosave(self) -> None:
         """Persist the current conversation to its autosave session file.
@@ -1736,18 +2054,39 @@ class Bridge:
         except Exception:
             return ""
 
+    async def _invoke_agent(self, prompt_text: str, attachments) -> Any:
+        """Single point where we hand a prompt to the agent (so retries reuse it)."""
+        if attachments:
+            return await self.agent.run_with_mcp(prompt_text, attachments=attachments)
+        return await self.agent.run_with_mcp(prompt_text)
+
     async def handle_prompt(self, msg_id: int, text: str, images=None) -> None:
         self.current_run = asyncio.current_task()
         self.last_prompt = text
         try:
+            # Repair runs in TWO places, by design: _sanitize_history cleans the
+            # stored history now, and _install_adjacency_processor makes the same
+            # repair the LAST history_processor so code_puppy's compaction/steer
+            # processors (which run after us, right before the wire) can't
+            # reintroduce an orphaned tool_result.
+            self._install_adjacency_processor()
             self._sanitize_history()  # never send an orphaned tool_use/result pair
             notes = [n for n in (self._pack_context(), self._browser_context(text)) if n]
             prompt_text = "\n\n".join(notes + [text]) if notes else text
             attachments = _decode_image_attachments(images)
-            if attachments:
-                result = await self.agent.run_with_mcp(prompt_text, attachments=attachments)
-            else:
-                result = await self.agent.run_with_mcp(prompt_text)
+            try:
+                result = await self._invoke_agent(prompt_text, attachments)
+            except Exception as exc:
+                # A tool_use/tool_result pairing 400 means a corrupt history slipped
+                # through (stale in-memory state, a restore that bypassed us, or a
+                # concurrent autosave from a workspace sharing this session). Capture
+                # ground truth, hard-repair, and retry the SAME prompt exactly once.
+                if not is_tool_history_400(exc):
+                    raise
+                self._dump_bad_history("tool_400")
+                log("tool-history 400; re-repairing history and retrying once")
+                self._sanitize_history()
+                result = await self._invoke_agent(prompt_text, attachments)
             # Canonicalize the agent's history from the result, exactly like the
             # CLI does. The history_processors callback may not capture the final
             # message, so without this the NEXT turn (and the autosave) can send a

@@ -2065,10 +2065,6 @@ impl Render for RootView {
                         }
                         _ => None,
                     },
-                    editor_close_confirm: self
-                        .editor_close_confirm
-                        .filter(|(cid, _)| *cid == id)
-                        .map(|(_, ix)| ix),
                     markers: ws.tree_markers(),
                     tree_op_input: self.tree_op_input.as_ref(),
                     picker_path_input: self.picker_path_input.as_ref(),
@@ -2234,6 +2230,10 @@ impl Render for RootView {
             )
             .children(self.tree_context_menu(cx))
             .children(self.quit_confirm.then(|| self.quit_overlay(&entity)))
+            .children(
+                self.editor_close_confirm
+                    .map(|(id, ix)| self.editor_close_overlay(id, ix, &entity)),
+            )
             .child(widgets::toast_layer(&t, &self.toasts));
         self.perf.frame_end(perf_began);
         out
@@ -2254,6 +2254,147 @@ impl RootView {
             return false;
         }
         true
+    }
+
+    /// Resolve the file path for an editor tab index, if it is a File tab.
+    fn editor_tab_path(&self, id: WorkspaceId, ix: usize) -> Option<std::path::PathBuf> {
+        self.supervisor
+            .get(id)
+            .and_then(|ws| match ws.editor_tabs().get(ix) {
+                Some(crate::workspace::EditorItem::File(p)) => Some(p.clone()),
+                _ => None,
+            })
+    }
+
+    /// Discard a modified file's unsaved edits and close its tab. Drops the
+    /// cached input entity so a later reopen rebuilds from the clean buffer.
+    pub(crate) fn editor_discard_close(
+        &mut self,
+        id: WorkspaceId,
+        ix: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(path) = self.editor_tab_path(id, ix) {
+            self.editor_inputs.remove(&(id.0, path.clone()));
+            if let Some(ws) = self.supervisor.get_mut(id) {
+                ws.discard_file(&path);
+                ws.close_editor(ix);
+            }
+        }
+        self.editor_close_confirm = None;
+        cx.notify();
+    }
+
+    /// Save a modified file then close its tab. If the write fails we leave the
+    /// tab open (the save error shows in its bar) and just drop the prompt.
+    pub(crate) fn editor_save_close(
+        &mut self,
+        id: WorkspaceId,
+        ix: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(path) = self.editor_tab_path(id, ix)
+            && let Some(ws) = self.supervisor.get_mut(id)
+            && ws.save_file(&path)
+        {
+            ws.close_editor(ix);
+        }
+        self.editor_close_confirm = None;
+        cx.notify();
+    }
+
+    /// Centered "unsaved changes" modal for closing a dirty editor tab. Like
+    /// `quit_overlay`, the scrim occludes everything; the backdrop cancels.
+    fn editor_close_overlay(
+        &self,
+        id: WorkspaceId,
+        ix: usize,
+        root: &Entity<RootView>,
+    ) -> AnyElement {
+        let t = self.tokens;
+        let name = self
+            .editor_tab_path(id, ix)
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_else(|| "this file".to_string());
+        let root_cancel = root.clone();
+        let root_discard = root.clone();
+        let root_save = root.clone();
+        let panel = div()
+            .id("ed-close-panel")
+            .occlude()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .w(px(380.))
+            .p_4()
+            .rounded(px(14.))
+            .bg(t.panel)
+            .border_1()
+            .border_color(t.line_soft)
+            .shadow_lg()
+            // Don't let clicks on the panel reach the backdrop (which cancels).
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .text_size(px(15.))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .text_color(t.text)
+                    .child(format!("Unsaved changes in {name}")),
+            )
+            .child(
+                div()
+                    .text_size(px(12.5))
+                    .text_color(t.weak)
+                    .child("Save your changes before closing, or discard them?"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap_2()
+                    .child(widgets::btn(&t, "Cancel").id("ed-close-cancel").on_click(
+                        move |_, _, cx| {
+                            root_cancel.update(cx, |r, cx| {
+                                r.editor_close_confirm = None;
+                                cx.notify();
+                            });
+                        },
+                    ))
+                    .child(
+                        widgets::btn(&t, "Discard\u{2009}&\u{2009}Close")
+                            .id("ed-close-discard")
+                            .on_click(move |_, _, cx| {
+                                root_discard
+                                    .update(cx, |r, cx| r.editor_discard_close(id, ix, cx));
+                            }),
+                    )
+                    .child(
+                        widgets::primary_btn(&t, "Save\u{2009}&\u{2009}Close")
+                            .id("ed-close-save")
+                            .on_click(move |_, _, cx| {
+                                root_save.update(cx, |r, cx| r.editor_save_close(id, ix, cx));
+                            }),
+                    ),
+            );
+        let root_backdrop = root.clone();
+        let scrim = div()
+            .occlude()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(widgets::alpha(t.bg, 0.6))
+            .id("ed-close-scrim")
+            .on_click(move |_, _, cx| {
+                root_backdrop.update(cx, |r, cx| {
+                    r.editor_close_confirm = None;
+                    cx.notify();
+                });
+            })
+            .child(panel);
+        gpui::deferred(scrim).with_priority(210).into_any_element()
     }
 
     /// The centered "a puppy is still working" quit confirmation (#4). Forces

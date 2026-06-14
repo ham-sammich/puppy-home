@@ -105,8 +105,6 @@ pub struct EditorArgs<'a> {
     pub root: Entity<RootView>,
     /// The active file tab's input entity (created by the root on open).
     pub active_input: Option<&'a Entity<ChatInput>>,
-    /// Pending dirty-close confirmation for a tab index.
-    pub close_confirm: Option<usize>,
     /// Browser plugin installed? (gates the HTML "Open in browser" button.)
     pub browser_available: bool,
     // -- git surface pass-through (gitpanel) --
@@ -195,7 +193,6 @@ fn tab_bar(args: &EditorArgs) -> AnyElement {
                 EditorItem::Commit { .. } => ("Commit".to_string(), false),
             };
             let on = i == active;
-            let confirm = args.close_confirm == Some(i);
             let root_focus = args.root.clone();
             let root_close = args.root.clone();
             div()
@@ -217,10 +214,16 @@ fn tab_bar(args: &EditorArgs) -> AnyElement {
                     div()
                         .id(("editor-tab-x", i as u64))
                         .px_0p5()
-                        .text_color(if confirm { t.error } else { t.dim })
+                        .text_color(t.dim)
                         .hover(|d| d.text_color(t.error))
-                        .child(if confirm { "sure?" } else { "\u{2715}" })
+                        .child("\u{2715}")
                         .on_click(move |_, _, cx| {
+                            // Stop the click bubbling to the parent tab's
+                            // on_click (EditorTab), which would reset the
+                            // dirty-close confirm and make closing a modified
+                            // file impossible (G3 editor finding). A dirty file
+                            // routes to the centered close-confirm modal.
+                            cx.stop_propagation();
                             root_close
                                 .update(cx, |r, cx| r.dispatch(DashAction::EditorClose(id, i), cx));
                         }),

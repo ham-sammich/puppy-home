@@ -437,14 +437,18 @@ fn wizard_body(args: &MgrArgs, w: &skills_wizard::Wizard) -> AnyElement {
                     "SKILL.md body (markdown; the frontmatter is added on save):",
                     t.weak,
                 ))
-                // A roomy editor box that fills the modal (flex-col so the
-                // input's flex_grow makes the WHOLE box clickable, not just the
-                // text lines) and grows further for long content.
+                // A roomy editor box (flex-col so the input's flex_grow makes
+                // the WHOLE box clickable). Fixed height + stateful id + scroll
+                // so long SKILL.md bodies scroll INSIDE the box (gpui only
+                // scrolls stateful elements) instead of shoving the modal.
                 .child(
                     div()
+                        .id("skill-content-box")
                         .flex()
                         .flex_col()
-                        .min_h(px(340.))
+                        .h(px(340.))
+                        .min_h_0()
+                        .overflow_y_scroll()
                         .px_2()
                         .py_1()
                         .rounded(px(8.))

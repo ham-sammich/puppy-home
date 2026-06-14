@@ -130,6 +130,10 @@ pub(crate) struct FileBuffer {
     /// ending is restored from `crlf` on save so editing one line in a
     /// CRLF file doesn't rewrite every line (whole-file diff bug).
     pub(crate) content: String,
+    /// The last-saved (or freshly-loaded) content, LF-normalized. `dirty` is
+    /// derived as `content != saved`, so undoing edits back to the original
+    /// (or pasting it back) correctly clears the unsaved marker.
+    pub(crate) saved: String,
     /// The file used CRLF (\r\n) on disk; restore it when writing back.
     pub(crate) crlf: bool,
     pub(crate) dirty: bool,
