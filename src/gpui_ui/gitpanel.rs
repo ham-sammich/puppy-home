@@ -175,14 +175,15 @@ pub fn git_view(args: &GitArgs) -> AnyElement {
         .iter()
         .map(|e| (e.path.clone(), e.marker()))
         .collect();
+    // Left column: staged + unstaged lists, filling the column height with
+    // their own scroll (G3 layout: two-up files | history instead of stacked).
     let staging = div()
-        .flex_none()
-        .max_h(px(220.))
+        .flex_1()
+        .min_h_0()
         .id(("git-stage-scroll", id.0))
         .overflow_y_scroll()
         .flex()
         .flex_col()
-        .px_2()
         .child(stage_section(args, "Staged", staged_rows, true))
         .child(stage_section(args, "Changes", unstaged_rows, false));
 
@@ -193,6 +194,37 @@ pub fn git_view(args: &GitArgs) -> AnyElement {
         graph_view(args)
     };
 
+    // Two-column body: files (left) | history-graph (right). The top section
+    // (header, commit box, branch/menu) stays full-width above both columns.
+    let columns = div()
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .gap_2()
+        .px_2()
+        .child(
+            div()
+                .w(px(320.))
+                .flex_none()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .border_r_1()
+                .border_color(t.line_soft)
+                .pr_2()
+                .child(staging),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .child(div().pb_1().child(small(&t, "HISTORY".into(), t.weak)))
+                .child(history),
+        );
+
     div()
         .flex_1()
         .min_h_0()
@@ -202,11 +234,9 @@ pub fn git_view(args: &GitArgs) -> AnyElement {
         .child(header)
         .children(action_msg)
         .child(commit_box)
-        .child(staging)
         .children(args.branch_armed.then(|| branch_input_row(args)))
         .children(args.graph_menu.map(|m| graph_menu_panel(args, m)))
-        .child(div().px_2().child(small(&t, "HISTORY".into(), t.weak)))
-        .child(history)
+        .child(columns)
         .into_any_element()
 }
 
