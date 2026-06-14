@@ -10,7 +10,7 @@ use gpui::{
 use puppy_relay::protocol::{Presence, RoomAgentInfo};
 
 use crate::gpui_ui::widgets::{self, alpha};
-use crate::gpui_ui::{DashAction, tokens};
+use crate::gpui_ui::{DashAction, avatars, tokens};
 
 use super::{DenAction, DenArgs};
 
@@ -27,6 +27,17 @@ pub fn roster_panel(args: &DenArgs) -> AnyElement {
         .children(args.den.state.members.iter().map(|m| {
             let color = tokens::hex(&m.color);
             let me = m.user == args.den.user;
+            // Member pfps come over the wire (emoji); fall back to defaults.
+            let user_av = if m.user_avatar.is_empty() {
+                avatars::USER_DEFAULT
+            } else {
+                m.user_avatar.as_str()
+            };
+            let puppy_av = if m.puppy_avatar.is_empty() {
+                avatars::PUPPY_DEFAULT
+            } else {
+                m.puppy_avatar.as_str()
+            };
             let agents = args
                 .den
                 .state
@@ -59,7 +70,7 @@ pub fn roster_panel(args: &DenArgs) -> AnyElement {
                                 .items_center()
                                 .justify_center()
                                 .text_size(px(13.))
-                                .child("\u{1f436}"),
+                                .child(user_av.to_string()),
                         )
                         .child(
                             div()
@@ -75,7 +86,7 @@ pub fn roster_panel(args: &DenArgs) -> AnyElement {
                                 .font_family("JetBrains Mono")
                                 .text_size(px(11.))
                                 .text_color(t.weak)
-                                .child(format!("\u{1f415} {}", m.puppy))
+                                .child(format!("{} {}", puppy_av, m.puppy))
                         }))
                         .child(div().flex_1())
                         .child(div().size(px(8.)).rounded_full().bg(match m.presence {

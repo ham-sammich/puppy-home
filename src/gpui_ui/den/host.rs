@@ -103,23 +103,27 @@ pub fn spawn_host() -> Result<DenHost, String> {
     let port = pick_port();
     let watch_pid = std::process::id().to_string();
     let child = if let Some(bin) = relay_binary() {
-        Command::new(bin)
-            .arg(port.to_string())
+        let mut cmd = Command::new(bin);
+        cmd.arg(port.to_string())
             .env("PUPPY_RELAY_WATCH_PID", &watch_pid)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
+            .stderr(Stdio::null());
+        // The relay is a console-subsystem binary; without this a GUI host
+        // flashes/keeps an empty terminal window when hosting (G3 finding).
+        crate::proc::hide_console(&mut cmd);
+        cmd.spawn()
             .map_err(|e| format!("couldn't start puppy-relay: {e}"))?
     } else if std::path::Path::new("relay/Cargo.toml").is_file() {
         // Dev fallback only: inside the repo without a built binary.
-        Command::new("cargo")
-            .args(["run", "-q", "-p", "puppy-relay", "--", &port.to_string()])
+        let mut cmd = Command::new("cargo");
+        cmd.args(["run", "-q", "-p", "puppy-relay", "--", &port.to_string()])
             .env("PUPPY_RELAY_WATCH_PID", &watch_pid)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
+            .stderr(Stdio::null());
+        crate::proc::hide_console(&mut cmd);
+        cmd.spawn()
             .map_err(|e| format!("cargo dev-fallback failed: {e}"))?
     } else {
         return Err(

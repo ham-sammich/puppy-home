@@ -67,11 +67,19 @@ impl DenState {
                 self.plans = plans.clone();
                 self.roster.clear(); // rosters re-arrive on each member's next tick
             }
-            ServerMsg::MemberJoined { user, puppy, color } => {
+            ServerMsg::MemberJoined {
+                user,
+                puppy,
+                user_avatar,
+                puppy_avatar,
+                color,
+            } => {
                 if !self.members.iter().any(|m| &m.user == user) {
                     self.members.push(MemberInfo {
                         user: user.clone(),
                         puppy: puppy.clone(),
+                        user_avatar: user_avatar.clone(),
+                        puppy_avatar: puppy_avatar.clone(),
                         color: color.clone(),
                         host: false,
                         presence: Presence::Active,
@@ -242,11 +250,14 @@ impl PackClient {
     /// Connect, send the join, and start the reader thread. `addr` may omit the
     /// port (defaults to the relay's 9220). `puppy` is this member's puppy name,
     /// shown to the pack (may be empty). `waker` nudges the UI per event.
+    #[allow(clippy::too_many_arguments)]
     pub fn connect(
         addr: &str,
         room: &str,
         user: &str,
         puppy: &str,
+        user_avatar: &str,
+        puppy_avatar: &str,
         waker: Arc<dyn UiWaker>,
     ) -> Result<(PackClient, Receiver<PackEvent>), String> {
         let addr = if addr.contains(':') {
@@ -274,6 +285,8 @@ impl PackClient {
             room: room.to_string(),
             user: user.to_string(),
             puppy: puppy.to_string(),
+            user_avatar: user_avatar.to_string(),
+            puppy_avatar: puppy_avatar.to_string(),
             proto: PROTO_VERSION,
         });
 
@@ -435,6 +448,8 @@ mod tests {
             "test-room",
             "tester",
             "Rex",
+            "",
+            "",
             Arc::new(crate::waker::NoopWaker),
         )
         .expect("connect+join");
@@ -479,6 +494,8 @@ mod tests {
         st.apply(&ServerMsg::MemberJoined {
             user: "alice".into(),
             puppy: "Rex".into(),
+            user_avatar: String::new(),
+            puppy_avatar: String::new(),
             color: "#abc".into(),
         });
         st.apply(&ServerMsg::Activity {

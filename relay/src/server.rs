@@ -72,13 +72,15 @@ fn handle_conn(hub: Arc<Hub>, stream: TcpStream) {
         .next()
         .and_then(|l| l.ok())
         .and_then(|l| serde_json::from_str::<ClientMsg>(&l).ok());
-    let (room, user, puppy, proto) = match first {
+    let (room, user, puppy, user_avatar, puppy_avatar, proto) = match first {
         Some(ClientMsg::Join {
             room,
             user,
             puppy,
+            user_avatar,
+            puppy_avatar,
             proto,
-        }) => (room, user, puppy, proto),
+        }) => (room, user, puppy, user_avatar, puppy_avatar, proto),
         Some(other) => {
             if let Some(reply) = coordination_reply(&hub, other) {
                 send_direct(&mut write_half, &reply);
@@ -121,7 +123,14 @@ fn handle_conn(hub: Arc<Hub>, stream: TcpStream) {
         })
         .ok();
 
-    let (id, snapshot) = hub.join(&room, &user, puppy.trim(), tx.clone());
+    let (id, snapshot) = hub.join(
+        &room,
+        &user,
+        puppy.trim(),
+        user_avatar.trim(),
+        puppy_avatar.trim(),
+        tx.clone(),
+    );
     let _ = tx.send(serde_json::to_string(&snapshot).expect("ServerMsg serializes"));
 
     for line in lines {

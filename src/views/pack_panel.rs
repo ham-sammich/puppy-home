@@ -316,6 +316,8 @@ fn render_join_form(ui: &mut egui::Ui, view: &mut PackView) {
             view.room.trim(),
             view.user.trim(),
             view.puppy.trim(),
+            "",
+            "",
             crate::waker::egui_waker(ui.ctx()),
         ) {
             Ok((client, rx)) => {

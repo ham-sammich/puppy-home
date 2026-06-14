@@ -57,6 +57,11 @@ struct Room {
     next_task_id: u64,
     /// Shared plans, keyed by (user, puppy) in share order.
     plans: Vec<PlanInfo>,
+    /// Last roster agent-summary each member broadcast, keyed by user. Cached
+    /// so late joiners see existing members' agents (the client only sends its
+    /// roster when it CHANGES, so without this a late joiner would show
+    /// "no agents reported yet" for everyone already in the room).
+    rosters: HashMap<String, Vec<RoomAgentInfo>>,
     /// Monotonic join counter (smallest current value = host).
     join_seq: u64,
 }
@@ -103,6 +108,8 @@ impl Room {
             .map(|m| MemberInfo {
                 user: m.user.clone(),
                 puppy: m.puppy.clone(),
+                user_avatar: m.user_avatar.clone(),
+                puppy_avatar: m.puppy_avatar.clone(),
                 color: m.color.clone(),
                 host: Some(m.join_seq) == host_seq,
                 presence: m.presence,
@@ -150,6 +157,8 @@ impl Room {
 struct Member {
     user: String,
     puppy: String,
+    user_avatar: String,
+    puppy_avatar: String,
     color: String,
     presence: Presence,
     /// Position in the room's join order (host = smallest present).
@@ -200,11 +209,14 @@ impl Hub {
     /// Add a member to a room (creating it on first join). Existing members
     /// are told (announcement + system feed line); the joiner gets the full
     /// den snapshot back: members, feed tail, kanban, shared plans.
+    #[allow(clippy::too_many_arguments)]
     pub fn join(
         &self,
         room: &str,
         user: &str,
         puppy: &str,
+        user_avatar: &str,
+        puppy_avatar: &str,
         tx: Sender<String>,
     ) -> (u64, ServerMsg) {
         let mut inner = self.inner.lock().unwrap();
@@ -219,6 +231,8 @@ impl Hub {
         room_state.broadcast(&encode(&ServerMsg::MemberJoined {
             user: user.into(),
             puppy: puppy.into(),
+            user_avatar: user_avatar.to_string(),
+            puppy_avatar: puppy_avatar.to_string(),
             color: color.clone(),
         }));
         room_state.system_feed(if puppy.is_empty() {
@@ -231,6 +245,8 @@ impl Hub {
             Member {
                 user: user.to_string(),
                 puppy: puppy.to_string(),
+                user_avatar: user_avatar.to_string(),
+                puppy_avatar: puppy_avatar.to_string(),
                 color,
                 presence: Presence::Active,
                 join_seq,
@@ -244,6 +260,18 @@ impl Hub {
             tasks: room_state.tasks.clone(),
             plans: room_state.plans.clone(),
         };
+        // Replay every existing member's last-known roster to the new joiner so
+        // their agents show immediately (clients only re-send on change, so
+        // they won't broadcast again just because someone joined).
+        if let Some(member) = room_state.members.get(&id) {
+            for (from, agents) in &room_state.rosters {
+                let _ = member.tx.send(encode(&ServerMsg::Roster {
+                    from: from.clone(),
+                    agents: agents.clone(),
+                    ts: now_ts(),
+                }));
+            }
+        }
         inner.conns.insert(id, room.to_string());
         (id, snapshot)
     }
@@ -263,6 +291,11 @@ impl Hub {
         if let Some(user) = user
             && let Some(room_state) = inner.rooms.get_mut(&room)
         {
+            // Drop the departed user's cached roster once none of their
+            // connections remain (bounded memory; no stale agents replayed).
+            if !room_state.members.values().any(|m| m.user == user) {
+                room_state.rosters.remove(&user);
+            }
             room_state.broadcast(&encode(&ServerMsg::MemberLeft { user: user.clone() }));
             room_state.system_feed(format!("{user} left the den"));
         }
@@ -317,12 +350,15 @@ impl Hub {
         room_state.broadcast(&encode(&ServerMsg::Presence { user, presence }));
     }
 
-    /// Re-broadcast a member's roster agent summaries (size-capped).
+    /// Re-broadcast a member's roster agent summaries (size-capped) AND cache
+    /// them so the next late joiner gets them in their replay.
     pub fn roster(&self, id: u64, mut agents: Vec<RoomAgentInfo>) {
         agents.truncate(ROSTER_CAP);
         self.room_of(id, |room, member| {
+            let user = member.to_string();
+            room.rosters.insert(user.clone(), agents.clone());
             room.broadcast(&encode(&ServerMsg::Roster {
-                from: member.to_string(),
+                from: user,
                 agents,
                 ts: now_ts(),
             }));
@@ -570,7 +606,7 @@ mod tests {
         let (atx, arx) = channel();
         let (btx, brx) = channel();
 
-        let (_aid, joined_a) = hub.join("room", "alice", "Rex", atx);
+        let (_aid, joined_a) = hub.join("room", "alice", "Rex", "", "", atx);
         let (members_a, feed_a, _) = snapshot(joined_a);
         assert_eq!(members_a.len(), 1);
         assert_eq!(
@@ -582,7 +618,7 @@ mod tests {
         assert_eq!(feed_a.len(), 1, "own join is narrated in the snapshot");
         assert!(drain(&arx).is_empty(), "no self-announce on join");
 
-        let (_bid, joined_b) = hub.join("room", "bob", "Biscuit", btx);
+        let (_bid, joined_b) = hub.join("room", "bob", "Biscuit", "", "", btx);
         let (members_b, _, _) = snapshot(joined_b);
         let names: Vec<&str> = members_b.iter().map(|m| m.user.as_str()).collect();
         assert_eq!(names, vec!["alice", "bob"]);
@@ -608,8 +644,8 @@ mod tests {
         let hub = Hub::new();
         let (atx, arx) = channel();
         let (btx, brx) = channel();
-        let (aid, _) = hub.join("room", "alice", "", atx);
-        let (_bid, _) = hub.join("room", "bob", "", btx);
+        let (aid, _) = hub.join("room", "alice", "", "", "", atx);
+        let (_bid, _) = hub.join("room", "bob", "", "", "", btx);
         drain(&arx);
 
         hub.chat(aid, "hello den");
@@ -627,8 +663,8 @@ mod tests {
         let hub = Hub::new();
         let (atx, arx) = channel();
         let (btx, brx) = channel();
-        let (aid, _) = hub.join("room-one", "alice", "", atx);
-        let (_bid, _) = hub.join("room-two", "bob", "", btx);
+        let (aid, _) = hub.join("room-one", "alice", "", "", "", atx);
+        let (_bid, _) = hub.join("room-two", "bob", "", "", "", btx);
 
         hub.chat(aid, "secret");
         assert_eq!(drain(&arx).len(), 1);
@@ -640,8 +676,8 @@ mod tests {
         let hub = Hub::new();
         let (atx, arx) = channel();
         let (btx, _brx) = channel();
-        let (_aid, _) = hub.join("room", "alice", "", atx);
-        let (bid, _) = hub.join("room", "bob", "", btx);
+        let (_aid, _) = hub.join("room", "alice", "", "", "", atx);
+        let (bid, _) = hub.join("room", "bob", "", "", "", btx);
         drain(&arx);
 
         hub.leave(bid);
@@ -659,7 +695,7 @@ mod tests {
     fn claims_conflict_release_and_broadcast() {
         let hub = Hub::new();
         let (atx, arx) = channel();
-        let (_aid, _) = hub.join("room", "alice", "Rex", atx);
+        let (_aid, _) = hub.join("room", "alice", "Rex", "", "", atx);
 
         // Claim succeeds, the room is told, and the list shows it.
         let r = hub.claim("room", "alice", "Rex", "src/auth.rs", "refactor");
@@ -724,7 +760,7 @@ mod tests {
     fn agent_post_reaches_members() {
         let hub = Hub::new();
         let (atx, arx) = channel();
-        let (_aid, _) = hub.join("room", "alice", "", atx);
+        let (_aid, _) = hub.join("room", "alice", "", "", "", atx);
         let r = hub.post("room", "Rufus", "taking the parser");
         assert!(matches!(r, ServerMsg::PostResult { ok: true }));
         let seen = drain(&arx);
@@ -740,7 +776,7 @@ mod tests {
     fn presence_kanban_and_plans_round_trip() {
         let hub = Hub::new();
         let (atx, arx) = channel();
-        let (aid, _) = hub.join("room", "alice", "Rex", atx);
+        let (aid, _) = hub.join("room", "alice", "Rex", "", "", atx);
 
         // Presence change broadcasts once; a no-op flap stays silent.
         hub.presence(aid, Presence::Idle);
@@ -776,16 +812,50 @@ mod tests {
     }
 
     #[test]
+    fn late_joiner_gets_existing_members_rosters() {
+        let hub = Hub::new();
+        let (atx, _arx) = channel();
+        let (aid, _) = hub.join("room", "alice", "Rex", "", "", atx);
+        // Alice reports her agents BEFORE bob joins.
+        hub.roster(
+            aid,
+            vec![RoomAgentInfo {
+                puppy: "Rex".into(),
+                agent: "code-puppy".into(),
+                model: "opus".into(),
+                state: "idle".into(),
+                verb: String::new(),
+                file: String::new(),
+                dir: "proj".into(),
+                tps: 0.0,
+                added: 0,
+                removed: 0,
+            }],
+        );
+
+        let (btx, brx) = channel();
+        let (_bid, _joined) = hub.join("room", "bob", "", "", "", btx);
+        // Bob's first messages include alice's replayed roster.
+        let bob_saw = drain(&brx);
+        assert!(
+            bob_saw.iter().any(|l| l.contains(r#""event":"roster""#)
+                && l.contains(r#""from":"alice""#)
+                && l.contains("proj")),
+            "late joiner must receive alice's cached roster: {bob_saw:?}"
+        );
+    }
+
+    #[test]
     fn late_joiner_gets_the_den_snapshot() {
         let hub = Hub::new();
         let (atx, _arx) = channel();
-        let (aid, _) = hub.join("room", "alice", "Rex", atx);
+        let (aid, _) = hub.join("room", "alice", "Rex", "", "", atx);
         hub.chat(aid, "first!");
         hub.task_create(aid, "Webhooks", TaskColumn::InProgress, "alice", true);
         hub.plan_share(aid, "Rex", "- [ ] verify signatures");
 
         let (btx, _brx) = channel();
-        let (_bid, joined) = hub.join("room", "bob", "", btx);
+        let (_bid, joined) = hub.join("room", "bob", "", "", "", btx);
         match joined {
             ServerMsg::Joined {
                 feed, tasks, plans, ..

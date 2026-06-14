@@ -143,6 +143,13 @@ pub struct MemberInfo {
     /// The member's puppy name (Code Puppy's `puppy_name`), may be empty.
     #[serde(default)]
     pub puppy: String,
+    /// The member's chosen user + puppy avatar EMOJI (photo pfps are local
+    /// paths that don't cross machines, so the client sends the default emoji
+    /// for those). Empty = use the receiver's default. (Den pfp support.)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub user_avatar: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub puppy_avatar: String,
     /// Owner color (`#rrggbb`), relay-assigned from a palette by join order so
     /// colors are unique per room and clients never bikeshed them.
     #[serde(default)]
@@ -166,6 +173,11 @@ pub enum ClientMsg {
         /// The joiner's puppy name (shown to the pack; may be empty).
         #[serde(default)]
         puppy: String,
+        /// The joiner's user + puppy avatar emoji (empty -> receiver default).
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        user_avatar: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        puppy_avatar: String,
         #[serde(default)]
         proto: u32,
     },
@@ -264,6 +276,10 @@ pub enum ServerMsg {
         user: String,
         #[serde(default)]
         puppy: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        user_avatar: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        puppy_avatar: String,
         #[serde(default)]
         color: String,
     },
@@ -344,6 +360,8 @@ mod tests {
                 room: "swift-otter-42".into(),
                 user: "jacob".into(),
                 puppy: "Rufus".into(),
+                user_avatar: "\u{1f9d1}".into(),
+                puppy_avatar: "\u{1f436}".into(),
                 proto: PROTO_VERSION,
             },
             ClientMsg::Chat {
@@ -435,6 +453,8 @@ mod tests {
                     MemberInfo {
                         user: "a".into(),
                         puppy: "Rex".into(),
+                        user_avatar: String::new(),
+                        puppy_avatar: String::new(),
                         color: "#e7ab4d".into(),
                         host: true,
                         presence: Presence::Active,
@@ -442,6 +462,8 @@ mod tests {
                     MemberInfo {
                         user: "b".into(),
                         puppy: String::new(),
+                        user_avatar: String::new(),
+                        puppy_avatar: String::new(),
                         color: "#56c7c2".into(),
                         host: false,
                         presence: Presence::Idle,
@@ -474,6 +496,8 @@ mod tests {
             ServerMsg::MemberJoined {
                 user: "b".into(),
                 puppy: "Biscuit".into(),
+                user_avatar: String::new(),
+                puppy_avatar: String::new(),
                 color: "#b79cff".into(),
             },
             ServerMsg::MemberLeft { user: "b".into() },
@@ -551,6 +575,8 @@ mod tests {
             room: "r1".into(),
             user: "alice".into(),
             puppy: "Rex".into(),
+            user_avatar: String::new(),
+            puppy_avatar: String::new(),
             proto: 2,
         };
         assert_eq!(
@@ -587,6 +613,8 @@ mod tests {
                 room: "r".into(),
                 user: "u".into(),
                 puppy: String::new(),
+                user_avatar: String::new(),
+                puppy_avatar: String::new(),
                 proto: 0
             }
         );

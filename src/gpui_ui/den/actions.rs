@@ -254,7 +254,23 @@ impl RootView {
                 let addr = format!("127.0.0.1:{}", host.port);
                 let share = format!("{} \u{b7} room {room}", host.share_addr);
                 let puppy = self.puppy_name();
-                match PackClient::connect(&addr, &room, &user, &puppy, self.waker.clone()) {
+                let user_av = crate::gpui_ui::avatars::inline(
+                    self.user_avatar(),
+                    crate::gpui_ui::avatars::USER_DEFAULT,
+                );
+                let puppy_av = crate::gpui_ui::avatars::inline(
+                    self.puppy_avatar(),
+                    crate::gpui_ui::avatars::PUPPY_DEFAULT,
+                );
+                match PackClient::connect(
+                    &addr,
+                    &room,
+                    &user,
+                    &puppy,
+                    &user_av,
+                    &puppy_av,
+                    self.waker.clone(),
+                ) {
                     Ok((client, rx)) => {
                         // Seed the join inputs so the form mirrors reality.
                         self.ensure_join_inputs(cx);
@@ -308,7 +324,23 @@ impl RootView {
             return;
         }
         let puppy = self.puppy_name();
-        match PackClient::connect(&addr, &room, &user, &puppy, self.waker.clone()) {
+        let user_av = crate::gpui_ui::avatars::inline(
+            self.user_avatar(),
+            crate::gpui_ui::avatars::USER_DEFAULT,
+        );
+        let puppy_av = crate::gpui_ui::avatars::inline(
+            self.puppy_avatar(),
+            crate::gpui_ui::avatars::PUPPY_DEFAULT,
+        );
+        match PackClient::connect(
+            &addr,
+            &room,
+            &user,
+            &puppy,
+            &user_av,
+            &puppy_av,
+            self.waker.clone(),
+        ) {
             Ok((client, rx)) => {
                 self.den = Some(DenConn {
                     client,
