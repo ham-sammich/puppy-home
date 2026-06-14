@@ -201,7 +201,16 @@ impl RootView {
             return;
         }
         self.last_dev_scan = Some(now);
-        let Some(text) = self.serving_ws().map(|ws| ws.dev_url_scan_text()) else {
+        let Some((text, html_urls)) = self.serving_ws().map(|ws| {
+            (
+                ws.dev_url_scan_text(),
+                ws.published_html()
+                    .iter()
+                    .rev() // newest first
+                    .map(|p| crate::browser::file_url(p))
+                    .collect::<Vec<_>>(),
+            )
+        }) else {
             self.detected_dev_urls.clear();
             return;
         };
@@ -210,15 +219,18 @@ impl RootView {
         let cdp: std::collections::HashSet<String> =
             self.browser.cdp_hostports().into_iter().collect();
         let mut seen = std::collections::HashSet::new();
-        let urls: Vec<String> = crate::browser::detect_dev_urls(&text)
+        let dev_urls: Vec<String> = crate::browser::detect_dev_urls(&text)
             .into_iter()
             .filter(|u| {
                 let hp = crate::browser::host_port(u);
                 !cdp.contains(&hp) && seen.insert(hp)
             })
             .collect();
-        self.detected_dev_urls = urls.clone();
-        for u in urls {
+        // Chip row = live dev servers + published HTML files. Only the
+        // localhost dev servers auto-open (a published .html is opened on
+        // demand via its chip / the editor's "Open in browser" button).
+        self.detected_dev_urls = dev_urls.iter().cloned().chain(html_urls).collect();
+        for u in dev_urls {
             if self.opened_dev_urls.insert(u.clone()) {
                 self.open_browser_to(&u, cx);
                 break; // one auto-open per scan; the rest stay chips

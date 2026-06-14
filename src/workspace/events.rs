@@ -316,6 +316,12 @@ impl Workspace {
                     buf.crlf = crlf;
                     buf.load_error = None;
                 }
+                // Track published HTML files (newest last, de-duped) so the UI
+                // can offer to open them in the browser (#6 fast-follow).
+                if crate::browser::is_html(&abs) {
+                    self.published_html.retain(|p| p != &abs);
+                    self.published_html.push(abs);
+                }
                 self.diffs.push(record);
             }
             // Refresh git status immediately so the change shows in the panel.

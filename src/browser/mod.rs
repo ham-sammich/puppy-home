@@ -954,6 +954,32 @@ fn open_in_file_manager(dir: &std::path::Path) {
     let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
 }
 
+/// Whether a path looks like an HTML file we can preview in the browser.
+pub(crate) fn is_html(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_ascii_lowercase())
+            .as_deref(),
+        Some("html" | "htm")
+    )
+}
+
+/// A compact label for a dev-server / file chip: host:port for http(s),
+/// or the file name for a `file://` URL.
+pub(crate) fn url_chip_label(url: &str) -> String {
+    if let Some(rest) = url.strip_prefix("file://") {
+        let path = rest.trim_start_matches('/');
+        return path
+            .rsplit('/')
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(rest)
+            .to_string();
+    }
+    host_port(url)
+}
+
 /// Build a `file://` URL for a local path, so the plugin can open local HTML.
 pub fn file_url(path: &std::path::Path) -> String {
     let s = path
@@ -1057,5 +1083,28 @@ mod tests {
         assert_eq!(normalize_url("https://x.com"), "https://x.com");
         assert_eq!(normalize_url("about:blank"), "about:blank");
         assert_eq!(normalize_url("http://x"), "http://x");
+        // file:// survives so the plugin can preview local HTML.
+        assert_eq!(normalize_url("file:///c:/x/i.html"), "file:///c:/x/i.html");
+    }
+
+    #[test]
+    fn is_html_matches_extensions() {
+        use std::path::Path;
+        assert!(is_html(Path::new("a/b/index.html")));
+        assert!(is_html(Path::new("page.HTM")));
+        assert!(!is_html(Path::new("main.rs")));
+        assert!(!is_html(Path::new("noext")));
+    }
+
+    #[test]
+    fn chip_label_uses_filename_for_file_urls() {
+        assert_eq!(
+            url_chip_label("http://localhost:5173/app"),
+            "localhost:5173"
+        );
+        assert_eq!(
+            url_chip_label("file:///c:/dev/site/index.html"),
+            "index.html"
+        );
     }
 }

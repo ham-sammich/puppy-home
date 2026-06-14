@@ -114,6 +114,9 @@ pub struct ChatArgs<'a> {
     /// localhost:NNNN" chips in the toolbar (#6). Empty unless the browser
     /// plugin is installed.
     pub dev_urls: &'a [String],
+    /// Whether the browser plugin is installed (gates the editor's "Open in
+    /// browser" button for HTML files).
+    pub browser_available: bool,
 }
 
 /// The whole chat screen body (below the tab strip).
@@ -195,6 +198,7 @@ pub fn chat_screen(args: &ChatArgs) -> AnyElement {
                         root: args.root.clone(),
                         active_input: args.editor_input,
                         close_confirm: args.editor_close_confirm,
+                        browser_available: args.browser_available,
                         commit_input: args.commit_input,
                         git_list_mode: args.git_list_mode,
                         graph_menu: args.graph_menu,
@@ -366,7 +370,14 @@ fn ws_toolbar(args: &ChatArgs) -> AnyElement {
             // first new URL also auto-opens; clicking re-opens any of them.
             let root = args.root.clone();
             let url = url.clone();
-            let label = format!("\u{1f310} {}", crate::browser::host_port(&url));
+            // \u{1f4c4} (page) for a published HTML file, \u{1f310} (globe) for
+            // a live dev server.
+            let icon = if url.starts_with("file://") {
+                "\u{1f4c4}"
+            } else {
+                "\u{1f310}"
+            };
+            let label = format!("{icon} {}", crate::browser::url_chip_label(&url));
             div()
                 .id(("ws-dev-url", id.0 + i as u64))
                 .px_2()

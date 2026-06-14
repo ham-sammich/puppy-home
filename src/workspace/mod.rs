@@ -195,6 +195,9 @@ pub struct Workspace {
     // currently displayed diff.
     diffs: Vec<DiffRecord>,
     current_diff: Option<DiffRecord>,
+    /// Absolute paths of .html/.htm files code_puppy has written this session
+    /// (newest last) — surfaced as "open in browser" chips (#6 fast-follow).
+    published_html: Vec<std::path::PathBuf>,
     // git working-tree status (preferred when the folder is a repo)
     git_repo: bool,
     /// Git backend for this workspace. Local today; a future remote impl routes
@@ -384,6 +387,7 @@ impl Workspace {
             status_req_at: Instant::now(),
             md_cache: CommonMarkCache::default(),
             diffs: Vec::new(),
+            published_html: Vec::new(),
             current_diff: None,
             git_repo: is_git_repo,
             git,
@@ -474,6 +478,11 @@ impl Workspace {
     /// The model catalog the sidecar announced (the card's model popover).
     pub fn model_catalog(&self) -> &[crate::backend::ModelInfo] {
         &self.models
+    }
+
+    /// HTML files code_puppy has written this session (for browser chips).
+    pub(crate) fn published_html(&self) -> &[std::path::PathBuf] {
+        &self.published_html
     }
 
     /// Transcript entries (the GPUI chat renders a bounded tail of these).

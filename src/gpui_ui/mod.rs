@@ -2092,6 +2092,7 @@ impl Render for RootView {
                     term_colors: &self.term_colors,
                     term_resize: self.term_resize.clone(),
                     dev_urls: &self.detected_dev_urls,
+                    browser_available: self.browser.is_available(),
                     logs_open: self.logs_open.contains(&id),
                     collapsed_thinking: &self.collapsed_thinking,
                     sessions: (self.sessions_open == Some(id)).then(|| {
