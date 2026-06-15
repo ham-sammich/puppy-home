@@ -40,6 +40,8 @@ Protocol (newline-delimited JSON, UTF-8):
         "prompt": "...", "enabled": true, "is_new": bool}   # -> judges
     {"op": "delete_judge", "name": "..."}            # -> judges
     {"op": "toggle_judge", "name": "..."}            # -> judges
+    {"op": "goal_start", "prompt": "..."}            # -> goal_state/judge_*/goal_done
+    {"op": "goal_stop"}                              # -> goal_done (stopped)
     {"op": "fs_list_dir", "id": <int>, "path": "..."}  # -> fs_result (remote file tree)
 {"op": "fs_read_file", "id": <int>, "path": "..."} # -> fs_result (remote editor)
 {"op": "git_run", "id": <int>, "root": "...", "args": [...]}  # -> git_result (remote git)
@@ -557,6 +559,13 @@ class Bridge:
         self.pending_asks: dict = {}
         # The currently-running agent turn (for cancellation).
         self.current_run = None
+        # Goal-loop driver state (the sidecar emulates the CLI's
+        # interactive_turn_end goal loop — see run_goal_loop). The task and a
+        # flag let goal_stop halt cleanly; _last_result hands a finished turn's
+        # result to the judges.
+        self._goal_task = None
+        self._goal_active = False
+        self._last_result = None
         # Control-surface bookkeeping surfaced in `status` payloads (drives the
         # redesign's agent cards): the last user prompt + cumulative REAL
         # provider-reported token usage (accumulated per turn from
@@ -1665,6 +1674,249 @@ class Bridge:
             log(traceback.format_exc())
         self.emit_judges()
 
+    # --- Goal loop driver (emulates the CLI interactive_turn_end loop) -------
+    #
+    # code_puppy only runs judges via its CLI `interactive_turn_end` callback,
+    # which our run_with_mcp turn path never fires; and verdicts print to raw
+    # stdout, bypassing the bus. So the sidecar drives the loop ITSELF and
+    # emits structured events. It REUSES wiggum's own functions for all judge
+    # behavior (judge_goal, get_enabled_judges_or_default, the remediation
+    # formatter, the goal_max_iterations cap, the WiggumState container); the
+    # only thing reimplemented is the driver the CLI callback normally provides
+    # (run prompt -> run judges -> re-run with remediation + cleared context
+    # until all-pass / max-iters / stop) plus a per-judge streaming fan-out so
+    # the GUI sees verdicts resolve in real time (gather can't stream).
+
+    def _emit_goal_state(self, mode: str = "goal") -> None:
+        """Forward the live goal HUD feed (on every change)."""
+        try:
+            from code_puppy.plugins.wiggum import state as wstate
+            from code_puppy.plugins.wiggum.register_callbacks import (
+                _get_goal_max_iterations,
+            )
+            st = wstate.get_state()
+            send({
+                "event": "goal_state",
+                "active": bool(st.active),
+                "prompt": st.prompt or "",
+                "loop": int(st.loop_count),
+                "max": _get_goal_max_iterations(),
+                "mode": st.mode,
+            })
+        except Exception:
+            log("goal_state emit failed:\n" + traceback.format_exc())
+
+    def goal_start(self, cmd: dict) -> None:
+        """Begin goal mode and kick off the loop driver (op: goal_start)."""
+        prompt = str(cmd.get("prompt") or "").strip()
+        if not prompt:
+            send({"event": "error", "id": None,
+                  "message": "goal_start: a prompt is required"})
+            return
+        if self._goal_active:
+            send({"event": "error", "id": None,
+                  "message": "goal_start: a goal is already running"})
+            return
+        if self.loop is None:
+            return
+        self._goal_task = asyncio.run_coroutine_threadsafe(
+            self.run_goal_loop(prompt), self.loop
+        )
+
+    def goal_stop(self) -> None:
+        """Stop goal mode + halt the loop (op: goal_stop)."""
+        self._goal_active = False
+        try:
+            from code_puppy.plugins.wiggum import state as wstate
+            wstate.stop()
+        except Exception:
+            log("goal_stop state.stop failed:\n" + traceback.format_exc())
+        # Cancel the in-flight loop (and the agent run it's awaiting).
+        if self.loop is not None:
+            self.loop.call_soon_threadsafe(self._cancel_goal)
+        self._emit_goal_state()
+
+    def _cancel_goal(self) -> None:
+        if self._goal_task is not None and not self._goal_task.done():
+            self._goal_task.cancel()
+        if self.current_run is not None and not self.current_run.done():
+            self.current_run.cancel()
+
+    async def run_goal_loop(self, prompt: str) -> None:
+        """The driver the CLI's interactive_turn_end callback normally provides.
+
+        Mirrors register_callbacks._on_interactive_turn_end's goal branch:
+        run the prompt, run the enabled judges, complete on all-pass, else
+        re-run with the remediation notes + cleared context, up to the
+        goal_max_iterations cap (all reused from wiggum).
+        """
+        from code_puppy.plugins.wiggum import state as wstate
+        from code_puppy.plugins.wiggum.register_callbacks import (
+            _get_goal_max_iterations,
+        )
+        max_iters = _get_goal_max_iterations()
+        wstate.start(prompt, mode="goal")
+        self._goal_active = True
+        self._emit_goal_state()
+        completed = False
+        reason = "stopped"
+        loop = 0
+        try:
+            while self._goal_active:
+                loop = wstate.increment()
+                self._emit_goal_state()
+                # Iteration 1 runs the bare goal; later iterations re-run with
+                # the judges' remediation notes and a cleared context (exactly
+                # what the CLI callback returns: prompt+notes, clear_context).
+                notes = wstate.get_state().remediation_notes
+                if loop > 1 and notes:
+                    run_text = f"{prompt}\n\nJudge remediation notes:\n{notes}"
+                    self._clear_context()
+                else:
+                    run_text = prompt
+                self._last_result = None
+                await self.handle_prompt(0, run_text)
+                if not self._goal_active:
+                    break
+                result = self._last_result
+                all_complete, notes = await self._run_judges_streaming(
+                    goal=prompt, result=result, iteration=loop, max_iters=max_iters
+                )
+                send({
+                    "event": "goal_iteration",
+                    "loop": loop,
+                    "max": max_iters,
+                    "all_complete": bool(all_complete),
+                    "remediation_notes": notes,
+                })
+                if all_complete:
+                    completed = True
+                    reason = "all_pass"
+                    break
+                if loop >= max_iters:
+                    reason = "max_iters"
+                    break
+                wstate.get_state().remediation_notes = notes
+                self._emit_goal_state()
+        except asyncio.CancelledError:
+            reason = "stopped"
+        except Exception as exc:
+            reason = "stopped"
+            send({"event": "error", "id": None,
+                  "message": f"goal loop failed: {type(exc).__name__}: {exc}"})
+            log(traceback.format_exc())
+        finally:
+            self._goal_active = False
+            try:
+                wstate.stop()
+            except Exception:
+                pass
+            send({
+                "event": "goal_done",
+                "completed": bool(completed),
+                "loops": loop,
+                "reason": reason,
+            })
+            self._emit_goal_state()
+            self._goal_task = None
+
+    def _clear_context(self) -> None:
+        """Clear the agent's message history (the loop's clear_context=True)."""
+        try:
+            self.agent.set_message_history([])
+        except Exception:
+            log("goal clear_context failed:\n" + traceback.format_exc())
+
+    async def _run_judges_streaming(
+        self, *, goal: str, result, iteration: int, max_iters: int
+    ):
+        """Fan the enabled judges out in parallel, streaming each verdict.
+
+        REUSES wiggum: ``get_enabled_judges_or_default`` for the roster,
+        ``judge_goal`` for each judge's actual verdict, and
+        ``_format_remediation_block`` for the notes that feed the next
+        iteration. The all-non-abstaining-must-pass tally is replicated
+        verbatim (2 lines) from ``_run_goal_judges`` — gather-then-return
+        can't stream per-judge, which is the whole point of the live view.
+        """
+        from code_puppy.plugins.wiggum.judge import GoalJudgement, judge_goal
+        from code_puppy.plugins.wiggum.judge_config import (
+            get_enabled_judges_or_default,
+        )
+        from code_puppy.plugins.wiggum.register_callbacks import (
+            _format_remediation_block,
+        )
+        try:
+            fallback_model = str(self.agent.get_model_name())
+        except Exception:
+            fallback_model = "code-puppy"
+        judges = get_enabled_judges_or_default(fallback_model)
+        response_text = (
+            str(getattr(result, "output", "")) if result is not None else None
+        )
+        history = list(self.agent.get_message_history() or [])
+
+        send({
+            "event": "judge_run_started",
+            "goal": goal,
+            "iteration": iteration,
+            "max": max_iters,
+            "judges": [{"name": j.name, "model": j.model} for j in judges],
+        })
+        # Per-judge "running" state up front (each row shows running until its
+        # verdict lands). Live per-judge TOOL activity is suppressed inside
+        # judge_goal via subagent_context by design — surfacing it would need
+        # un-suppression; started->verdict granularity ships now.
+        for j in judges:
+            send({"event": "judge_started",
+                  "judge_name": j.name, "iteration": iteration})
+
+        async def run_one(jc):
+            try:
+                return await judge_goal(
+                    judge_config=jc,
+                    implementor_agent=self.agent,
+                    goal=goal,
+                    response=response_text,
+                    error=None,
+                    history=history,
+                )
+            except (asyncio.CancelledError, KeyboardInterrupt):
+                raise
+            except Exception as exc:
+                return GoalJudgement(
+                    judge_name=jc.name,
+                    complete=False,
+                    notes=f"judge crashed: {type(exc).__name__}: {exc}",
+                    raw_response="",
+                    abstained=True,
+                )
+
+        tasks = [asyncio.ensure_future(run_one(j)) for j in judges]
+        verdicts: list = []
+        try:
+            for fut in asyncio.as_completed(tasks):
+                v = await fut
+                verdicts.append(v)
+                send({
+                    "event": "judge_verdict",
+                    "judge_name": v.judge_name,
+                    "iteration": iteration,
+                    "complete": bool(v.complete),
+                    "abstained": bool(v.abstained),
+                    "notes": v.notes or "",
+                })
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            for t in tasks:
+                t.cancel()
+            raise
+        # Voting rule, verbatim from _run_goal_judges: abstaining judges get no
+        # vote; the goal completes only when every non-abstaining judge passes.
+        voting = [v for v in verdicts if not v.abstained]
+        all_complete = bool(voting) and all(v.complete for v in voting)
+        notes = _format_remediation_block(verdicts)
+        return all_complete, notes
+
     # --- Code Puppy sessions (autosave + named contexts) --------------------
 
     def set_puppy_name(self, name: str) -> None:
@@ -2312,6 +2564,9 @@ class Bridge:
             if output is None:
                 output = str(result)
             self._accumulate_usage(result)
+            # Hand the finished turn to the goal-loop driver (if one is running
+            # this prompt) so it can feed the judges the implementor's result.
+            self._last_result = result
             send({"event": "result", "id": msg_id, "output": output})
         except asyncio.CancelledError:
             send({"event": "error", "id": msg_id, "message": "cancelled by user"})
@@ -2634,6 +2889,10 @@ class Bridge:
             self.delete_judge(cmd.get("name", ""))
         elif op == "toggle_judge":
             self.toggle_judge(cmd.get("name", ""))
+        elif op == "goal_start":
+            self.goal_start(cmd)
+        elif op == "goal_stop":
+            self.goal_stop()
         elif op == "fs_list_dir":
             self.fs_list_dir(cmd)
         elif op == "fs_read_file":
