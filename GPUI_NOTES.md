@@ -10,8 +10,18 @@ gpui = { git = "https://github.com/zed-industries/zed",
          rev = "601ecb3ee5c16940191818ee7f244837abf6983c" }
 gpui_platform = { git = "https://github.com/zed-industries/zed",
          rev = "601ecb3ee5c16940191818ee7f244837abf6983c",
-         features = ["runtime_shaders", "wayland", "x11"] }
+         features = ["font-kit", "runtime_shaders", "wayland", "x11"] }
 ```
+
+- **`font-kit` is MANDATORY on macOS** (learned the hard way right after the
+  bump). At v1.6.3 `gpui_macos` gates the real CoreText text system
+  (`MacTextSystem`) behind the `font-kit` feature; with it OFF,
+  `MacPlatform::new` falls back to `gpui::NoopTextSystem` which shapes **zero
+  glyphs** — the whole UI renders with every shape/border/gradient intact but
+  **all text invisible** (`add_fonts` silently no-ops, no error). At v0.199.10
+  CoreText text was unconditional; the platform split made it opt-in. The
+  feature is macOS-only (Windows uses DirectWrite, Linux cosmic-text, both
+  built in), so enabling it is inert cross-platform.
 
 - **rev** `601ecb3ee5c16940191818ee7f244837abf6983c` = tag **v1.6.3**, the
   newest *stable* (non `-pre`) Zed release at bump time (2026-06-15).
@@ -49,6 +59,9 @@ gpui_platform = { git = "https://github.com/zed-industries/zed",
 - `ClipboardEntry` gained an `ExternalPaths(_)` variant (matches must cover).
 - `Entity::update` returns the closure's value; `let _ = entity.update(..)`
   on a unit-returning closure now trips clippy (drop the `let _ =`).
+- **The macOS CoreText text system is now behind the `font-kit` feature**
+  (on `gpui_platform`/`gpui_macos`). Not enabling it -> `NoopTextSystem` ->
+  no glyphs render at all. See the pin block above. (Fixed post-bump.)
 
 ## What compiles, what's parked
 

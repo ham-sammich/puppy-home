@@ -9,10 +9,17 @@
 >   `Application::with_platform(gpui_platform::current_platform(false))`.
 >   On Windows this builds `WindowsPlatform`. **If the app doesn't open a
 >   window at all, this is the first suspect** (item #1).
-> - **Build deps:** new `gpui_platform` git dep; its `wayland`/`x11`
->   features are enabled (Linux-only, inert on Windows) and
+> - **Build deps:** new `gpui_platform` git dep; its `font-kit`/`wayland`/
+>   `x11` features are macOS/Linux-only (inert on Windows) and
 >   `runtime_shaders` is macOS-only (Windows uses the DirectX backend, so
 >   it's inert) — confirm the dep graph still resolves + links on MSVC.
+> - **TEXT RENDERING (a real post-bump regression — was Mac-only):** the
+>   platform split made the text system per-backend. On macOS, missing the
+>   `font-kit` feature gave `NoopTextSystem` = invisible glyphs (fixed by
+>   enabling it). Windows uses `DirectWriteTextSystem` unconditionally, but
+>   **falls back to `NoopTextSystem` if DirectWrite fails to initialize**
+>   (gpui_windows/platform.rs). So if you see shapes-but-no-text on Windows,
+>   it's the same class of bug — DirectWrite init failed; capture the error.
 > - **Terminal (ConPTY):** `Line::paint` gained `TextAlign` + align-width
 >   args — the terminal grid renderer changed; re-scrutinize item #3.
 > - **Clipboard paste:** `ClipboardEntry` gained an `ExternalPaths`

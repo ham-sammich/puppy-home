@@ -28,9 +28,17 @@ members = ["plugins/browser", "relay"]
 # (was `Application::new()`). `runtime_shaders` (runtime Metal compile, needed
 # on this CLT-only Mac) moved to `gpui_platform` -> `gpui_macos`.
 gpui = { git = "https://github.com/zed-industries/zed", rev = "601ecb3ee5c16940191818ee7f244837abf6983c" }
-# Platform backends + the entry-point factory. `runtime_shaders` is macOS;
-# `wayland`/`x11` keep the Linux CI leg building (inert on mac/windows).
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "601ecb3ee5c16940191818ee7f244837abf6983c", features = ["runtime_shaders", "wayland", "x11"] }
+# Platform backends + the entry-point factory.
+# `font-kit`: REQUIRED on macOS. As of v1.6.3, gpui_macos gates the real
+#   CoreText text system (`MacTextSystem`) behind this feature; WITHOUT it
+#   `MacPlatform::new` falls back to `gpui::NoopTextSystem`, which shapes
+#   zero glyphs -> every glyph is invisible while shapes/borders/gradients
+#   still render (the G4-bump text regression). At v0.199.10 CoreText text
+#   was unconditional; the platform split made it opt-in. Inert on win/linux
+#   (they have their own DirectWrite/cosmic-text systems built in).
+# `runtime_shaders`: macOS (runtime Metal compile for this CLT-only box).
+# `wayland`/`x11`: keep the Linux CI leg building (inert on mac/windows).
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "601ecb3ee5c16940191818ee7f244837abf6983c", features = ["font-kit", "runtime_shaders", "wayland", "x11"] }
 # Async select/pin helpers for the GPUI drain loop (gpui already pulls this in
 # transitively; declaring it just makes our use explicit).
 futures = "0.3"

@@ -328,7 +328,11 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       unit-return clippy. Cargo.lock 828 -> 886. build/test/clippy/fmt all
       green; probe-run launches + renders chat/terminal/MCP overlay,
       sidecar Ready, Metal runtime-shaders OK on CLT-only Mac. RECOMMEND
-      PROCEEDING on v1.6.3. Full delta in GPUI_NOTES.md; WINDOWS_GATE.md
+      PROCEEDING on v1.6.3. **POST-BUMP REGRESSION FIXED:** the bump
+      initially rendered ALL TEXT INVISIBLE (shapes fine) — v1.6.3 gates
+      the macOS CoreText text system behind gpui_platform's `font-kit`
+      feature (fallback = NoopTextSystem = zero glyphs). Adding `font-kit`
+      restored text; verified by screenshot (full UI text + emoji render). Full delta in GPUI_NOTES.md; WINDOWS_GATE.md
       banner added — **G3 re-gate required on the new sha (15/15 invalidated)**.
 - [x] G5. **egui-shell STRIPPED** (decision: delete, not keep-as-toggle).
       The legacy eframe frontend is gone; `redesign/gpui` is now a single
