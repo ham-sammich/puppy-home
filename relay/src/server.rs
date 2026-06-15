@@ -132,6 +132,9 @@ fn handle_conn(hub: Arc<Hub>, stream: TcpStream) {
         tx.clone(),
     );
     let _ = tx.send(serde_json::to_string(&snapshot).expect("ServerMsg serializes"));
+    // AFTER the snapshot (which clears the client's roster): replay existing
+    // members' cached rosters so the joiner sees their agents immediately.
+    hub.replay_rosters(id);
 
     for line in lines {
         let Ok(line) = line else { break };

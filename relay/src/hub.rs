@@ -260,20 +260,33 @@ impl Hub {
             tasks: room_state.tasks.clone(),
             plans: room_state.plans.clone(),
         };
-        // Replay every existing member's last-known roster to the new joiner so
-        // their agents show immediately (clients only re-send on change, so
-        // they won't broadcast again just because someone joined).
-        if let Some(member) = room_state.members.get(&id) {
-            for (from, agents) in &room_state.rosters {
-                let _ = member.tx.send(encode(&ServerMsg::Roster {
-                    from: from.clone(),
-                    agents: agents.clone(),
-                    ts: now_ts(),
-                }));
-            }
-        }
         inner.conns.insert(id, room.to_string());
         (id, snapshot)
+    }
+
+    /// Replay every existing member's last-known roster to ONE member (the new
+    /// joiner). MUST be called AFTER their `Joined` snapshot is sent, because
+    /// the client clears its roster on `Joined` -- replaying earlier would get
+    /// wiped. Clients only re-send their roster on change, so without this a
+    /// late joiner shows "no agents reported yet" for everyone already here.
+    pub fn replay_rosters(&self, id: u64) {
+        let inner = self.inner.lock().unwrap();
+        let Some(room) = inner.conns.get(&id) else {
+            return;
+        };
+        let Some(room_state) = inner.rooms.get(room) else {
+            return;
+        };
+        let Some(member) = room_state.members.get(&id) else {
+            return;
+        };
+        for (from, agents) in &room_state.rosters {
+            let _ = member.tx.send(encode(&ServerMsg::Roster {
+                from: from.clone(),
+                agents: agents.clone(),
+                ts: now_ts(),
+            }));
+        }
     }
 
     /// Remove a member (disconnect or explicit leave); tells the room and drops
@@ -834,7 +847,8 @@ mod tests {
         );
 
         let (btx, brx) = channel();
-        let (_bid, _joined) = hub.join("room", "bob", "", "", "", btx);
+        let (bid, _joined) = hub.join("room", "bob", "", "", "", btx);
+        hub.replay_rosters(bid); // server.rs calls this right after the snapshot
         // Bob's first messages include alice's replayed roster.
         let bob_saw = drain(&brx);
         assert!(
