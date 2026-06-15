@@ -234,8 +234,8 @@ pub fn terminal_panel(args: &TermArgs) -> AnyElement {
         .track_focus(args.focus)
         .key_context("Terminal")
         .cursor(gpui::CursorStyle::IBeam)
-        .on_mouse_down(gpui::MouseButton::Left, move |_, window, _| {
-            window.focus(&focus_for_click);
+        .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+            window.focus(&focus_for_click, cx);
         })
         .on_key_down(move |ev: &KeyDownEvent, _, cx| {
             if let Some(bytes) = key_to_bytes(ev, cx) {
@@ -380,7 +380,14 @@ fn grid_canvas(
                     }
                     byte += run.len;
                 }
-                let _ = line.paint(point(px(ox), px(y)), line_height, window, cx);
+                let _ = line.paint(
+                    point(px(ox), px(y)),
+                    line_height,
+                    gpui::TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                );
             }
 
             // Block cursor: filled when focused, outline when not (egui).

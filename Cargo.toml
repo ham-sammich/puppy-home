@@ -18,12 +18,19 @@ members = ["plugins/browser", "relay"]
 
 [dependencies]
 # GPUI (Zed's UI framework) — THE frontend on this branch.
-# PINNED: rev 00789bf6ee744de8ddcfad93ade1d28cf4070a24 = tag v0.199.10,
-# the most recent *stable* (non -pre) Zed release at pin time (2026-06-12).
-# FROZEN for the whole redesign/gpui branch — do NOT bump mid-build.
-# `runtime_shaders`: compile Metal shaders at runtime; this machine has only
-# the Xcode CLT (no `xcrun metal`), which the default prebuilt path requires.
-gpui = { git = "https://github.com/zed-industries/zed", rev = "00789bf6ee744de8ddcfad93ade1d28cf4070a24", features = ["runtime_shaders"] }
+# PINNED: rev 601ecb3ee5c16940191818ee7f244837abf6983c = tag v1.6.3,
+# the newest *stable* (non -pre) Zed release at bump time (G4, 2026-06-15;
+# bumped from v0.199.10 @ 00789bf for freshness, accepting the API chase).
+# ARCHITECTURE CHANGE since v0.199.10: the OS platform backends were split
+# out of the core `gpui` crate into `gpui_platform` (+ gpui_macos/_windows/
+# _linux). The app entry now builds the platform explicitly via
+# `gpui_platform::current_platform(false)` -> `Application::with_platform(..)`
+# (was `Application::new()`). `runtime_shaders` (runtime Metal compile, needed
+# on this CLT-only Mac) moved to `gpui_platform` -> `gpui_macos`.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "601ecb3ee5c16940191818ee7f244837abf6983c" }
+# Platform backends + the entry-point factory. `runtime_shaders` is macOS;
+# `wayland`/`x11` keep the Linux CI leg building (inert on mac/windows).
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "601ecb3ee5c16940191818ee7f244837abf6983c", features = ["runtime_shaders", "wayland", "x11"] }
 # Async select/pin helpers for the GPUI drain loop (gpui already pulls this in
 # transitively; declaring it just makes our use explicit).
 futures = "0.3"

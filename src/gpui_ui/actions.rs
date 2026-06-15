@@ -1166,7 +1166,7 @@ impl RootView {
         self.card_input = if open {
             None
         } else {
-            window.focus(&self.input_focus);
+            window.focus(&self.input_focus, cx);
             Some(CardInput {
                 ws,
                 kind,

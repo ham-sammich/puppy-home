@@ -36,6 +36,7 @@ pub struct CompletionItem {
     pub display: String,
     /// Right-hand hint (e.g. description, current value, file type).
     #[serde(default)]
+    #[allow(dead_code)] // wire contract; not yet surfaced in the UI
     pub meta: String,
 }
 
@@ -73,6 +74,7 @@ pub struct SessionInfo {
     #[serde(default)]
     pub messages: u64,
     #[serde(default)]
+    #[allow(dead_code)] // wire contract; not yet surfaced in the UI
     pub tokens: u64,
 }
 
@@ -218,10 +220,12 @@ pub struct SubAgentInfo {
     #[serde(default)]
     pub tool_call_count: u64,
     #[serde(default)]
+    #[allow(dead_code)] // wire contract; not yet surfaced in the UI
     pub token_count: u64,
     #[serde(default)]
     pub current_tool: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)] // wire contract; not yet surfaced in the UI
     pub elapsed: f64,
 }
 
@@ -262,6 +266,7 @@ pub struct ContextBreakdown {
 pub struct AskOption {
     pub label: String,
     #[serde(default)]
+    #[allow(dead_code)] // wire contract; not yet surfaced in the UI
     pub description: String,
 }
 

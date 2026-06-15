@@ -168,6 +168,6 @@ fn pill_wrap() -> gpui::Div {
     div()
         .relative()
         .min_w_0()
-        .flex_shrink()
+        .flex_shrink_1()
         .max_w(gpui::relative(0.62))
 }

@@ -3,27 +3,52 @@
 Working notes for the GPUI rebuild. Forked from `redesign/shared-backend`
 (`0f00eed`), **not** from `redesign/egui`.
 
-## The pin (FROZEN — do not bump mid-build)
+## The pin (bumped to v1.6.3 in Phase G4, 2026-06-15)
 
 ```toml
 gpui = { git = "https://github.com/zed-industries/zed",
-         rev = "00789bf6ee744de8ddcfad93ade1d28cf4070a24",
-         features = ["runtime_shaders"] }
+         rev = "601ecb3ee5c16940191818ee7f244837abf6983c" }
+gpui_platform = { git = "https://github.com/zed-industries/zed",
+         rev = "601ecb3ee5c16940191818ee7f244837abf6983c",
+         features = ["runtime_shaders", "wayland", "x11"] }
 ```
 
-- **rev** `00789bf6ee744de8ddcfad93ade1d28cf4070a24` = tag **v0.199.10**,
-  the most recent *stable* (non `-pre`) Zed release at pin time (2026-06-12).
-  Chosen over `main` tip because a release tag has shipped to users —
-  the closest thing to "verified builds" a git dep offers. Verified locally:
-  `cargo build` green on macOS arm64, rustc 1.96.0.
-- **`runtime_shaders`**: this machine has the Xcode CLT only — no `xcrun
-  metal` — so gpui's default ahead-of-time Metal shader compile would fail
-  at build time. The feature compiles shaders at runtime instead (gpui ships
-  it for exactly this situation). If CI ever gets full Xcode, this can drop.
-- The GPUI API churns between revs (the design handoff's GPUI_GUIDE warns
-  about this). Every signature in `src/gpui_ui/` was checked against the
-  checkout at this rev (`~/.cargo/git/checkouts/zed-*/00789bf/crates/gpui`).
+- **rev** `601ecb3ee5c16940191818ee7f244837abf6983c` = tag **v1.6.3**, the
+  newest *stable* (non `-pre`) Zed release at bump time (2026-06-15).
+  Verified: `cargo build`/`test`/`clippy`/`fmt` green on macOS arm64
+  (rustc 1.96.0); probe-run launches, renders chat/terminal/MCP overlay,
+  sidecar reaches Ready. Bumped from the old freeze (`00789bf` = v0.199.10)
+  for freshness; Zed crossed 1.0 in between, so this jumped 0.199 -> 1.6.
+- **ARCHITECTURE CHANGE:** the OS platform backends were split out of the
+  core `gpui` crate into **`gpui_platform`** (+ `gpui_macos`/`_windows`/
+  `_linux`). The app entry is now
+  `Application::with_platform(gpui_platform::current_platform(false))` —
+  `Application::new()` no longer exists.
+- **`runtime_shaders` MOVED** from `gpui` to `gpui_platform` (→ `gpui_macos`).
+  Same purpose: this machine has the Xcode CLT only (no `xcrun metal`), so
+  shaders compile at runtime. `wayland`/`x11` are enabled on `gpui_platform`
+  to keep the Linux CI leg building (inert on mac/windows).
+- gpui is now crate **version 0.2.x** (was 0.1.0). Zed migrated `objc` ->
+  `objc2` internally over this span (our own `objc` dep for the macOS
+  browser-embed `embed_mac.rs` is independent and unaffected).
+- The GPUI API churns between revs. Every signature in `src/gpui_ui/` was
+  re-checked against the checkout at the new rev
+  (`~/.cargo/git/checkouts/zed-*/601ecb3/crates/gpui`).
   **The Zed source at the pin is the documentation.**
+
+### v0.199.10 -> v1.6.3 API delta (what moved)
+- `Application::new()` -> `Application::with_platform(gpui_platform::current_platform(false))`.
+- `Window::focus(handle)` -> `focus(handle, &mut App)` (gained the cx arg).
+- `Line::paint(origin, line_height, window, cx)` -> `paint(origin,
+  line_height, TextAlign, Option<Pixels> align_width, window, cx)`.
+- `ScrollHandle::max_offset()` now returns `Point<Pixels>` (was a Size):
+  `.height` -> `.y`.
+- `flex_grow()`/`flex_shrink()` now take an `f32`; use `flex_grow_1()`/
+  `flex_shrink_1()` for the old grow:1/shrink:1 behavior.
+- `PathPromptOptions` gained a `prompt: Option<SharedString>` field.
+- `ClipboardEntry` gained an `ExternalPaths(_)` variant (matches must cover).
+- `Entity::update` returns the closure's value; `let _ = entity.update(..)`
+  on a unit-returning closure now trips clippy (drop the `let _ =`).
 
 ## What compiles, what's parked
 

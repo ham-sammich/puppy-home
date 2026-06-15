@@ -597,6 +597,7 @@ impl ChatInput {
                         }
                     }
                     ClipboardEntry::Image(_) => {}
+                    ClipboardEntry::ExternalPaths(_) => {}
                 }
             }
         }
@@ -1329,7 +1330,7 @@ impl Render for ChatInput {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_blink(window, cx);
         div()
-            .flex_grow()
+            .flex_grow_1()
             .key_context("ChatInput")
             .track_focus(&self.focus_handle(cx))
             .cursor(CursorStyle::IBeam)

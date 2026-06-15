@@ -311,11 +311,25 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       * Legacy-shell micro-delta accepted: steer() now optimistically
         bumps queued_steers on queued steers (egui's shipped behavior;
         next status poll corrects it anyway).
-- [x] G3. **WINDOWS SMOKE GATE** — PASSED 15/15 on Windows 11 (Jacob's
-      hands-on run; tracker was `.puppy/gate/RESULTS.md`, local-only).
-      ConPTY terminal, WebView2 embed, DPI, ssh, den self-host all green.
-- [ ] G4. Sha-bump decision: stay at v0.199.10 or bump to current Zed
-      stable; budget 1-2 days for API chase if bumping.
+- [~] G3. **WINDOWS SMOKE GATE** — passed 15/15 on Windows 11 @ v0.199.10
+      (Jacob's hands-on run), BUT the G4 sha bump to v1.6.3 INVALIDATES it.
+      **Re-gate required on `601ecb3`** before merge (WINDOWS_GATE.md has a
+      banner with the API delta to scrutinize). Original pass: ConPTY
+      terminal, WebView2 embed, DPI, ssh, den self-host all green.
+- [x] G4. **Sha bumped v0.199.10 -> v1.6.3** (`00789bf` -> `601ecb3`,
+      newest stable tag; user chose freshness). Zed crossed 1.0; the OS
+      backends split into a new `gpui_platform` crate (now a 2nd git dep)
+      and `runtime_shaders` moved there (-> gpui_macos). API chase was
+      SMALL/clean (~10 sites): Application::new() ->
+      with_platform(gpui_platform::current_platform(false)); window.focus
+      gained cx; Line::paint gained TextAlign+align_width; max_offset()
+      now Point (.height->.y); flex_grow/shrink take f32; PathPromptOptions
+      gained `prompt`; ClipboardEntry gained ExternalPaths; Entity::update
+      unit-return clippy. Cargo.lock 828 -> 886. build/test/clippy/fmt all
+      green; probe-run launches + renders chat/terminal/MCP overlay,
+      sidecar Ready, Metal runtime-shaders OK on CLT-only Mac. RECOMMEND
+      PROCEEDING on v1.6.3. Full delta in GPUI_NOTES.md; WINDOWS_GATE.md
+      banner added — **G3 re-gate required on the new sha (15/15 invalidated)**.
 - [x] G5. **egui-shell STRIPPED** (decision: delete, not keep-as-toggle).
       The legacy eframe frontend is gone; `redesign/gpui` is now a single
       GPUI codebase. Removed `src/app`, `src/shell`, `dock_layout.rs`,

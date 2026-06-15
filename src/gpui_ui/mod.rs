@@ -84,7 +84,9 @@ const DRAIN_IDLE: Duration = Duration::from_millis(1000);
 
 /// Launch the GPUI app (the default `main` on this branch).
 pub fn run() {
-    Application::new()
+    // gpui v1.x: the platform is built explicitly (the backends moved to the
+    // gpui_platform crate); `Application::new()` no longer exists.
+    Application::with_platform(gpui_platform::current_platform(false))
         .with_assets(assets::Assets)
         .run(|cx: &mut App| {
             assets::register_fonts(cx);
@@ -666,7 +668,7 @@ impl RootView {
                                 .await;
                             // Only the keystroke whose snapshot still matches the
                             // live text reshapes — intermediate ones bail.
-                            let _ = input.update(cx, |i, cx| {
+                            input.update(cx, |i, cx| {
                                 if i.text() == text {
                                     let runs = editor::highlight(&text, &path, dark);
                                     i.set_syntax(runs, cx);
@@ -1641,6 +1643,7 @@ impl RootView {
             files: false,
             directories: true,
             multiple: false,
+            prompt: None,
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(mut picked))) = paths.await
@@ -1946,13 +1949,13 @@ impl Render for RootView {
         if let Some(id) = self.pending_focus.take()
             && let Some(input) = self.chat_inputs.get(&id)
         {
-            window.focus(&input.read(cx).focus_handle(cx));
+            window.focus(&input.read(cx).focus_handle(cx), cx);
         }
         // One-shot: focus the tree-op name input when an op was just armed.
         if std::mem::take(&mut self.pending_tree_focus)
             && let Some(input) = &self.tree_op_input
         {
-            window.focus(&input.read(cx).focus_handle(cx));
+            window.focus(&input.read(cx).focus_handle(cx), cx);
         }
 
         // A closed workspace can leave `screen` dangling — fall back to dash.
@@ -2023,7 +2026,7 @@ impl Render for RootView {
                 let handle = self.chat_scroll.entry(id).or_default().clone();
                 let seen = self.chat_seen_len.get(&id).copied();
                 let at_bottom = {
-                    let max = handle.max_offset().height;
+                    let max = handle.max_offset().y;
                     max <= px(1.) || handle.offset().y <= -max + px(8.)
                 };
                 if seen.is_none() || (seen.is_some_and(|s| len > s) && at_bottom) {

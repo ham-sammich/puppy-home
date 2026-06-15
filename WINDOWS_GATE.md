@@ -1,15 +1,41 @@
-# WINDOWS_GATE.md — G3 smoke gate for `redesign/gpui`
+# WINDOWS_GATE.md — smoke gate for `redesign/gpui`
+
+> ⚠️ **GPUI SHA BUMPED: v0.199.10 (`00789bf`) -> v1.6.3 (`601ecb3`)**
+> (Phase G4, 2026-06-15). This **INVALIDATES the prior 15/15 PASS** —
+> re-run the whole checklist on the new sha. Zed crossed 1.0; the OS
+> platform backends were split into a new `gpui_platform` crate.
+> **Pay special attention to (the API delta that could break Windows):**
+> - **App entry point CHANGED** — launch is now
+>   `Application::with_platform(gpui_platform::current_platform(false))`.
+>   On Windows this builds `WindowsPlatform`. **If the app doesn't open a
+>   window at all, this is the first suspect** (item #1).
+> - **Build deps:** new `gpui_platform` git dep; its `wayland`/`x11`
+>   features are enabled (Linux-only, inert on Windows) and
+>   `runtime_shaders` is macOS-only (Windows uses the DirectX backend, so
+>   it's inert) — confirm the dep graph still resolves + links on MSVC.
+> - **Terminal (ConPTY):** `Line::paint` gained `TextAlign` + align-width
+>   args — the terminal grid renderer changed; re-scrutinize item #3.
+> - **Clipboard paste:** `ClipboardEntry` gained an `ExternalPaths`
+>   variant — re-check paste/image-paste (items #4, #10-creds-ish).
+> - **Window focus / scroll / flex** signatures shifted (window.focus(+cx),
+>   max_offset()->Point, flex_grow/shrink take f32) — broad render/input
+>   touch; if focus or scrolling misbehaves, that's why.
+> - **Browser embed** (item #4, the top Windows risk): the
+>   raw-window-handle `HasWindowHandle`/`SetParent` path COMPILES unchanged
+>   at the new sha, but the bump still invalidates its prior pass —
+>   re-verify embed/popout/pop-in/close on the new gpui window.
+> Full delta lives in GPUI_NOTES.md ("v0.199.10 -> v1.6.3 API delta").
 
 ## 1. Context
 
 `puppy-home` (a desktop command center for code_puppy AI agents) was
-rebuilt from egui onto **GPUI** (Zed's UI framework, pinned at rev
-`00789bf6ee74` ~ v0.199.10, frozen). All development and testing so far
-happened on macOS; this branch has **never been built or run on
-Windows** (CI's windows-latest leg only fires on master/PRs — never on
-this branch). Windows pass = the merge blocker (G3 in PARITY.md).
-Fill the RESULTS template at the bottom; a reviewing agent with no
-other context will parse it.
+rebuilt from egui onto **GPUI** (Zed's UI framework, now pinned at rev
+`601ecb3ee5c1` = tag v1.6.3, bumped from v0.199.10 in G4). The egui
+shell has since been fully removed (G5) — this is now a single GPUI
+codebase. CI's windows-latest leg only fires on master/PRs — never on
+this branch — so Windows validation is manual. Windows pass on the new
+sha = the merge blocker. Fill the RESULTS template at the bottom; a
+reviewing agent with no other context will parse it.
 
 ## 2. Prereqs
 
@@ -59,9 +85,15 @@ the **2-6 minute** range; binary `target\release\puppy-home.exe`
 around **12 MB** (give or take format differences).
 
 Known pitfalls:
-- The `runtime_shaders` gpui feature we enable is **macOS-only and an
-  empty feature flag in gpui's Cargo.toml** — inert on Windows. If the
-  build fails mentioning it, that's a real finding; report it.
+- We depend on **two** Zed crates now: `gpui` (core) and `gpui_platform`
+  (OS backends). The `runtime_shaders` feature is on `gpui_platform`
+  (macOS-only, -> gpui_macos); `wayland`/`x11` are also enabled there
+  (Linux-only). All three are **inert on Windows** (it uses the
+  gpui_windows DirectX backend). If the build fails resolving a
+  gpui_platform feature on MSVC, that's a real finding; report it.
+- The app entry calls `gpui_platform::current_platform(false)` which
+  builds `WindowsPlatform::new(false)`; if it panics at startup with
+  "failed to initialize Windows platform", capture the message.
 - `RUSTFLAGS=-D warnings` is NOT set locally; warnings are fine,
   errors are not.
 - If linking fails with Spectre-lib errors, install the

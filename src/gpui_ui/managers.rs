@@ -194,7 +194,7 @@ impl RootView {
                             cx.background_executor()
                                 .timer(std::time::Duration::from_millis(120))
                                 .await;
-                            let _ = input.update(cx, |i, cx| {
+                            input.update(cx, |i, cx| {
                                 if i.text() == text {
                                     let runs = crate::gpui_ui::editor::highlight(
                                         &text,
