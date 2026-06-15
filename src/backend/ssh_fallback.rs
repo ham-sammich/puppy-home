@@ -90,9 +90,13 @@ impl SshFs {
 }
 
 /// A remote `Path` as the str ssh needs (lossy is fine: paths came from the
-/// remote as UTF-8 in the first place).
+/// remote as UTF-8 in the first place). The remote is POSIX, but a Windows
+/// CLIENT's `PathBuf::join` stitches components with '\\' — which the remote
+/// shell would take literally and ENOENT on. Normalize to '/' so a Windows
+/// host can drive a Linux remote (backslashes in remote names are vanishingly
+/// rare and not worth preserving against this).
 fn p(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
+    path.to_string_lossy().replace('\\', "/")
 }
 
 impl WorkspaceFs for SshFs {
@@ -118,10 +122,14 @@ impl WorkspaceFs for SshFs {
     }
 
     fn read_dir(&self, path: &Path) -> std::io::Result<Vec<DirEntry>> {
-        // `ls -1Ap`: dirs carry a trailing '/', dotfiles included — the
-        // same listing shape the remote folder browser parses.
-        let (ok, out, err) = self.exec(&["ls", "-1Ap", &p(path)], None);
-        if !ok {
+        // `ls -1ApL`: dirs carry a trailing '/', dotfiles included. -L
+        // dereferences symlinks so a symlink-TO-dir also gets the '/' and is
+        // browsable (without -L, `ls -p` leaves symlinked dirs unmarked, so
+        // they're mistaken for files and ENOENT on open). A dangling symlink
+        // makes ls exit non-zero while still printing the good entries, so we
+        // only treat it as failure when nothing came back.
+        let (ok, out, err) = self.exec(&["ls", "-1ApL", &p(path)], None);
+        if !ok && out.trim().is_empty() {
             return Err(io_err(&err, "list"));
         }
         Ok(parse_ls(path, &out))

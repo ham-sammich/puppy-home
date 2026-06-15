@@ -154,7 +154,7 @@ impl RemoteState {
             .lock()
             .unwrap()
             .insert(id, Pending::ListDir(path.to_path_buf()));
-        self.send(json!({ "op": "fs_list_dir", "id": id, "path": path.to_string_lossy() }));
+        self.send(json!({ "op": "fs_list_dir", "id": id, "path": posix(path) }));
         Vec::new()
     }
 
@@ -179,7 +179,7 @@ impl RemoteState {
             .lock()
             .unwrap()
             .insert(id, Pending::Stat(path.to_path_buf()));
-        self.send(json!({ "op": "fs_stat", "id": id, "path": path.to_string_lossy() }));
+        self.send(json!({ "op": "fs_stat", "id": id, "path": posix(path) }));
         StatInfo {
             exists: false,
             is_dir: false,
@@ -216,7 +216,7 @@ impl RemoteState {
 
     fn read_file(&self, path: &Path) -> io::Result<String> {
         let reply = self
-            .call("fs_read_file", json!({ "path": path.to_string_lossy() }))
+            .call("fs_read_file", json!({ "path": posix(path) }))
             .map_err(io::Error::other)?;
         if reply.get("ok").and_then(Value::as_bool).unwrap_or(false) {
             Ok(reply
@@ -286,6 +286,14 @@ impl RemoteFs {
     }
 }
 
+/// A remote (POSIX) path as the JSON string the sidecar needs. A Windows
+/// CLIENT's `PathBuf::join` stitches with '\\', but the remote is POSIX and
+/// would take that literally (ENOENT). Normalize so a Windows host can drive a
+/// Linux remote. (Backslashes in remote names are vanishingly rare.)
+fn posix(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 impl WorkspaceFs for RemoteFs {
     fn read_to_string(&self, path: &Path) -> io::Result<String> {
         self.state.read_file(path)
@@ -295,7 +303,7 @@ impl WorkspaceFs for RemoteFs {
         let text = String::from_utf8_lossy(contents);
         self.state.call_unit(
             "fs_write_file",
-            json!({ "path": path.to_string_lossy(), "content": text }),
+            json!({ "path": posix(path), "content": text }),
         )
     }
 
@@ -306,7 +314,7 @@ impl WorkspaceFs for RemoteFs {
     fn create_dir(&self, path: &Path) -> io::Result<()> {
         let r = self
             .state
-            .call_unit("fs_mkdir", json!({ "path": path.to_string_lossy() }));
+            .call_unit("fs_mkdir", json!({ "path": posix(path) }));
         if r.is_ok() {
             self.state.invalidate(path.parent());
         }
@@ -316,7 +324,7 @@ impl WorkspaceFs for RemoteFs {
     fn create_file(&self, path: &Path) -> io::Result<()> {
         let r = self
             .state
-            .call_unit("fs_create_file", json!({ "path": path.to_string_lossy() }));
+            .call_unit("fs_create_file", json!({ "path": posix(path) }));
         if r.is_ok() {
             self.state.invalidate(path.parent());
         }
@@ -327,7 +335,7 @@ impl WorkspaceFs for RemoteFs {
         // The sidecar auto-detects file vs dir, so both removes map here.
         let r = self
             .state
-            .call_unit("fs_remove", json!({ "path": path.to_string_lossy() }));
+            .call_unit("fs_remove", json!({ "path": posix(path) }));
         if r.is_ok() {
             self.state.invalidate(path.parent());
         }
@@ -341,7 +349,7 @@ impl WorkspaceFs for RemoteFs {
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
         let r = self.state.call_unit(
             "fs_rename",
-            json!({ "from": from.to_string_lossy(), "to": to.to_string_lossy() }),
+            json!({ "from": posix(from), "to": posix(to) }),
         );
         if r.is_ok() {
             self.state.invalidate(from.parent());

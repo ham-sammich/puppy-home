@@ -247,12 +247,15 @@ impl SshTarget {
 }
 
 /// The remote shell line that resolves + lists a directory: the first output
-/// line is the absolute path (`pwd`), the rest are entries (`ls -1Ap`, so dirs
-/// carry a trailing `/`). `dir` of `None` lists the login home.
+/// line is the absolute path (`pwd`), the rest are entries (`ls -1ApL`, so dirs
+/// carry a trailing `/`). `-L` dereferences symlinks so a symlink-to-dir is
+/// also marked (and browsable); `|| true` keeps a dangling symlink's non-zero
+/// exit from failing the whole listing (good entries are already on stdout).
+/// `dir` of `None` lists the login home.
 fn remote_list_line(dir: Option<&str>) -> String {
     match dir {
-        Some(d) => format!("cd {} && pwd && ls -1Ap", sh_quote(d)),
-        None => "cd && pwd && ls -1Ap".to_string(),
+        Some(d) => format!("cd {} && pwd && {{ ls -1ApL 2>/dev/null || true; }}", sh_quote(d)),
+        None => "cd && pwd && { ls -1ApL 2>/dev/null || true; }".to_string(),
     }
 }
 
@@ -534,10 +537,13 @@ mod tests {
 
     #[test]
     fn remote_list_line_home_and_dir() {
-        assert_eq!(remote_list_line(None), "cd && pwd && ls -1Ap");
+        assert_eq!(
+            remote_list_line(None),
+            "cd && pwd && { ls -1ApL 2>/dev/null || true; }"
+        );
         assert_eq!(
             remote_list_line(Some("/srv/my repo")),
-            "cd '/srv/my repo' && pwd && ls -1Ap"
+            "cd '/srv/my repo' && pwd && { ls -1ApL 2>/dev/null || true; }"
         );
     }
 
