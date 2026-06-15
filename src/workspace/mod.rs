@@ -28,6 +28,7 @@ pub(crate) mod fs;
 mod git_creds;
 mod git_graph;
 mod git_view;
+pub(crate) mod goal;
 mod state;
 mod tree_ops;
 
@@ -194,6 +195,8 @@ pub struct Workspace {
     pub judges_generation: u64,
     /// The most recent `judge_detail` answer (the judge builder's prefill).
     pub judge_detail: Option<crate::backend::JudgeDetail>,
+    /// Goal-loop + real-time judging state for this session (sidecar-driven).
+    pub goal: goal::GoalRun,
     status_req_at: Instant,
     // changes: Code-Puppy-reported diffs (fallback for non-git folders) + the
     // currently displayed diff.
@@ -374,6 +377,7 @@ impl Workspace {
             judges: None,
             judges_generation: 0,
             judge_detail: None,
+            goal: goal::GoalRun::default(),
             status_req_at: Instant::now(),
             diffs: Vec::new(),
             published_html: Vec::new(),

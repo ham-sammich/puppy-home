@@ -248,6 +248,16 @@ pub(super) fn toggle_judge(name: &str) -> Value {
     json!({ "op": "toggle_judge", "name": name })
 }
 
+// --- Goal loop (sidecar-emulated; emits goal_state/judge_*/goal_done) ------
+
+pub(super) fn goal_start(prompt: &str) -> Value {
+    json!({ "op": "goal_start", "prompt": prompt })
+}
+
+pub(super) fn goal_stop() -> Value {
+    json!({ "op": "goal_stop" })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -520,6 +530,15 @@ mod tests {
                 "is_new": false
             })
         );
+    }
+
+    #[test]
+    fn goal_ops() {
+        assert_eq!(
+            goal_start("ship the feature"),
+            json!({"op": "goal_start", "prompt": "ship the feature"})
+        );
+        assert_eq!(goal_stop(), json!({"op": "goal_stop"}));
     }
 
     #[test]

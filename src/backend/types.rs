@@ -286,6 +286,90 @@ pub struct JudgeDraft {
     pub is_new: bool,
 }
 
+/// The live goal-loop HUD feed (`goal_state` — emitted on every change).
+/// The sidecar emulates the CLI's goal loop; `mode` is "goal" while active.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct GoalStateMsg {
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(rename = "loop", default)]
+    pub loop_count: u64,
+    #[serde(default)]
+    pub max: u64,
+    #[serde(default)]
+    pub mode: String,
+}
+
+/// One judging round's result (`goal_iteration`).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct GoalIterationMsg {
+    #[serde(rename = "loop", default)]
+    pub loop_count: u64,
+    #[serde(default)]
+    pub max: u64,
+    #[serde(default)]
+    pub all_complete: bool,
+    #[serde(default)]
+    pub remediation_notes: String,
+}
+
+/// The goal loop finished (`goal_done`). `reason` is
+/// "all_pass" | "max_iters" | "stopped".
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct GoalDoneMsg {
+    #[serde(default)]
+    pub completed: bool,
+    #[serde(default)]
+    pub loops: u64,
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// One judge in a round's roster (rows of `judge_run_started.judges`).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct JudgeRosterEntry {
+    pub name: String,
+    #[serde(default)]
+    pub model: String,
+}
+
+/// A judging round began (`judge_run_started`).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct JudgeRunStarted {
+    #[serde(default)]
+    pub goal: String,
+    #[serde(default)]
+    pub iteration: u64,
+    #[serde(default)]
+    pub max: u64,
+    #[serde(default)]
+    pub judges: Vec<JudgeRosterEntry>,
+}
+
+/// One judge began running (`judge_started`) — drives the "running" row state.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct JudgeStartedMsg {
+    pub judge_name: String,
+    #[serde(default)]
+    pub iteration: u64,
+}
+
+/// One judge's verdict (`judge_verdict`) — resolves a live row.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct JudgeVerdictMsg {
+    pub judge_name: String,
+    #[serde(default)]
+    pub iteration: u64,
+    #[serde(default)]
+    pub complete: bool,
+    #[serde(default)]
+    pub abstained: bool,
+    #[serde(default)]
+    pub notes: String,
+}
+
 /// A concurrent sub-agent Code Puppy spawned via `invoke_agent` (dashboard row).
 #[derive(Debug, Clone, Deserialize)]
 pub struct SubAgentInfo {

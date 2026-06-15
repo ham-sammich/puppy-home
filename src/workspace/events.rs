@@ -258,6 +258,12 @@ impl Workspace {
             UiEvent::JudgeDetail(detail) => {
                 self.judge_detail = Some(detail);
             }
+            UiEvent::GoalState(m) => self.goal.on_state(m),
+            UiEvent::GoalIteration(m) => self.goal.on_iteration(m),
+            UiEvent::GoalDone(m) => self.goal.on_done(m),
+            UiEvent::JudgeRunStarted(m) => self.goal.on_run_started(m),
+            UiEvent::JudgeStarted(m) => self.goal.on_judge_started(m),
+            UiEvent::JudgeVerdict(m) => self.goal.on_verdict(m),
             UiEvent::Exited { code } => {
                 self.ready = false;
                 self.running = false;

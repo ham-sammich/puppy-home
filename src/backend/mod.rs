@@ -155,6 +155,18 @@ pub enum UiEvent {
     Judges(Vec<JudgeInfo>),
     /// One judge's full config (answer to `get_judge`).
     JudgeDetail(JudgeDetail),
+    /// The live goal-loop HUD feed (`goal_state`).
+    GoalState(GoalStateMsg),
+    /// One judging round's result (`goal_iteration`).
+    GoalIteration(GoalIterationMsg),
+    /// The goal loop finished (`goal_done`).
+    GoalDone(GoalDoneMsg),
+    /// A judging round began with its roster (`judge_run_started`).
+    JudgeRunStarted(JudgeRunStarted),
+    /// One judge began running (`judge_started`).
+    JudgeStarted(JudgeStartedMsg),
+    /// One judge's verdict landed (`judge_verdict`).
+    JudgeVerdict(JudgeVerdictMsg),
     /// The sidecar process exited.
     Exited { code: Option<i32> },
 }
@@ -382,6 +394,12 @@ enum Wire {
         #[serde(default)]
         enabled: bool,
     },
+    GoalState(GoalStateMsg),
+    GoalIteration(GoalIterationMsg),
+    GoalDone(GoalDoneMsg),
+    JudgeRunStarted(JudgeRunStarted),
+    JudgeStarted(JudgeStartedMsg),
+    JudgeVerdict(JudgeVerdictMsg),
 }
 
 impl From<Wire> for UiEvent {
@@ -552,6 +570,12 @@ impl From<Wire> for UiEvent {
                 prompt,
                 enabled,
             }),
+            Wire::GoalState(m) => UiEvent::GoalState(m),
+            Wire::GoalIteration(m) => UiEvent::GoalIteration(m),
+            Wire::GoalDone(m) => UiEvent::GoalDone(m),
+            Wire::JudgeRunStarted(m) => UiEvent::JudgeRunStarted(m),
+            Wire::JudgeStarted(m) => UiEvent::JudgeStarted(m),
+            Wire::JudgeVerdict(m) => UiEvent::JudgeVerdict(m),
         }
     }
 }
@@ -1029,6 +1053,17 @@ impl CodePuppy {
     /// Flip a judge's enabled flag; the sidecar re-lists.
     pub fn toggle_judge(&self, name: &str) {
         self.write(protocol::toggle_judge(name));
+    }
+
+    /// Begin goal mode: the sidecar drives the loop and emits `goal_state` /
+    /// `judge_*` / `goal_done` events.
+    pub fn goal_start(&self, prompt: &str) {
+        self.write(protocol::goal_start(prompt));
+    }
+
+    /// Stop the running goal loop (the sidecar emits a `stopped` `goal_done`).
+    pub fn goal_stop(&self) {
+        self.write(protocol::goal_stop());
     }
 }
 
@@ -1613,6 +1648,78 @@ mod tests {
                 assert!(!d.enabled);
             }
             other => panic!("expected JudgeDetail, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn goal_state_event_renames_loop() {
+        match decode(
+            r#"{"event":"goal_state","active":true,"prompt":"ship it","loop":2,"max":10,"mode":"goal"}"#,
+        ) {
+            UiEvent::GoalState(m) => {
+                assert!(m.active);
+                assert_eq!(m.prompt, "ship it");
+                assert_eq!(m.loop_count, 2);
+                assert_eq!(m.max, 10);
+                assert_eq!(m.mode, "goal");
+            }
+            other => panic!("expected GoalState, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn goal_done_and_iteration_events() {
+        match decode(r#"{"event":"goal_done","completed":true,"loops":3,"reason":"all_pass"}"#) {
+            UiEvent::GoalDone(m) => {
+                assert!(m.completed);
+                assert_eq!(m.loops, 3);
+                assert_eq!(m.reason, "all_pass");
+            }
+            other => panic!("expected GoalDone, got {other:?}"),
+        }
+        match decode(
+            r#"{"event":"goal_iteration","loop":1,"max":10,"all_complete":false,"remediation_notes":"fix tests"}"#,
+        ) {
+            UiEvent::GoalIteration(m) => {
+                assert_eq!(m.loop_count, 1);
+                assert!(!m.all_complete);
+                assert_eq!(m.remediation_notes, "fix tests");
+            }
+            other => panic!("expected GoalIteration, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn judge_stream_events() {
+        match decode(
+            r#"{"event":"judge_run_started","goal":"g","iteration":1,"max":10,"judges":[{"name":"a","model":"gpt-5"},{"name":"b"}]}"#,
+        ) {
+            UiEvent::JudgeRunStarted(m) => {
+                assert_eq!(m.iteration, 1);
+                assert_eq!(m.judges.len(), 2);
+                assert_eq!(m.judges[0].name, "a");
+                assert_eq!(m.judges[0].model, "gpt-5");
+                assert_eq!(m.judges[1].model, ""); // defaulted
+            }
+            other => panic!("expected JudgeRunStarted, got {other:?}"),
+        }
+        match decode(r#"{"event":"judge_started","judge_name":"a","iteration":1}"#) {
+            UiEvent::JudgeStarted(m) => {
+                assert_eq!(m.judge_name, "a");
+                assert_eq!(m.iteration, 1);
+            }
+            other => panic!("expected JudgeStarted, got {other:?}"),
+        }
+        match decode(
+            r#"{"event":"judge_verdict","judge_name":"a","iteration":1,"complete":true,"abstained":false,"notes":"ok"}"#,
+        ) {
+            UiEvent::JudgeVerdict(m) => {
+                assert_eq!(m.judge_name, "a");
+                assert!(m.complete);
+                assert!(!m.abstained);
+                assert_eq!(m.notes, "ok");
+            }
+            other => panic!("expected JudgeVerdict, got {other:?}"),
         }
     }
 
