@@ -247,6 +247,7 @@ impl RootView {
     fn reset_den_broadcast_state(&mut self) {
         self.den_roster_last.clear();
         self.den_roster_at = None;
+        self.den_roster_members = 0;
     }
 
     /// Connect to the relay with the join form's values.
@@ -409,6 +410,17 @@ impl RootView {
 
         if !den.alive {
             return;
+        }
+
+        // When the member set changes, force a fresh roster broadcast so a
+        // newly-joined member sees OUR agents even if our own agent state
+        // hasn't changed since we last sent it. (The relay replays cached
+        // rosters to late joiners, but only for members who'd ALREADY
+        // broadcast before the join -- this closes the join-race window.)
+        let member_count = den.state.members.len();
+        if member_count != self.den_roster_members {
+            self.den_roster_members = member_count;
+            self.den_roster_last.clear();
         }
 
         // 2. Roster broadcast: rate-limited AND change-gated (pack_sync parity).

@@ -224,6 +224,10 @@ pub struct RootView {
     den_join_error: Option<String>,
     den_roster_at: Option<Instant>,
     den_roster_last: String,
+    /// Member count at our last roster broadcast; when it changes we force a
+    /// re-broadcast so newly-joined members see our agents (the change-gate
+    /// would otherwise suppress it).
+    den_roster_members: usize,
     /// Presence heuristic inputs (unfocused OR >5min since interaction).
     window_active: bool,
     /// Latest window placement, captured each render for persistence (P5):
@@ -463,6 +467,7 @@ impl RootView {
             den_join_error: None,
             den_roster_at: None,
             den_roster_last: String::new(),
+            den_roster_members: 0,
             window_active: true,
             win_rect: None,
             win_maximized: false,
