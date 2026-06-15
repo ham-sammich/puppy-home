@@ -440,7 +440,12 @@ fn ctx_popover(args: &ComposerArgs) -> AnyElement {
                 .flex()
                 .h_full()
                 .w_full()
-                .child(div().h_full().w(relative(overhead_frac)).bg(alpha(t.wait, 0.75)))
+                .child(
+                    div()
+                        .h_full()
+                        .w(relative(overhead_frac))
+                        .bg(alpha(t.wait, 0.75)),
+                )
                 .child(div().h_full().w(relative(msg_frac)).bg(t.accent)),
         )
         .child(
@@ -533,11 +538,19 @@ fn ctx_popover(args: &ComposerArgs) -> AnyElement {
                 .flex_col()
                 .gap_1()
                 .child(row("Conversation", c.used_tokens, t.accent))
-                .child(row("System prompt", c.system_prompt_tokens, alpha(t.wait, 0.75)))
+                .child(row(
+                    "System prompt",
+                    c.system_prompt_tokens,
+                    alpha(t.wait, 0.75),
+                ))
                 .child(row("AGENTS.md", c.agents_md_tokens, alpha(t.wait, 0.6)))
                 .child(row("Tools", c.pydantic_tools_tokens, alpha(t.wait, 0.45)))
                 .child(row("MCP servers", c.mcp_tokens, alpha(t.wait, 0.35)))
-                .child(row("Kennel memory", c.kennel_memory_tokens, alpha(t.wait, 0.25))),
+                .child(row(
+                    "Kennel memory",
+                    c.kennel_memory_tokens,
+                    alpha(t.wait, 0.25),
+                )),
         )
         .child(
             div()

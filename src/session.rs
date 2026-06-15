@@ -5,8 +5,6 @@
 
 use std::path::PathBuf;
 
-use eframe::egui::Rect;
-use egui_dock::DockState;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -15,12 +13,12 @@ pub struct Session {
     pub workspaces: Vec<WorkspaceEntry>,
     #[serde(default)]
     pub theme: Theme,
-    /// The egui_dock split layout, in device-independent terms (workspace
-    /// paths, not runtime ids). Restored by remapping paths back to freshly
-    /// spawned [`WorkspaceId`](crate::workspace::WorkspaceId)s. Absent on first
-    /// run or pre-layout sessions.
+    /// The legacy egui_dock split layout. The GPUI shell does not use a dock,
+    /// so it neither reads nor writes this — but it is preserved as an opaque
+    /// JSON blob so an old `session.json` written by the egui shell still
+    /// round-trips losslessly (load -> mutate prefs -> save keeps it intact).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub layout: Option<DockState<SavedTab>>,
+    pub layout: Option<serde_json::Value>,
     /// The dashboard's fleet view (Grid / List / Focus), remembered per
     /// machine. Canonical on redesign/shared-backend (drift reconciliation);
     /// this is an identical copy so session.json stays portable.
@@ -138,20 +136,6 @@ pub enum DashboardViewMode {
     Focus,
 }
 
-/// A persistable mirror of `shell::Tab` using stable keys instead of runtime
-/// ids, so the dock layout survives a restart. Browser tabs are intentionally
-/// omitted (the browser plugin doesn't restore tabs across runs).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SavedTab {
-    Dashboard,
-    /// A workspace chat tab, keyed by the workspace's folder path.
-    Chat(String),
-    McpManager,
-    SkillsManager,
-    AgentManager,
-    Pack,
-}
-
 /// UI color theme, persisted across runs. `Custom(name)` references a saved
 /// theme in `themes.json` by name.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -217,19 +201,6 @@ pub struct WorkspaceEntry {
     /// Code Puppy autosave session this workspace was tied to (to resume it).
     #[serde(default)]
     pub autosave: Option<String>,
-}
-
-/// Reset every node rect to a finite value before serializing. Fresh / not-yet
-/// laid-out nodes carry `Rect::NOTHING` (infinity), which JSON renders as
-/// `null` and then refuses to deserialize back into `f32`. egui_dock recomputes
-/// all rects each frame, so zeroing them on save is lossless.
-pub fn normalize_layout_rects(dock: &mut DockState<SavedTab>) {
-    for (_path, node) in dock.iter_all_nodes_mut() {
-        node.set_rect(Rect::ZERO);
-        if let Some(leaf) = node.get_leaf_mut() {
-            leaf.viewport = Rect::ZERO;
-        }
-    }
 }
 
 /// Per-OS app data directory: `<config-dir>/puppy-home/`. Where session.json
@@ -386,22 +357,21 @@ mod tests {
     }
 
     #[test]
-    fn layout_roundtrips_via_serde() {
-        let mut dock = DockState::new(vec![SavedTab::Dashboard, SavedTab::McpManager]);
-        normalize_layout_rects(&mut dock); // fresh leaves carry inf rects
+    fn legacy_layout_blob_roundtrips_losslessly() {
+        // The GPUI shell never writes a dock layout, but an old egui-shell
+        // session.json carries one. Treated as an opaque blob, it must
+        // survive load -> save unchanged.
+        let blob = serde_json::json!({
+            "main_surface": [{ "Leaf": { "tabs": ["Dashboard"] } }],
+            "opaque_nested": { "a": 1, "b": [true, null, 2.5] }
+        });
         let s = Session {
-            layout: Some(dock),
+            layout: Some(blob.clone()),
             ..Default::default()
         };
         let j = serde_json::to_string(&s).unwrap();
         let back: Session = serde_json::from_str(&j).unwrap();
-        let tabs: Vec<_> = back
-            .layout
-            .unwrap()
-            .iter_all_tabs()
-            .map(|(_, t)| t.clone())
-            .collect();
-        assert_eq!(tabs, vec![SavedTab::Dashboard, SavedTab::McpManager]);
+        assert_eq!(back.layout, Some(blob));
     }
 
     #[test]

@@ -389,7 +389,9 @@ fn ws_toolbar(args: &ChatArgs) -> AnyElement {
                 )))
                 .child(label)
                 .on_click(move |_, _, cx| {
-                    root.update(cx, |r, cx| r.dispatch(DashAction::OpenDevUrl(url.clone()), cx));
+                    root.update(cx, |r, cx| {
+                        r.dispatch(DashAction::OpenDevUrl(url.clone()), cx)
+                    });
                 })
         }))
         .child(crate::gpui_ui::terminal::terminal_toggle_btn(
@@ -516,9 +518,17 @@ fn new_root_btn(args: &ChatArgs, is_dir: bool) -> AnyElement {
     let root_path = args.ws.root.clone();
     let root = args.root.clone();
     let (label, tip, key): (&str, &str, &str) = if is_dir {
-        ("\u{ff0b}dir", "New folder at workspace root", "tree-new-root-dir")
+        (
+            "\u{ff0b}dir",
+            "New folder at workspace root",
+            "tree-new-root-dir",
+        )
     } else {
-        ("\u{ff0b}file", "New file at workspace root", "tree-new-root-file")
+        (
+            "\u{ff0b}file",
+            "New file at workspace root",
+            "tree-new-root-file",
+        )
     };
     div()
         .id((key, id.0))
@@ -534,7 +544,9 @@ fn new_root_btn(args: &ChatArgs, is_dir: bool) -> AnyElement {
         .child(label.to_string())
         .on_click(move |_, _, cx| {
             let p = root_path.clone();
-            root.update(cx, |r, cx| r.dispatch(DashAction::TreeNew(id, p.clone(), is_dir), cx));
+            root.update(cx, |r, cx| {
+                r.dispatch(DashAction::TreeNew(id, p.clone(), is_dir), cx)
+            });
         })
         .into_any_element()
 }
@@ -563,13 +575,16 @@ fn tree_root_op_panel(args: &ChatArgs) -> Option<AnyElement> {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .child(div().text_size(px(10.)).text_color(t.weak).child(
-                        if is_dir {
-                            "New folder at root \u{2014} name + Enter"
-                        } else {
-                            "New file at root \u{2014} name + Enter"
-                        },
-                    ))
+                    .child(
+                        div()
+                            .text_size(px(10.))
+                            .text_color(t.weak)
+                            .child(if is_dir {
+                                "New folder at root \u{2014} name + Enter"
+                            } else {
+                                "New file at root \u{2014} name + Enter"
+                            }),
+                    )
                     .child(div().flex_1())
                     .child(
                         div()
@@ -583,9 +598,7 @@ fn tree_root_op_panel(args: &ChatArgs) -> Option<AnyElement> {
                             .hover(|d| d.bg(t.card))
                             .child("\u{2715}")
                             .on_click(move |_, _, cx| {
-                                root.update(cx, |r, cx| {
-                                    r.dispatch(DashAction::TreeOpCancel, cx)
-                                });
+                                root.update(cx, |r, cx| r.dispatch(DashAction::TreeOpCancel, cx));
                             }),
                     ),
             )
@@ -618,7 +631,11 @@ fn hidden_toggle(args: &ChatArgs) -> AnyElement {
         .mr_1()
         .rounded(px(6.))
         .text_size(px(12.))
-        .text_color(if mode == HiddenMode::Hide { t.weak } else { t.accent })
+        .text_color(if mode == HiddenMode::Hide {
+            t.weak
+        } else {
+            t.accent
+        })
         .cursor_pointer()
         .hover(|d| d.bg(t.well))
         .tooltip(crate::gpui_ui::widgets::text_tip(mode.tip().into()))
@@ -669,7 +686,9 @@ pub(crate) fn tree_menu_panel(
     let target_dir = if is_dir {
         path.to_path_buf()
     } else {
-        path.parent().map(Path::to_path_buf).unwrap_or_else(|| path.to_path_buf())
+        path.parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| path.to_path_buf())
     };
 
     // A single full-width menu row (VSCode list item).
@@ -701,13 +720,12 @@ pub(crate) fn tree_menu_panel(
             .into_any_element()
     };
 
-    let mut items: Vec<AnyElement> = Vec::new();
-    items.push(item(
+    let mut items: Vec<AnyElement> = vec![item(
         "\u{ff0b} New File".into(),
         "tree-new-file",
         DashAction::TreeNew(id, target_dir.clone(), false),
         false,
-    ));
+    )];
     items.push(item(
         "\u{ff0b} New Folder".into(),
         "tree-new-dir",
@@ -742,7 +760,11 @@ pub(crate) fn tree_menu_panel(
     items.push(sep());
     let deleting = delete_pending == Some(path);
     items.push(item(
-        if deleting { "Delete \u{2014} click to confirm".into() } else { "Delete".into() },
+        if deleting {
+            "Delete \u{2014} click to confirm".into()
+        } else {
+            "Delete".into()
+        },
         "tree-delete",
         if deleting {
             DashAction::TreeDeleteConfirm
@@ -880,13 +902,19 @@ fn push_dir_rows(args: &ChatArgs, dir: &std::path::Path, depth: usize, rows: &mu
                 let a = click_action.clone();
                 root_click.update(cx, |r, cx| r.dispatch(a, cx));
             })
-            .on_mouse_down(gpui::MouseButton::Right, move |ev: &gpui::MouseDownEvent, _, cx| {
-                let p = menu_path.clone();
-                let pos = ev.position;
-                root_menu.update(cx, |r, cx| {
-                    r.dispatch(DashAction::OpenTreeMenu(id, p.clone(), menu_is_dir, pos), cx)
-                });
-            })
+            .on_mouse_down(
+                gpui::MouseButton::Right,
+                move |ev: &gpui::MouseDownEvent, _, cx| {
+                    let p = menu_path.clone();
+                    let pos = ev.position;
+                    root_menu.update(cx, |r, cx| {
+                        r.dispatch(
+                            DashAction::OpenTreeMenu(id, p.clone(), menu_is_dir, pos),
+                            cx,
+                        )
+                    });
+                },
+            )
             .into_any_element();
         rows.push(row);
         if open {

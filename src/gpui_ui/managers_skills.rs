@@ -457,7 +457,7 @@ fn wizard_body(args: &MgrArgs, w: &skills_wizard::Wizard) -> AnyElement {
                         .border_color(t.line_soft)
                         .font_family("JetBrains Mono")
                         .text_size(px(11.5))
-                        .children(args.inputs.get(F_C).map(|i| i.clone())),
+                        .children(args.inputs.get(F_C).cloned()),
                 )
                 .into_any_element(),
             _ => div()

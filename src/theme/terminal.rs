@@ -1,12 +1,11 @@
 //! The embedded terminal's color theme: foreground/background/cursor + the 16
 //! base ANSI colors. Persisted to `terminal.json` and handed to `terminal.rs`
-//! each frame via egui's per-context data store (so we don't have to thread it
-//! through Supervisor -> Workspace -> Terminal).
+//! each frame and handed to the GPUI terminal renderer, which parses the hex
+//! strings into its own color type.
 
-use eframe::egui;
 use serde::{Deserialize, Serialize};
 
-use super::{config_path, parse_hex};
+use super::config_path;
 
 /// Editable terminal palette (hex strings, file-friendly).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,24 +21,9 @@ pub struct TerminalTheme {
     pub ansi: Vec<String>,
 }
 
-/// Terminal colors resolved to `Color32`, cached per-frame for the renderer.
-#[derive(Debug, Clone)]
-pub struct ResolvedTerminal {
-    pub fg: egui::Color32,
-    pub bg: egui::Color32,
-    pub cursor: egui::Color32,
-    pub ansi: [egui::Color32; 16],
-}
-
 impl Default for TerminalTheme {
     fn default() -> Self {
         Self::dark()
-    }
-}
-
-impl Default for ResolvedTerminal {
-    fn default() -> Self {
-        TerminalTheme::dark().resolve()
     }
 }
 
@@ -99,52 +83,6 @@ impl TerminalTheme {
             ],
         }
     }
-
-    /// Resolve to `Color32`s, tolerating bad hex (falls back to dark defaults).
-    pub fn resolve(&self) -> ResolvedTerminal {
-        let d = |hex: &str, fallback: egui::Color32| parse_hex(hex).unwrap_or(fallback);
-        let mut ansi = [egui::Color32::GRAY; 16];
-        let fallback = TERM_FALLBACK_ANSI;
-        for (i, slot) in ansi.iter_mut().enumerate() {
-            *slot = self
-                .ansi
-                .get(i)
-                .and_then(|h| parse_hex(h))
-                .unwrap_or(fallback[i]);
-        }
-        ResolvedTerminal {
-            fg: d(&self.fg, egui::Color32::from_rgb(0xcc, 0xcc, 0xcc)),
-            bg: d(&self.bg, egui::Color32::from_rgb(0x1e, 0x1e, 0x24)),
-            cursor: d(&self.cursor, egui::Color32::from_rgb(0xd0, 0xd0, 0x70)),
-            ansi,
-        }
-    }
-}
-
-/// Fallback ANSI colors if a theme is missing entries.
-const TERM_FALLBACK_ANSI: [egui::Color32; 16] = [
-    egui::Color32::from_rgb(0, 0, 0),
-    egui::Color32::from_rgb(205, 49, 49),
-    egui::Color32::from_rgb(13, 188, 121),
-    egui::Color32::from_rgb(229, 229, 16),
-    egui::Color32::from_rgb(36, 114, 200),
-    egui::Color32::from_rgb(188, 63, 188),
-    egui::Color32::from_rgb(17, 168, 205),
-    egui::Color32::from_rgb(229, 229, 229),
-    egui::Color32::from_rgb(102, 102, 102),
-    egui::Color32::from_rgb(241, 76, 76),
-    egui::Color32::from_rgb(35, 209, 139),
-    egui::Color32::from_rgb(245, 245, 67),
-    egui::Color32::from_rgb(59, 142, 234),
-    egui::Color32::from_rgb(214, 112, 214),
-    egui::Color32::from_rgb(41, 184, 219),
-    egui::Color32::from_rgb(255, 255, 255),
-];
-
-/// The egui data-store id under which the resolved terminal palette is stashed
-/// each frame (set by the app, read by `terminal.rs`).
-pub fn terminal_colors_id() -> egui::Id {
-    egui::Id::new("puppy-terminal-colors")
 }
 
 /// Load the active terminal theme (`terminal.json`), defaulting to dark.
@@ -176,19 +114,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dark_resolves_all_16_ansi() {
-        let r = TerminalTheme::dark().resolve();
-        assert_eq!(r.ansi[1], egui::Color32::from_rgb(205, 49, 49)); // red
-        assert_eq!(r.ansi[15], egui::Color32::from_rgb(255, 255, 255)); // bright white
-        assert_eq!(r.bg, egui::Color32::from_rgb(0x1e, 0x1e, 0x24));
+    fn dark_has_all_16_ansi() {
+        let t = TerminalTheme::dark();
+        assert_eq!(t.ansi.len(), 16);
+        assert_eq!(t.ansi[1], "#cd3131"); // red
+        assert_eq!(t.ansi[15], "#ffffff"); // bright white
+        assert_eq!(t.bg, "#1e1e24");
     }
 
     #[test]
-    fn missing_ansi_entries_fall_back() {
-        let mut t = TerminalTheme::dark();
-        t.ansi = vec!["#010203".into()]; // only one provided
-        let r = t.resolve();
-        assert_eq!(r.ansi[0], egui::Color32::from_rgb(1, 2, 3));
-        assert_eq!(r.ansi[1], TERM_FALLBACK_ANSI[1]); // filled from fallback
+    fn roundtrips_via_serde() {
+        let t = TerminalTheme::light();
+        let j = serde_json::to_string(&t).unwrap();
+        let back: TerminalTheme = serde_json::from_str(&j).unwrap();
+        assert_eq!(t, back);
     }
 }

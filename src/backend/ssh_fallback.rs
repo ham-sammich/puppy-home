@@ -178,10 +178,6 @@ impl WorkspaceFs for SshFs {
     fn exists(&self, path: &Path) -> bool {
         self.exec(&["test", "-e", &p(path)], None).0
     }
-
-    fn is_dir(&self, path: &Path) -> bool {
-        self.exec(&["test", "-d", &p(path)], None).0
-    }
 }
 
 /// Single-quote a path for an inline remote shell line (write path only;

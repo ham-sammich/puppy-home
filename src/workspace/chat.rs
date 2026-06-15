@@ -44,16 +44,6 @@ impl Workspace {
         self.begin_turn();
     }
 
-    /// Remember a line sent from the composer for Up/Down recall (skips
-    /// consecutive duplicates, shell-style).
-    fn record_history(&mut self, text: &str) {
-        if self.input_history.last().map(String::as_str) != Some(text) {
-            self.input_history.push(text.to_string());
-        }
-        self.history_pos = None;
-        self.history_stash.clear();
-    }
-
     /// The one prompt-sending path (composer submit + dashboard "New prompt"):
     /// records the turn in the transcript and starts turn tracking. Signature
     /// converged with redesign/egui (text + images superset).
@@ -189,55 +179,6 @@ impl Workspace {
     pub fn set_model_live(&mut self, name: &str) {
         if let Some(backend) = &self.backend {
             backend.set_model(name);
-        }
-    }
-
-    pub(crate) fn submit(&mut self) {
-        let text = self.input.trim().to_string();
-        if text.is_empty() || !self.ready || self.running {
-            return;
-        }
-        self.input.clear();
-        self.record_history(&text);
-        if text.starts_with('/') {
-            self.dispatch_command(&text);
-        } else if self.backend.is_some() {
-            let images: Vec<String> = self
-                .pending_images
-                .iter()
-                .map(|p| p.png_base64.clone())
-                .collect();
-            self.pending_images.clear();
-            self.send_user_prompt(text, images);
-        }
-    }
-
-    /// Inject a steering message into the running turn (now = mid-turn, queue =
-    /// after this turn). Clears the input box.
-    pub(crate) fn steer(&mut self) {
-        let text = self.input.trim().to_string();
-        if text.is_empty() || !self.running {
-            return;
-        }
-        self.record_history(&text);
-        let queue = self.steer_queue_mode;
-        if self.steer_text(&text, queue) {
-            self.input.clear();
-        }
-    }
-
-    /// Toggle pause/resume of the running turn (optimistic; confirmed by event).
-    pub(crate) fn toggle_pause(&mut self) {
-        if !self.running {
-            return;
-        }
-        if let Some(backend) = &self.backend {
-            if self.paused {
-                backend.resume();
-            } else {
-                backend.pause();
-            }
-            self.paused = !self.paused;
         }
     }
 

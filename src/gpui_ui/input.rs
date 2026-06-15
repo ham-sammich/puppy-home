@@ -95,7 +95,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("right", Right, CTX),
         KeyBinding::new("up", Up, CTX),
         KeyBinding::new("down", Down, CTX),
-                KeyBinding::new("shift-left", SelectLeft, CTX),
+        KeyBinding::new("shift-left", SelectLeft, CTX),
         KeyBinding::new("shift-right", SelectRight, CTX),
         KeyBinding::new("cmd-a", SelectAll, CTX),
         KeyBinding::new("ctrl-a", SelectAll, CTX),
@@ -308,7 +308,7 @@ impl ChatInput {
     /// half-period after `blink_epoch`, hidden the next, repeating.
     fn caret_on(&self) -> bool {
         let half = CARET_BLINK.as_millis().max(1);
-        (self.blink_epoch.elapsed().as_millis() / half) % 2 == 0
+        (self.blink_epoch.elapsed().as_millis() / half).is_multiple_of(2)
     }
 
     /// Register focus/blur listeners once (needs a `Window`, so called from
@@ -1135,7 +1135,9 @@ impl gpui::Element for TextElement {
             let p = if placeholder {
                 point(px(0.), px(0.))
             } else {
-                layout.pos_for_offset(cursor_offset).unwrap_or(point(px(0.), px(0.)))
+                layout
+                    .pos_for_offset(cursor_offset)
+                    .unwrap_or(point(px(0.), px(0.)))
             };
             cursor = Some(fill(
                 Bounds::new(
@@ -1144,29 +1146,29 @@ impl gpui::Element for TextElement {
                 ),
                 t.accent,
             ));
-        } else if !placeholder {
-            if let (Some(p1), Some(p2)) = (
+        } else if !placeholder
+            && let (Some(p1), Some(p2)) = (
                 layout.pos_for_offset(selected_range.start),
                 layout.pos_for_offset(selected_range.end),
-            ) {
-                // One quad per visual row the selection touches.
-                let lh = layout.line_height;
-                let sel = alpha(t.accent, 0.25);
-                let mut y = p1.y;
-                while y <= p2.y {
-                    let x0 = if y == p1.y { p1.x } else { px(0.) };
-                    let x1 = if y == p2.y { p2.x } else { bounds.size.width };
-                    if x1 > x0 {
-                        selections.push(fill(
-                            Bounds::from_corners(
-                                point(bounds.left() + x0, bounds.top() + y),
-                                point(bounds.left() + x1, bounds.top() + y + lh),
-                            ),
-                            sel,
-                        ));
-                    }
-                    y += lh;
+            )
+        {
+            // One quad per visual row the selection touches.
+            let lh = layout.line_height;
+            let sel = alpha(t.accent, 0.25);
+            let mut y = p1.y;
+            while y <= p2.y {
+                let x0 = if y == p1.y { p1.x } else { px(0.) };
+                let x1 = if y == p2.y { p2.x } else { bounds.size.width };
+                if x1 > x0 {
+                    selections.push(fill(
+                        Bounds::from_corners(
+                            point(bounds.left() + x0, bounds.top() + y),
+                            point(bounds.left() + x1, bounds.top() + y + lh),
+                        ),
+                        sel,
+                    ));
                 }
+                y += lh;
             }
         }
         PrepaintState {

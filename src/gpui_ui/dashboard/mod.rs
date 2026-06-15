@@ -16,9 +16,7 @@ pub use header::{attention_banner, pack_header, segmented};
 
 use std::time::Instant;
 
-use gpui::{
-    AnyElement, Entity, FocusHandle, IntoElement, KeyDownEvent, Rgba, div, prelude::*, px,
-};
+use gpui::{AnyElement, Entity, FocusHandle, IntoElement, KeyDownEvent, Rgba, div, prelude::*, px};
 
 use crate::session::DashboardViewMode;
 use crate::supervisor::Supervisor;
@@ -451,7 +449,9 @@ pub fn inline_input_row(
                     .rounded(px(6.))
                     .text_size(px(10.5))
                     .cursor_pointer()
-                    .when(on, |d| d.bg(widgets::alpha(t.accent, 0.18)).text_color(t.accent))
+                    .when(on, |d| {
+                        d.bg(widgets::alpha(t.accent, 0.18)).text_color(t.accent)
+                    })
                     .when(!on, |d| d.text_color(t.weak))
                     .child(label.to_string())
                     .on_click(move |_, _, cx| {

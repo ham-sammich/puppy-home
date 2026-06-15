@@ -44,7 +44,9 @@ pub fn reveal_in_file_manager(path: &std::path::Path, _is_dir: bool) {
         let target = if _is_dir {
             path.to_path_buf()
         } else {
-            path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| path.to_path_buf())
+            path.parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| path.to_path_buf())
         };
         let _ = Command::new("xdg-open").arg(target).spawn();
     }

@@ -132,14 +132,18 @@ fn close_confirm_bar(
                 .child(format!("{name} is still running")),
         )
         .child(
-            widgets::btn(t, "End").id(("row-close-yes", id.0)).on_click(move |_, _, cx| {
-                root_end.update(cx, |r, cx| r.dispatch(DashAction::CloseWorkspace(id), cx));
-            }),
+            widgets::btn(t, "End")
+                .id(("row-close-yes", id.0))
+                .on_click(move |_, _, cx| {
+                    root_end.update(cx, |r, cx| r.dispatch(DashAction::CloseWorkspace(id), cx));
+                }),
         )
         .child(
-            widgets::btn(t, "Keep").id(("row-close-no", id.0)).on_click(move |_, _, cx| {
-                root_keep.update(cx, |r, cx| r.dispatch(DashAction::CancelCloseWorkspace, cx));
-            }),
+            widgets::btn(t, "Keep")
+                .id(("row-close-no", id.0))
+                .on_click(move |_, _, cx| {
+                    root_keep.update(cx, |r, cx| r.dispatch(DashAction::CancelCloseWorkspace, cx));
+                }),
         )
         .into_any_element()
 }
@@ -218,7 +222,11 @@ fn row(t: &Tokens, s: CardSnapshot, root: &Entity<RootView>) -> AnyElement {
     }
     acts.push(icon("\u{2192}", "row-open", DashAction::Open(id)));
     // Close this workspace (resting closes now; busy arms the confirm bar).
-    acts.push(icon("\u{2715}", "row-close", DashAction::RequestCloseWorkspace(id)));
+    acts.push(icon(
+        "\u{2715}",
+        "row-close",
+        DashAction::RequestCloseWorkspace(id),
+    ));
 
     div()
         .id(("fleet-row", id.0))

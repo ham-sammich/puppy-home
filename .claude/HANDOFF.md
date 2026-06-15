@@ -7,6 +7,53 @@
 > `feature/browser-plugin`.
 
 =====================================================================
+=== LATEST: 2026-06-15  (G5 egui strip — by code-puppy-381cef) ===
+=====================================================================
+
+## THE egui SHELL IS GONE
+Phase G5 is done: the legacy eframe/egui frontend has been **removed
+entirely** from `redesign/gpui`. This is now a single, clean GPUI
+codebase — no more `egui-shell` feature, no `main` fork, no dual
+rendering.
+
+- **Deleted:** `src/app/`, `src/shell/`, `src/dock_layout.rs`,
+  `src/fonts.rs`, `theme/editor.rs`, all egui `src/views/*` renderers
+  (dashboard/mcp_manager/pack_panel/path_browser), and the egui render
+  paths inside `workspace/` (view.rs, render.rs, git_graph_view.rs,
+  sessions.rs, composer.rs, file_picker.rs, pending_prompt.rs + the
+  `render_*`/`poll_git(ctx)` methods on the surviving files).
+- **Deps dropped:** `eframe`, `egui_commonmark`, `egui_dock`,
+  `egui_extras`. Cargo.lock **970 -> 828 packages (-142)**. `syntect`,
+  `rfd`, `arboard`/`png`/`image`, `portable-pty`/`vt100`, `objc`/
+  `windows`/`raw-window-handle` all KEPT (GPUI needs them).
+- **Shared logic in egui-named files was PRESERVED**, not deleted:
+  `short_session` + `dev_url_scan_text` -> `workspace/mod.rs`; wizard
+  state machines + `validate_name`/`EditMode`/filter helpers stayed in
+  `views/*` (renderers stripped); theme `ANSI_NAMES`/`upsert`/
+  `unique_name` -> `theme/library.rs`; `parse_hex` is now frontend-
+  agnostic (returns `(u8,u8,u8)`; `gpui_ui::tokens::hex` maps it).
+  `session.layout` is now an opaque `serde_json::Value` so an old
+  egui-shell `session.json` still round-trips losslessly (GPUI never
+  reads it).
+- **waker.rs:** `EguiWaker`/`egui_waker` removed; `UiWaker` trait +
+  `GpuiWaker` are the only path.
+- **Hygiene:** `backend/mod.rs` 1725 -> 1440 lines; protocol DTO
+  structs extracted to `backend/types.rs` (`pub use types::*`). The
+  wire decode (`Wire`/`UiEvent`/`From<Wire>`) + `CodePuppy` driver
+  stayed in mod.rs as one cohesive unit (further split deferred).
+- **Green:** `cargo build` (no `--features`), `cargo test` (197 app +
+  19 relay), `cargo clippy --all-targets`, `cargo fmt` all clean.
+  Clean release ~1m40s, binary ~13.3 MB (dead egui was already
+  linker-stripped, so binary is flat; the win is -142 deps + faster
+  builds + one coherent codebase). App launches + reaches Ready (probe).
+- **One deliberate `#[allow(dead_code)]`:** `WorkspaceFs::is_dir`
+  (rounds out the exists/is_dir fs trait; no caller yet). `open_tab`
+  keeps a vestigial `_workspace` param to preserve its signature.
+
+Remaining Phase G: G4 (sha-bump decision) + G6 (merge to master). G3
+(Windows gate) PASSED 15/15.
+
+=====================================================================
 === LATEST: 2026-06-14  (handoff by code-puppy-3e3350, for Jacob) ===
 =====================================================================
 

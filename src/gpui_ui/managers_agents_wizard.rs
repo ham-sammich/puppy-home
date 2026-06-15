@@ -252,7 +252,11 @@ fn model_dropdown(args: &MgrArgs, ws: &Workspace, w: &agent_wizard::Wizard) -> A
                 .text_color(t.text)
                 .child(current_label),
         )
-        .child(small(&t, if open { "\u{25b4}" } else { "\u{25be}" }, t.weak))
+        .child(small(
+            &t,
+            if open { "\u{25b4}" } else { "\u{25be}" },
+            t.weak,
+        ))
         .on_click(act(&args.root, MgrAction::AgentModelMenu));
 
     let mut col = div()
@@ -281,7 +285,13 @@ fn model_dropdown(args: &MgrArgs, ws: &Workspace, w: &agent_wizard::Wizard) -> A
             .border_color(t.line_soft)
             .child(model_option(args, 0, "global default", "", cur.is_empty()));
         for (i, m) in catalog.iter().enumerate() {
-            menu = menu.child(model_option(args, i as u64 + 1, &m.name, &m.name, cur == m.name));
+            menu = menu.child(model_option(
+                args,
+                i as u64 + 1,
+                &m.name,
+                &m.name,
+                cur == m.name,
+            ));
         }
         if catalog.is_empty() {
             menu = menu.child(small(

@@ -6,8 +6,6 @@
 //! credentials, and retry via the `*_auth` ops, which feed them to git through a
 //! one-shot credential helper. Nothing is persisted.
 
-use eframe::egui;
-
 use super::Workspace;
 use super::state::{GitAuthOp, GitCredsPrompt};
 
@@ -83,72 +81,6 @@ impl Workspace {
                     p.focus = true;
                 }
             }
-        }
-    }
-
-    /// The HTTPS credentials modal shown when a push/pull/fetch needs auth.
-    pub(crate) fn render_git_creds_modal(&mut self, ctx: &egui::Context) {
-        let Some(mut state) = self.git_creds.take() else {
-            return;
-        };
-        let verb = state.op.verb();
-        let mut action = 0u8; // 1 = authenticate, 2 = cancel
-        egui::Window::new(format!("{verb} — sign in"))
-            .id(egui::Id::new(("git-creds-modal", self.id.0)))
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
-                ui.set_max_width(420.0);
-                ui.label(format!(
-                    "The remote needs a username and password (or token) to {}.",
-                    verb.to_ascii_lowercase()
-                ));
-                ui.add_space(8.0);
-                egui::Grid::new("git-creds-grid")
-                    .num_columns(2)
-                    .spacing([8.0, 6.0])
-                    .show(ui, |ui| {
-                        ui.label("Username:");
-                        let user_resp = ui.text_edit_singleline(&mut state.username);
-                        if state.focus {
-                            user_resp.request_focus();
-                            state.focus = false;
-                        }
-                        ui.end_row();
-                        ui.label("Password / token:");
-                        let pass_resp =
-                            ui.add(egui::TextEdit::singleline(&mut state.password).password(true));
-                        ui.end_row();
-                        // Enter in either field submits.
-                        let enter = (user_resp.lost_focus() || pass_resp.lost_focus())
-                            && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        if enter {
-                            action = 1;
-                        }
-                    });
-                ui.weak("Used once for this push — nothing is stored.");
-                if let Some(err) = &state.error {
-                    ui.colored_label(ui.visuals().error_fg_color, err);
-                }
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if ui.button("Cancel").clicked() {
-                        action = 2;
-                    }
-                    let ready = !state.username.trim().is_empty() && !state.password.is_empty();
-                    if ui.add_enabled(ready, egui::Button::new(verb)).clicked() {
-                        action = 1;
-                    }
-                });
-            });
-        match action {
-            1 => {
-                self.git_creds = Some(state);
-                self.retry_git_auth();
-            }
-            2 => self.git_creds = None,
-            _ => self.git_creds = Some(state),
         }
     }
 }

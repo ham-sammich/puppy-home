@@ -310,11 +310,6 @@ pub fn create_branch(r: &dyn GitRunner, name: &str, at: &str) -> Result<(), Stri
     r.run(&["checkout", "-b", name, at]).map(|_| ())
 }
 
-/// Force-delete a local branch.
-pub fn delete_branch(r: &dyn GitRunner, name: &str) -> Result<(), String> {
-    r.run(&["branch", "-D", name]).map(|_| ())
-}
-
 /// Merge `target` (a branch/commit) into the current branch.
 pub fn merge(r: &dyn GitRunner, target: &str) -> Result<String, String> {
     r.run(&["merge", target]).map(|s| s.trim().to_string())
@@ -470,7 +465,6 @@ pub trait WorkspaceGit: Send + Sync {
     fn commit(&self, message: &str) -> Result<String, String>;
     fn checkout(&self, name: &str) -> Result<(), String>;
     fn create_branch(&self, name: &str, at: &str) -> Result<(), String>;
-    fn delete_branch(&self, name: &str) -> Result<(), String>;
     fn merge(&self, target: &str) -> Result<String, String>;
     fn cherry_pick(&self, hash: &str) -> Result<(), String>;
     fn revert(&self, hash: &str) -> Result<(), String>;
@@ -508,7 +502,6 @@ macro_rules! impl_workspace_git {
             fn commit(&self, message: &str) -> Result<String, String> { $crate::git::commit(&self.runner, message) }
             fn checkout(&self, name: &str) -> Result<(), String> { $crate::git::checkout(&self.runner, name) }
             fn create_branch(&self, name: &str, at: &str) -> Result<(), String> { $crate::git::create_branch(&self.runner, name, at) }
-            fn delete_branch(&self, name: &str) -> Result<(), String> { $crate::git::delete_branch(&self.runner, name) }
             fn merge(&self, target: &str) -> Result<String, String> { $crate::git::merge(&self.runner, target) }
             fn cherry_pick(&self, hash: &str) -> Result<(), String> { $crate::git::cherry_pick(&self.runner, hash) }
             fn revert(&self, hash: &str) -> Result<(), String> { $crate::git::revert(&self.runner, hash) }

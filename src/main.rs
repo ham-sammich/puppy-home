@@ -7,76 +7,28 @@
 //! the console window so it launches as a clean GUI app.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-// ---------------------------------------------------------------------------
-// redesign/gpui: GPUI is the frontend. The egui-coupled modules stay in the
-// tree and KEEP COMPILING (eframe remains a dependency for their types) so
-// their reusable logic can be extracted incrementally — but with the
-// `egui-shell` feature off (the default) nothing runs them, so they are
-// allow(dead_code) to keep the build signal clean. Modules the GPUI frontend
-// actually drives (backend, supervisor, waker, gpui_ui) keep full lints.
-// ---------------------------------------------------------------------------
-#[cfg_attr(not(feature = "egui-shell"), allow(dead_code))]
-mod app;
+// GPUI is THE frontend. These modules hold the frontend-agnostic core
+// (backend, supervisor, git, terminal, session, ...) plus the GPUI shell
+// itself (`gpui_ui`). The legacy egui shell was removed in Phase G5.
 mod backend;
-#[cfg_attr(not(feature = "egui-shell"), allow(dead_code))]
 mod browser;
-#[cfg_attr(not(feature = "egui-shell"), allow(dead_code))]
-mod dock_layout;
-#[cfg_attr(not(feature = "egui-shell"), allow(dead_code))]
-mod fonts;
-#[cfg_attr(not(feature = "egui-shell"), allow(dead_code))]
 mod git;
 mod gpui_ui;
-#[cfg_attr(not(feature = "egui-shell"), allow(dead_code))]
 mod pack;
-#[cfg_attr(not(feature = "egui-shell"), allow(dead_code))]
 mod perf;
-#[cfg_attr(not(feature = "egui-shell"), allow(dead_code))]
 mod plugin;
-#[cfg_attr(not(feature = "egui-shell"), allow(dead_code))]
 mod proc;
-#[cfg_attr(not(feature = "egui-shell"), allow(dead_code))]
 mod session;
-#[cfg_attr(not(feature = "egui-shell"), allow(dead_code))]
-mod shell;
 mod supervisor;
-#[cfg_attr(not(feature = "egui-shell"), allow(dead_code))]
 mod terminal;
-#[cfg_attr(not(feature = "egui-shell"), allow(dead_code))]
 mod theme;
-#[cfg_attr(not(feature = "egui-shell"), allow(dead_code))]
 mod views;
 mod waker;
-#[cfg_attr(not(feature = "egui-shell"), allow(dead_code))]
 mod workspace;
 
-/// Default on this branch: the GPUI shell.
-#[cfg(not(feature = "egui-shell"))]
 fn main() {
     install_panic_logger();
     gpui_ui::run();
-}
-
-/// Legacy entry: `cargo run --features egui-shell` launches the eframe app.
-#[cfg(feature = "egui-shell")]
-fn main() -> eframe::Result<()> {
-    use eframe::egui;
-
-    install_panic_logger();
-
-    let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([900.0, 640.0])
-            .with_min_inner_size([480.0, 360.0])
-            .with_title("puppy-home"),
-        ..Default::default()
-    };
-
-    eframe::run_native(
-        "puppy-home",
-        native_options,
-        Box::new(|cc| Ok(Box::new(app::PuppyApp::new(cc)))),
-    )
 }
 
 /// Append any panic (message + backtrace) to `%LOCALAPPDATA%\puppy-home\crash.log`

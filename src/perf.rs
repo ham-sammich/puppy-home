@@ -2,129 +2,9 @@
 //! memory. Toggled from the app top bar; costs ~nothing while hidden.
 
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
-
-use eframe::egui;
 
 /// Rolling sample window (frames). (pub(crate): shared with the GPUI HUD.)
 pub(crate) const WINDOW: usize = 240;
-
-pub struct PerfStats {
-    pub visible: bool,
-    started: Instant,
-    last_update: Option<Instant>,
-    /// Wall-clock gap between successive `update()` calls (event-driven UI,
-    /// so this measures repaint *rate*, not capability).
-    update_gaps: VecDeque<f32>,
-    /// CPU seconds spent producing each frame (reported by eframe).
-    frame_costs: VecDeque<f32>,
-    mem_polled: Option<Instant>,
-    working_set: u64,
-    private_bytes: u64,
-}
-
-impl Default for PerfStats {
-    fn default() -> Self {
-        Self {
-            visible: false,
-            started: Instant::now(),
-            last_update: None,
-            update_gaps: VecDeque::with_capacity(WINDOW),
-            frame_costs: VecDeque::with_capacity(WINDOW),
-            mem_polled: None,
-            working_set: 0,
-            private_bytes: 0,
-        }
-    }
-}
-
-impl PerfStats {
-    /// Call once per `update()`.
-    pub fn on_frame(&mut self, frame: &eframe::Frame) {
-        let now = Instant::now();
-        if let Some(last) = self.last_update.replace(now) {
-            push(&mut self.update_gaps, (now - last).as_secs_f32());
-        }
-        if let Some(cpu) = frame.info().cpu_usage {
-            push(&mut self.frame_costs, cpu);
-        }
-        // Memory is an OS call — poll at 1 Hz, and only while the HUD is open.
-        if self.visible
-            && self
-                .mem_polled
-                .is_none_or(|t| t.elapsed() > Duration::from_secs(1))
-        {
-            self.mem_polled = Some(now);
-            let (ws, pv) = process_memory();
-            self.working_set = ws;
-            self.private_bytes = pv;
-        }
-    }
-
-    /// The HUD window (no-op while hidden).
-    pub fn render(&mut self, ctx: &egui::Context) {
-        if !self.visible {
-            return;
-        }
-        let avg_ms = mean(&self.frame_costs) * 1000.0;
-        let max_ms = peak(&self.frame_costs) * 1000.0;
-        let budget = 1000.0 / 60.0; // 16.7ms = 60fps budget
-        let ups = match mean(&self.update_gaps) {
-            g if g > 0.0 => 1.0 / g,
-            _ => 0.0,
-        };
-
-        let mut open = true;
-        egui::Window::new("Performance")
-            .open(&mut open)
-            .default_width(260.0)
-            .anchor(egui::Align2::RIGHT_TOP, [-12.0, 36.0])
-            .show(ctx, |ui| {
-                egui::Grid::new("perf-grid").num_columns(2).show(ui, |ui| {
-                    ui.label("frame cost (avg)");
-                    ui.colored_label(cost_color(ui, avg_ms, budget), format!("{avg_ms:.2} ms"));
-                    ui.end_row();
-                    ui.label("frame cost (max)");
-                    ui.colored_label(cost_color(ui, max_ms, budget), format!("{max_ms:.2} ms"));
-                    ui.end_row();
-                    ui.label("repaints / sec");
-                    ui.label(format!("{ups:.1}"));
-                    ui.end_row();
-                    if self.working_set > 0 {
-                        ui.label("memory (working set)");
-                        ui.label(fmt_bytes(self.working_set));
-                        ui.end_row();
-                        ui.label("memory (private)");
-                        ui.label(fmt_bytes(self.private_bytes));
-                        ui.end_row();
-                    }
-                    ui.label("uptime");
-                    let s = self.started.elapsed().as_secs();
-                    ui.label(format!(
-                        "{}h {:02}m {:02}s",
-                        s / 3600,
-                        (s / 60) % 60,
-                        s % 60
-                    ));
-                    ui.end_row();
-                });
-                ui.add_space(4.0);
-                ui.label(
-                    egui::RichText::new(
-                        "Event-driven UI: repaints/sec is demand, not a cap. \
-                         Frame cost vs the 16.7 ms (60 fps) budget is what matters.",
-                    )
-                    .weak()
-                    .small(),
-                );
-            });
-        if !open {
-            self.visible = false;
-        }
-        // Keep the numbers fresh without redrawing at full tilt.
-        ctx.request_repaint_after(Duration::from_millis(250));
-    }
-}
 
 pub(crate) fn push(buf: &mut VecDeque<f32>, v: f32) {
     if buf.len() >= WINDOW {
@@ -143,16 +23,6 @@ pub(crate) fn mean(buf: &VecDeque<f32>) -> f32 {
 
 pub(crate) fn peak(buf: &VecDeque<f32>) -> f32 {
     buf.iter().copied().fold(0.0, f32::max)
-}
-
-fn cost_color(ui: &egui::Ui, ms: f32, budget: f32) -> egui::Color32 {
-    if ms > budget {
-        ui.visuals().error_fg_color
-    } else if ms > budget * 0.5 {
-        ui.visuals().warn_fg_color
-    } else {
-        egui::Color32::from_rgb(140, 200, 140)
-    }
 }
 
 pub(crate) fn fmt_bytes(b: u64) -> String {

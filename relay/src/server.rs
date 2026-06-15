@@ -93,19 +93,19 @@ fn handle_conn(hub: Arc<Hub>, stream: TcpStream) {
                 puppy_avatar_png,
                 proto,
             ),
-        Some(other) => {
-            if let Some(reply) = coordination_reply(&hub, other) {
-                send_direct(&mut write_half, &reply);
-            } else {
-                send_direct(&mut write_half, &error_line("first message must be a join"));
+            Some(other) => {
+                if let Some(reply) = coordination_reply(&hub, other) {
+                    send_direct(&mut write_half, &reply);
+                } else {
+                    send_direct(&mut write_half, &error_line("first message must be a join"));
+                }
+                return;
             }
-            return;
-        }
-        None => {
-            send_direct(&mut write_half, &error_line("first message must be a join"));
-            return;
-        }
-    };
+            None => {
+                send_direct(&mut write_half, &error_line("first message must be a join"));
+                return;
+            }
+        };
     if proto != 0 && proto != PROTO_VERSION {
         send_direct(
             &mut write_half,

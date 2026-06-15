@@ -40,7 +40,6 @@ pub trait WorkspaceFs: Send + Sync {
     fn remove_dir_all(&self, path: &Path) -> io::Result<()>;
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
     fn exists(&self, path: &Path) -> bool;
-    fn is_dir(&self, path: &Path) -> bool;
 }
 
 /// The local-disk implementation: thin wrappers over `std::fs`.
@@ -93,10 +92,6 @@ impl WorkspaceFs for LocalFs {
 
     fn exists(&self, path: &Path) -> bool {
         path.exists()
-    }
-
-    fn is_dir(&self, path: &Path) -> bool {
-        path.is_dir()
     }
 }
 
@@ -193,10 +188,6 @@ impl WorkspaceFs for CachedFs {
     fn exists(&self, path: &Path) -> bool {
         self.inner.exists(path)
     }
-
-    fn is_dir(&self, path: &Path) -> bool {
-        self.inner.is_dir(path)
-    }
 }
 
 #[cfg(test)]
@@ -209,12 +200,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let fs = LocalFs;
         fs.create_dir(&dir).unwrap();
-        assert!(fs.is_dir(&dir));
+        assert!(dir.is_dir());
 
         let file = dir.join("hello.txt");
         fs.write(&file, b"hi there").unwrap();
         assert!(fs.exists(&file));
-        assert!(!fs.is_dir(&file));
+        assert!(!file.is_dir());
         assert_eq!(fs.read_to_string(&file).unwrap(), "hi there");
 
         let sub = dir.join("sub");

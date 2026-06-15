@@ -934,7 +934,12 @@ impl RootView {
         if !self.probe_chat_screen {
             return;
         }
-        let Some(id) = self.supervisor.iter_visible().find(|w| w.is_ready()).map(|w| w.id) else {
+        let Some(id) = self
+            .supervisor
+            .iter_visible()
+            .find(|w| w.is_ready())
+            .map(|w| w.id)
+        else {
             return;
         };
         self.probe_chat_screen = false;
@@ -1267,29 +1272,28 @@ impl RootView {
             picker_path_input: self.picker_path_input.as_ref(),
         });
 
-        let header = div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .child(
-                div()
-                    .text_size(px(15.))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(t.text)
-                    .child("\u{1fa84} Agent Creator"),
-            )
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(t.dim)
-                    .child("chat to build an agent \u{00b7} closing discards the session"),
-            )
-            .child(div().flex_1())
-            .child(
-                widgets::btn(t, "Done")
-                    .id("agent-creator-done")
-                    .on_click(managers_ui::act(entity, managers::MgrAction::AgentCreatorClose)),
-            );
+        let header =
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .text_size(px(15.))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(t.text)
+                        .child("\u{1fa84} Agent Creator"),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(t.dim)
+                        .child("chat to build an agent \u{00b7} closing discards the session"),
+                )
+                .child(div().flex_1())
+                .child(widgets::btn(t, "Done").id("agent-creator-done").on_click(
+                    managers_ui::act(entity, managers::MgrAction::AgentCreatorClose),
+                ));
 
         let panel = div()
             .occlude()
@@ -1722,7 +1726,14 @@ impl RootView {
                     .child(
                         ver_chip(
                             "tb-about",
-                            format!("cp {}", if cp.is_empty() { "v?".into() } else { format!("v{cp}") }),
+                            format!(
+                                "cp {}",
+                                if cp.is_empty() {
+                                    "v?".into()
+                                } else {
+                                    format!("v{cp}")
+                                }
+                            ),
                             "code_puppy (agent engine) version + updates",
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -2004,7 +2015,11 @@ impl Render for RootView {
                 // bottom on first open and whenever a new entry arrives WHILE
                 // already at the bottom — but never yank the view down if the
                 // user has scrolled up to read history (#scroll fix).
-                let len = self.supervisor.get(id).map(|w| w.entries().len()).unwrap_or(0);
+                let len = self
+                    .supervisor
+                    .get(id)
+                    .map(|w| w.entries().len())
+                    .unwrap_or(0);
                 let handle = self.chat_scroll.entry(id).or_default().clone();
                 let seen = self.chat_seen_len.get(&id).copied();
                 let at_bottom = {
@@ -2077,8 +2092,7 @@ impl Render for RootView {
                     // distinguished from per-row ops by the absent TreeMenu pop.
                     tree_root_new: match (&self.tree_op, &self.chat_pop) {
                         (Some(TreeOp::New(tid, _, is_dir)), pop)
-                            if *tid == id
-                                && !matches!(pop, Some(ChatPop::TreeMenu(..))) =>
+                            if *tid == id && !matches!(pop, Some(ChatPop::TreeMenu(..))) =>
                         {
                             Some(*is_dir)
                         }
@@ -2292,12 +2306,7 @@ impl RootView {
 
     /// Save a modified file then close its tab. If the write fails we leave the
     /// tab open (the save error shows in its bar) and just drop the prompt.
-    pub(crate) fn editor_save_close(
-        &mut self,
-        id: WorkspaceId,
-        ix: usize,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn editor_save_close(&mut self, id: WorkspaceId, ix: usize, cx: &mut Context<Self>) {
         if let Some(path) = self.editor_tab_path(id, ix)
             && let Some(ws) = self.supervisor.get_mut(id)
             && ws.save_file(&path)
@@ -2370,8 +2379,7 @@ impl RootView {
                         widgets::btn(&t, "Discard\u{2009}&\u{2009}Close")
                             .id("ed-close-discard")
                             .on_click(move |_, _, cx| {
-                                root_discard
-                                    .update(cx, |r, cx| r.editor_discard_close(id, ix, cx));
+                                root_discard.update(cx, |r, cx| r.editor_discard_close(id, ix, cx));
                             }),
                     )
                     .child(
@@ -2441,31 +2449,24 @@ impl RootView {
                             .text_color(t.text)
                             .child(headline),
                     )
-                    .child(
-                        div()
-                            .text_size(px(12.5))
-                            .text_color(t.weak)
-                            .child(
-                                "Quitting now stops the running turn. \
+                    .child(div().text_size(px(12.5)).text_color(t.weak).child(
+                        "Quitting now stops the running turn. \
                                  Close Doghouse anyway?",
-                            ),
-                    )
+                    ))
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .justify_end()
                             .gap_2()
-                            .child(
-                                widgets::btn(&t, "Keep running").id("quit-keep").on_click(
-                                    move |_, _, cx| {
-                                        root_keep.update(cx, |r, cx| {
-                                            r.quit_confirm = false;
-                                            cx.notify();
-                                        });
-                                    },
-                                ),
-                            )
+                            .child(widgets::btn(&t, "Keep running").id("quit-keep").on_click(
+                                move |_, _, cx| {
+                                    root_keep.update(cx, |r, cx| {
+                                        r.quit_confirm = false;
+                                        cx.notify();
+                                    });
+                                },
+                            ))
                             .child(
                                 widgets::primary_btn(&t, "Quit anyway")
                                     .id("quit-yes")
@@ -2519,9 +2520,8 @@ impl RootView {
                             .absolute()
                             .inset_0()
                             .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
-                                scrim_root.update(cx, |r, cx| {
-                                    r.dispatch(DashAction::TreeOpCancel, cx)
-                                });
+                                scrim_root
+                                    .update(cx, |r, cx| r.dispatch(DashAction::TreeOpCancel, cx));
                             }),
                     )
                     .child(gpui::anchored().position(pos).snap_to_window().child(panel)),

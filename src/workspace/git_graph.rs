@@ -5,27 +5,7 @@
 //! the algorithm separate means the topology can be unit-tested without a GPU
 //! in sight (Zen of Python: if it's hard to test, the design is wrong).
 
-use eframe::egui;
-
 use crate::git::Commit;
-
-/// Branch-lane palette, cycled by color index. Picked to stay legible on a dark
-/// background and distinct from each other.
-const LANE_COLORS: &[egui::Color32] = &[
-    egui::Color32::from_rgb(120, 170, 255), // blue
-    egui::Color32::from_rgb(120, 210, 150), // green
-    egui::Color32::from_rgb(230, 150, 200), // pink
-    egui::Color32::from_rgb(235, 180, 100), // amber
-    egui::Color32::from_rgb(170, 150, 230), // violet
-    egui::Color32::from_rgb(120, 210, 215), // teal
-    egui::Color32::from_rgb(225, 130, 120), // coral
-    egui::Color32::from_rgb(200, 200, 130), // olive
-];
-
-/// Resolve a color index to a concrete palette color.
-pub(crate) fn lane_color(idx: usize) -> egui::Color32 {
-    LANE_COLORS[idx % LANE_COLORS.len()]
-}
 
 /// Which slice of a row's vertical cell an edge occupies.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -60,13 +40,6 @@ pub(crate) struct GraphRow {
 pub(crate) struct GraphLayout {
     pub rows: Vec<GraphRow>,
     pub lanes: usize,
-}
-
-/// State for the "create branch here" modal.
-pub(crate) struct BranchDialog {
-    pub at: String,
-    pub at_short: String,
-    pub name: String,
 }
 
 /// Reuse the first free lane (a `None` hole) or grow a new one.

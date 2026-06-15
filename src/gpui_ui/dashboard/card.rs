@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use gpui::{
     Animation, AnimationExt as _, AnyElement, ClickEvent, Entity, FocusHandle, FontWeight,
-    IntoElement, ParentElement as _, RenderOnce, Styled as _, Window, div,
-    ease_in_out, prelude::*, px, relative,
+    IntoElement, ParentElement as _, RenderOnce, Styled as _, Window, div, ease_in_out, prelude::*,
+    px, relative,
 };
 
 use crate::gpui_ui::widgets::{self, alpha};
@@ -603,7 +603,13 @@ impl RenderOnce for AgentCard {
             .on_drop::<WorkspaceId>(move |dragged, _, cx| {
                 let moved = *dragged;
                 root_drop.update(cx, |r, cx| {
-                    r.dispatch(DashAction::ReorderWorkspace { moved, target: card_id }, cx)
+                    r.dispatch(
+                        DashAction::ReorderWorkspace {
+                            moved,
+                            target: card_id,
+                        },
+                        cx,
+                    )
                 });
             })
             .child(self.header())

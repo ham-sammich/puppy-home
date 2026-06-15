@@ -289,7 +289,9 @@ fn copy_btn(t: &Tokens, root: &Entity<RootView>, text: String, key: u64) -> AnyE
         .hover(|d| d.bg(t.well).text_color(t.text))
         .child("\u{1f4cb} copy")
         .on_click(move |_, _, cx| {
-            root.update(cx, |r, cx| r.dispatch(DashAction::CopyText(text.clone()), cx));
+            root.update(cx, |r, cx| {
+                r.dispatch(DashAction::CopyText(text.clone()), cx)
+            });
         })
         .into_any_element()
 }

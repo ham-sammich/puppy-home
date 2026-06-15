@@ -13,10 +13,8 @@ mod embed;
 pub mod embed_mac;
 mod host;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
-
-use eframe::egui;
 
 use crate::plugin::{InstalledPlugin, PluginRegistry};
 use crate::workspace::WorkspaceId;
@@ -24,28 +22,6 @@ use host::BrowserHost;
 
 /// The plugin id this manager drives.
 const BROWSER_PLUGIN_ID: &str = "browser";
-
-/// A dependency-free CDP client, embedded so we can hand Code Puppy a ready
-/// tool instead of it writing one into the user's project.
-const CDP_HELPER_PY: &str = include_str!("../../sidecar/cdp_helper.py");
-
-/// Materialize the CDP helper into app-data (never the project) and return its
-/// path. Rewritten only when the embedded content changes.
-pub fn ensure_cdp_helper() -> Option<std::path::PathBuf> {
-    let dir = std::env::var_os("LOCALAPPDATA")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("puppy-home");
-    std::fs::create_dir_all(&dir).ok()?;
-    let path = dir.join("cdp.py");
-    let stale = std::fs::read_to_string(&path)
-        .map(|c| c != CDP_HELPER_PY)
-        .unwrap_or(true);
-    if stale {
-        std::fs::write(&path, CDP_HELPER_PY).ok()?;
-    }
-    Some(path)
-}
 
 /// Identifies one open browser tab.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -92,8 +68,6 @@ struct BrowserTab {
     /// (Windows true-child embedding; unused on the macOS overlay path).
     #[cfg_attr(not(windows), allow(dead_code))]
     embedded: bool,
-    /// The workspace this browser tab belongs to (if opened from one).
-    workspace: Option<WorkspaceId>,
     /// Whether a process was ever launched (distinguishes "not started yet"
     /// from "started and then exited").
     launched: bool,
@@ -124,10 +98,6 @@ pub struct BrowserManager {
     next_id: u64,
     /// Last install error (shown on the Install panel).
     install_error: Option<String>,
-    /// The host window handle to embed plugin windows into (set each frame).
-    parent_hwnd: Option<i64>,
-    /// Browser tabs whose window was placed (shown) this frame.
-    placed: HashSet<BrowserId>,
 }
 
 impl BrowserManager {
@@ -138,38 +108,7 @@ impl BrowserManager {
             tabs: BTreeMap::new(),
             next_id: 1,
             install_error: None,
-            parent_hwnd: None,
-            placed: HashSet::new(),
         }
-    }
-
-    /// Record the host window handle (call once per frame, before the dock
-    /// draws) so embedded plugin windows can be reparented into it.
-    pub fn set_parent_hwnd(&mut self, hwnd: Option<i64>) {
-        self.parent_hwnd = hwnd;
-    }
-
-    /// Start a frame: reap any exited browser processes and forget which tabs
-    /// were placed last frame.
-    pub fn begin_frame(&mut self) {
-        self.placed.clear();
-        for tab in self.tabs.values_mut() {
-            if tab.host.as_mut().map(|h| !h.is_alive()).unwrap_or(false) {
-                // Process gone: reset embedding state so a relaunch re-attaches.
-                tab.host = None;
-                tab.embedded = false;
-                tab.visible = false;
-                tab.placed_rect = None;
-            }
-        }
-    }
-
-    /// Whether a tab's process has exited (or the tab is gone) — so its owner
-    /// can drop the now-dead tab. A tab that was never launched is *not* closed.
-    pub fn is_tab_closed(&self, id: BrowserId) -> bool {
-        self.tabs
-            .get(&id)
-            .is_none_or(|t| t.launched && t.host.is_none())
     }
 
     /// The (normalized) URL a tab is pointed at, if any.
@@ -196,42 +135,6 @@ impl BrowserManager {
             .map(|p| format!("http://127.0.0.1:{p}"))
     }
 
-    /// End a frame: hide any browser window whose tab wasn't drawn (inactive or
-    /// closed), so it doesn't float over other views.
-    pub fn end_frame(&mut self) {
-        for (id, tab) in self.tabs.iter_mut() {
-            if self.placed.contains(id) || !tab.visible {
-                continue;
-            }
-            #[cfg(windows)]
-            if let Some(h) = tab.host.as_ref().and_then(|h| h.child_hwnd()) {
-                embed::hide(h);
-            }
-            #[cfg(target_os = "macos")]
-            if let Some(h) = tab.host.as_mut() {
-                h.hide();
-            }
-            tab.visible = false;
-            // Force a reposition next time it's shown (layout may have changed).
-            tab.placed_rect = None;
-        }
-    }
-
-    /// Reclaim OS keyboard focus to the host window when the user clicks the
-    /// egui surface — otherwise an embedded webview keeps the keyboard and the
-    /// chat box (etc.) won't receive typed input.
-    pub fn reclaim_host_focus(&self, parent_hwnd: i64) {
-        if let Some(child) = self.tabs.values().find_map(|t| {
-            if t.visible && t.embedded {
-                t.host.as_ref().and_then(|h| h.child_hwnd())
-            } else {
-                None
-            }
-        }) {
-            embed::focus_host(parent_hwnd, child);
-        }
-    }
-
     /// Whether the browser plugin is installed *and* runnable on this host.
     pub fn is_available(&self) -> bool {
         self.registry
@@ -248,11 +151,10 @@ impl BrowserManager {
     /// Open a browser tab. When a `url` is given and the plugin is available,
     /// the process launches immediately (e.g. opening a workspace's dev server);
     /// otherwise it shows a Launch button.
-    pub fn open_tab(&mut self, workspace: Option<WorkspaceId>, url: Option<String>) -> BrowserId {
+    pub fn open_tab(&mut self, _workspace: Option<WorkspaceId>, url: Option<String>) -> BrowserId {
         let id = BrowserId(self.next_id);
         self.next_id += 1;
         let mut tab = BrowserTab {
-            workspace,
             ..Default::default()
         };
         if let Some(u) = url {
@@ -265,15 +167,6 @@ impl BrowserManager {
         }
         self.tabs.insert(id, tab);
         id
-    }
-
-    /// The browser tabs belonging to a given workspace (for cleanup on close).
-    pub fn tabs_for_workspace(&self, ws: WorkspaceId) -> Vec<BrowserId> {
-        self.tabs
-            .iter()
-            .filter(|(_, t)| t.workspace == Some(ws))
-            .map(|(id, _)| *id)
-            .collect()
     }
 
     /// Close a tab: ask its browser process to exit gracefully (drop then also
@@ -584,103 +477,6 @@ impl BrowserManager {
         launch(tab, exe.as_deref(), &url);
     }
 
-    /// Render one browser tab: Install panel or the live browser toolbar.
-    pub fn render_tab(&mut self, ui: &mut egui::Ui, id: BrowserId) {
-        if self.is_available() {
-            self.render_browser(ui, id);
-        } else {
-            self.render_install(ui);
-        }
-    }
-
-    /// The "plugin not installed" panel, with a real local-install path.
-    fn render_install(&mut self, ui: &mut egui::Ui) {
-        let mut do_install = false;
-        let mut do_rescan = false;
-        let mut do_open_dir = false;
-
-        ui.vertical_centered(|ui| {
-            ui.add_space(24.0);
-            ui.heading("Browser plugin not installed");
-            ui.add_space(6.0);
-            ui.label(
-                egui::RichText::new(
-                    "The in-app browser is an optional plugin so the base app stays small.",
-                )
-                .weak(),
-            );
-            ui.add_space(12.0);
-
-            match self.registry.get(BROWSER_PLUGIN_ID) {
-                None => {
-                    ui.label("Status: not found.");
-                }
-                Some(p) if !p.manifest.is_compatible() => {
-                    ui.colored_label(
-                        ui.visuals().warn_fg_color,
-                        format!(
-                            "Found v{} but it needs a newer host (requires host \u{2265} {}).",
-                            p.manifest.version, p.manifest.min_host_version
-                        ),
-                    );
-                }
-                Some(p) => {
-                    ui.colored_label(
-                        ui.visuals().warn_fg_color,
-                        format!(
-                            "Manifest found but executable is missing: {}",
-                            p.manifest.exe
-                        ),
-                    );
-                }
-            }
-
-            ui.add_space(12.0);
-            if local_build_exe().is_some()
-                && ui
-                    .button("Install from local build")
-                    .on_hover_text("Copy the freshly-built puppy-browser into the plugins folder")
-                    .clicked()
-            {
-                do_install = true;
-            }
-            ui.horizontal(|ui| {
-                if ui.button("Open plugins folder").clicked() {
-                    do_open_dir = true;
-                }
-                if ui.button("Rescan").clicked() {
-                    do_rescan = true;
-                }
-            });
-            if let Some(dir) = self.registry.dir() {
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.code(dir.display().to_string());
-                    if ui.small_button("Copy path").clicked() {
-                        ui.ctx().copy_text(dir.display().to_string());
-                    }
-                });
-            }
-        });
-
-        if do_install {
-            match self.install_from_local_build() {
-                Ok(()) => self.registry.rescan(),
-                Err(e) => self.install_error = Some(e),
-            }
-        }
-        if do_rescan {
-            self.registry.rescan();
-        }
-        if do_open_dir && let Some(dir) = self.registry.dir() {
-            let _ = std::fs::create_dir_all(dir);
-            open_in_file_manager(dir);
-        }
-        if let Some(err) = &self.install_error {
-            ui.colored_label(ui.visuals().error_fg_color, err);
-        }
-    }
-
     /// Copy the locally-built plugin exe + a manifest into the plugins folder.
     fn install_from_local_build(&self) -> Result<(), String> {
         let exe = local_build_exe().ok_or("No local puppy-browser build found next to the app.")?;
@@ -706,193 +502,6 @@ impl BrowserManager {
         std::fs::write(dir.join("plugin.json"), manifest).map_err(|e| e.to_string())?;
         Ok(())
     }
-
-    /// The live browser toolbar; launches/supervises the plugin process and
-    /// (on Windows) embeds its window into the viewport below the toolbar.
-    fn render_browser(&mut self, ui: &mut egui::Ui, id: BrowserId) {
-        let exe = self.registry.get(BROWSER_PLUGIN_ID).map(|p| p.exe_path());
-        let parent = self.parent_hwnd;
-        let tab = self.tabs.entry(id).or_default();
-
-        // Reap a process that exited (e.g. user closed the browser window).
-        if tab.host.as_mut().map(|h| !h.is_alive()).unwrap_or(false) {
-            tab.host = None;
-        }
-
-        ui.horizontal(|ui| {
-            let running = tab.host.is_some();
-            ui.add_enabled_ui(running, |ui| {
-                if ui.button("\u{2039}").on_hover_text("Back").clicked()
-                    && let Some(h) = tab.host.as_mut()
-                {
-                    h.back();
-                }
-                if ui.button("\u{203a}").on_hover_text("Forward").clicked()
-                    && let Some(h) = tab.host.as_mut()
-                {
-                    h.forward();
-                }
-                if ui.button("\u{21bb}").on_hover_text("Reload").clicked()
-                    && let Some(h) = tab.host.as_mut()
-                {
-                    h.reload();
-                }
-                ui.separator();
-                if ui
-                    .button("DevTools")
-                    .on_hover_text("Open browser DevTools (F12)")
-                    .clicked()
-                    && let Some(h) = tab.host.as_mut()
-                {
-                    h.devtools();
-                }
-                if let Some(port) = tab.cdp_port
-                    && ui
-                        .button("CDP")
-                        .on_hover_text(format!(
-                            "Copy DevTools Protocol endpoint http://127.0.0.1:{port} \
-                             — paste it to Code Puppy to let it inspect this page"
-                        ))
-                        .clicked()
-                {
-                    ui.ctx().copy_text(format!("http://127.0.0.1:{port}"));
-                }
-            });
-
-            let go = ui
-                .add(
-                    egui::TextEdit::singleline(&mut tab.url)
-                        .hint_text("Enter a URL…")
-                        .desired_width(f32::INFINITY),
-                )
-                .lost_focus()
-                && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if go && !tab.url.trim().is_empty() {
-                let url = normalize_url(tab.url.trim());
-                tab.url = url.clone();
-                match tab.host.as_mut() {
-                    Some(h) => h.navigate(&url),
-                    None => launch(tab, exe.as_deref(), &url),
-                }
-            }
-        });
-        ui.separator();
-
-        if tab.host.is_none() {
-            ui.add_space(16.0);
-            ui.vertical_centered(|ui| {
-                if ui.button("Launch browser").clicked() {
-                    let url = if tab.url.trim().is_empty() {
-                        "https://example.com".to_string()
-                    } else {
-                        normalize_url(tab.url.trim())
-                    };
-                    tab.url = url.clone();
-                    launch(tab, exe.as_deref(), &url);
-                }
-                if let Some(err) = &tab.launch_error {
-                    ui.add_space(8.0);
-                    ui.colored_label(ui.visuals().error_fg_color, err);
-                }
-            });
-            return;
-        }
-
-        // The viewport region below the toolbar is where the plugin window goes.
-        let rect = ui.available_rect_before_wrap();
-
-        // Windows: glue the plugin's window over the host as an owned
-        // borderless overlay (same strategy as the GPUI shell — SetParent/
-        // WS_CHILD is invisible under DComp hosts, G3 finding B1).
-        #[cfg(windows)]
-        {
-            let child = tab.host.as_ref().and_then(|h| h.child_hwnd());
-            match (parent, child) {
-                (Some(parent), Some(child)) => {
-                    if !tab.embedded {
-                        embed::attach(parent, child);
-                        tab.embedded = true;
-                    }
-                    let ppp = ui.ctx().pixels_per_point();
-                    let x = (rect.min.x * ppp).round() as i32;
-                    let y = (rect.min.y * ppp).round() as i32;
-                    let w = (rect.width() * ppp).round() as i32;
-                    let h = (rect.height() * ppp).round() as i32;
-                    if w > 0 && h > 0 {
-                        let (sx, sy) = embed::screen_origin(parent, x, y);
-                        let r = (sx, sy, w, h);
-                        if tab.placed_rect != Some(r) {
-                            embed::place(child, sx, sy, w, h);
-                            tab.placed_rect = Some(r);
-                        }
-                        if !tab.visible {
-                            embed::show(child);
-                            tab.visible = true;
-                        }
-                        self.placed.insert(id);
-                    }
-                }
-                _ => viewport_note(ui, rect, "starting browser\u{2026}"),
-            }
-        }
-
-        // macOS: position the borderless plugin window over `rect` (physical
-        // screen px) via IPC and z-order it just above the host window. egui's
-        // (0,0) is the host content-area top-left, i.e. the viewport inner_rect.
-        #[cfg(target_os = "macos")]
-        {
-            let ready = tab.host.as_ref().map(|h| h.is_ready()).unwrap_or(false);
-            let inner = ui.ctx().input(|i| i.viewport().inner_rect);
-            match (ready, inner, parent) {
-                (true, Some(inner), Some(parent)) => {
-                    let ppp = ui.ctx().pixels_per_point();
-                    let x = ((inner.min.x + rect.min.x) * ppp).round() as i32;
-                    let y = ((inner.min.y + rect.min.y) * ppp).round() as i32;
-                    let w = (rect.width() * ppp).round() as i32;
-                    let h = (rect.height() * ppp).round() as i32;
-                    if w > 0 && h > 0 {
-                        // Re-place + re-order every frame: the overlay is a
-                        // separate window, so clicking the host (or another
-                        // app) can reshuffle z-order; re-asserting keeps it
-                        // glued above the host and tracking moves/resizes.
-                        if let Some(host) = tab.host.as_mut() {
-                            host.embed(x, y, w, h, parent);
-                        }
-                        tab.placed_rect = Some((x, y, w, h));
-                        tab.visible = true;
-                        self.placed.insert(id);
-                        ui.ctx().request_repaint();
-                    }
-                }
-                (false, _, _) => viewport_note(ui, rect, "starting browser\u{2026}"),
-                _ => viewport_note(ui, rect, "positioning browser\u{2026}"),
-            }
-        }
-
-        // Linux: no in-tab embedding yet; the webview stays a separate window.
-        #[cfg(not(any(windows, target_os = "macos")))]
-        {
-            let _ = (id, parent);
-            viewport_note(
-                ui,
-                rect,
-                "Browser running in a separate window.\n(In-tab embedding isn't available on this platform yet.)",
-            );
-        }
-    }
-}
-
-/// Centered hint painted in the empty viewport region.
-fn viewport_note(ui: &egui::Ui, rect: egui::Rect, text: &str) {
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 4.0, ui.visuals().extreme_bg_color);
-    painter.text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        text,
-        egui::FontId::proportional(14.0),
-        ui.visuals().weak_text_color(),
-    );
 }
 
 /// Spawn a host for `tab`, recording any error for display.
@@ -1005,10 +614,8 @@ pub(crate) fn host_port(url: &str) -> String {
 
 /// Where a candidate URL token ends (first whitespace/bracket/quote).
 fn url_token_end(rest: &str) -> usize {
-    rest.find(|c: char| {
-        c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '(' | ')' | '<' | '>')
-    })
-    .unwrap_or(rest.len())
+    rest.find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '`' | '(' | ')' | '<' | '>'))
+        .unwrap_or(rest.len())
 }
 
 /// Scan text (e.g. terminal output / agent chatter) for local dev-server URLs
@@ -1087,10 +694,7 @@ mod tests {
         // picked up (assumed http) so agents that print bare hosts still work.
         let t = "run on http://127.0.0.1:3000 and again http://127.0.0.1:3000/ also 0.0.0.0:8080";
         let urls = detect_dev_urls(t);
-        assert_eq!(
-            urls,
-            vec!["http://127.0.0.1:3000", "http://0.0.0.0:8080"]
-        );
+        assert_eq!(urls, vec!["http://127.0.0.1:3000", "http://0.0.0.0:8080"]);
     }
 
     #[test]

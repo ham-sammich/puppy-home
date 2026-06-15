@@ -8,12 +8,9 @@
 //! config the manager hands to `add_mcp_server`. Per-step renderers live in the
 //! `steps` child module.
 
-mod steps;
-
-use eframe::egui;
 use serde_json::{Map, Value, json};
 
-use crate::views::common::{EditMode, mode_toggle, validate_name};
+use crate::views::common::{EditMode, validate_name};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Transport {
@@ -131,15 +128,6 @@ impl Wizard {
         validate_fields(self)?;
         Ok(())
     }
-}
-
-/// What the manager should do after this frame's wizard render.
-#[derive(PartialEq, Eq)]
-pub enum WizardAction {
-    KeepOpen,
-    Cancel,
-    /// The user confirmed: send `add_mcp_server` and close.
-    Save,
 }
 
 // ---------------------------------------------------------------------------
@@ -312,88 +300,6 @@ fn parse_paste(text: &str) -> Result<ParsedServer, String> {
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
-
-/// Render the modal; Esc cancels. The caller owns the open/close lifecycle and
-/// performs `add_mcp_server` on [`WizardAction::Save`].
-pub fn show(ctx: &egui::Context, wizard: &mut Wizard) -> WizardAction {
-    let mut action = WizardAction::KeepOpen;
-
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-        action = WizardAction::Cancel;
-    }
-
-    egui::Window::new("Add MCP server")
-        .id(egui::Id::new("mcp-add-wizard"))
-        .collapsible(false)
-        .resizable(false)
-        .anchor(egui::Align2::LEFT_TOP, [16.0, 48.0])
-        .show(ctx, |ui| {
-            let screen = ui.ctx().content_rect();
-            let w = (screen.width() - 32.0).clamp(320.0, 560.0);
-            let h = (screen.height() - 96.0).clamp(240.0, 520.0);
-            ui.set_min_width(w);
-            ui.set_max_size(egui::vec2(w, h));
-
-            // Form vs. Paste mode (seed the paste buffer on the way in).
-            let next_mode = mode_toggle(ui, wizard.mode);
-            if next_mode != wizard.mode {
-                if next_mode == EditMode::Paste {
-                    wizard.sync_paste_from_form();
-                }
-                wizard.mode = next_mode;
-                wizard.error = None;
-            }
-            ui.separator();
-
-            match wizard.mode {
-                EditMode::Form => {
-                    let labels = ["Transport", "Details", "Review"];
-                    ui.horizontal(|ui| {
-                        for (i, label) in labels.iter().enumerate() {
-                            let text = format!("{}. {label}", i + 1);
-                            if i == wizard.step {
-                                ui.strong(text);
-                            } else {
-                                ui.weak(text);
-                            }
-                            if i + 1 < labels.len() {
-                                ui.weak(">");
-                            }
-                        }
-                    });
-                    ui.separator();
-                    match wizard.step {
-                        0 => steps::step_transport(ui, wizard),
-                        1 => steps::step_fields(ui, wizard),
-                        _ => steps::step_review(ui, wizard),
-                    }
-                }
-                EditMode::Paste => steps::step_paste(ui, wizard),
-            }
-
-            if let Some(err) = &wizard.error {
-                ui.add_space(4.0);
-                ui.colored_label(egui::Color32::from_rgb(220, 100, 100), err);
-            }
-
-            ui.add_space(8.0);
-            ui.separator();
-            ui.horizontal(|ui| {
-                if ui.button("Cancel").clicked() {
-                    action = WizardAction::Cancel;
-                }
-                ui.with_layout(
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| match wizard.mode {
-                        EditMode::Paste => steps::paste_footer(ui, wizard, &mut action),
-                        EditMode::Form => steps::form_footer(ui, wizard, &mut action),
-                    },
-                );
-            });
-        });
-
-    action
-}
 
 #[cfg(test)]
 mod tests {

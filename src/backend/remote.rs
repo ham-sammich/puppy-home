@@ -43,7 +43,6 @@ enum DirState {
 #[derive(Clone, Copy)]
 struct StatInfo {
     exists: bool,
-    is_dir: bool,
 }
 
 /// A pending RPC awaiting its `fs_result` reply.
@@ -115,7 +114,6 @@ impl RemoteState {
             Pending::Stat(path) => {
                 let info = StatInfo {
                     exists: ok && val.get("exists").and_then(Value::as_bool).unwrap_or(false),
-                    is_dir: ok && val.get("is_dir").and_then(Value::as_bool).unwrap_or(false),
                 };
                 self.stats.lock().unwrap().insert(path, Some(info));
                 self.waker.wake();
@@ -165,10 +163,7 @@ impl RemoteState {
             match stats.get(path) {
                 Some(Some(info)) => return *info,
                 Some(None) => {
-                    return StatInfo {
-                        exists: false,
-                        is_dir: false,
-                    };
+                    return StatInfo { exists: false };
                 }
                 None => {}
             }
@@ -180,10 +175,7 @@ impl RemoteState {
             .unwrap()
             .insert(id, Pending::Stat(path.to_path_buf()));
         self.send(json!({ "op": "fs_stat", "id": id, "path": posix(path) }));
-        StatInfo {
-            exists: false,
-            is_dir: false,
-        }
+        StatInfo { exists: false }
     }
 
     /// Blocking: send an op and wait for its reply `Value` (bounded by
@@ -347,10 +339,9 @@ impl WorkspaceFs for RemoteFs {
     }
 
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
-        let r = self.state.call_unit(
-            "fs_rename",
-            json!({ "from": posix(from), "to": posix(to) }),
-        );
+        let r = self
+            .state
+            .call_unit("fs_rename", json!({ "from": posix(from), "to": posix(to) }));
         if r.is_ok() {
             self.state.invalidate(from.parent());
             self.state.invalidate(to.parent());
@@ -360,10 +351,6 @@ impl WorkspaceFs for RemoteFs {
 
     fn exists(&self, path: &Path) -> bool {
         self.state.stat(path).exists
-    }
-
-    fn is_dir(&self, path: &Path) -> bool {
-        self.state.stat(path).is_dir
     }
 }
 

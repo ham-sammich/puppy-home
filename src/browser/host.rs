@@ -8,7 +8,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::json;
 
@@ -16,10 +16,8 @@ use serde_json::json;
 pub struct BrowserHost {
     child: Child,
     stdin: Option<ChildStdin>,
-    /// The plugin's native window handle (0 until it reports one over stdout).
-    hwnd: Arc<AtomicI64>,
-    /// Set once the plugin reports its window exists (the `hwnd` event). On
-    /// macOS the handle value is 0, so this flag — not `hwnd` — gates embedding.
+    /// Set once the plugin reports its window exists (the `hwnd` event), which
+    /// gates embedding.
     ready: Arc<AtomicBool>,
 }
 
@@ -40,15 +38,12 @@ impl BrowserHost {
             .stderr(Stdio::null())
             .spawn()?;
         let stdin = child.stdin.take();
-        let hwnd = Arc::new(AtomicI64::new(0));
         let ready = Arc::new(AtomicBool::new(false));
         if let Some(out) = child.stdout.take() {
-            let hwnd = hwnd.clone();
             let ready = ready.clone();
             std::thread::spawn(move || {
                 for line in BufReader::new(out).lines().map_while(Result::ok) {
-                    if let Some(h) = parse_hwnd(&line) {
-                        hwnd.store(h, Ordering::Relaxed);
+                    if parse_hwnd(&line).is_some() {
                         ready.store(true, Ordering::Relaxed);
                     }
                 }
@@ -57,17 +52,8 @@ impl BrowserHost {
         Ok(Self {
             child,
             stdin,
-            hwnd,
             ready,
         })
-    }
-
-    /// The plugin's native window handle, once reported.
-    pub fn child_hwnd(&self) -> Option<i64> {
-        match self.hwnd.load(Ordering::Relaxed) {
-            0 => None,
-            n => Some(n),
-        }
     }
 
     /// Whether the plugin has reported its window exists (ready to be placed).

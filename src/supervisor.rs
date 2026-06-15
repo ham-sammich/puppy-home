@@ -179,14 +179,6 @@ impl Supervisor {
         Ok(id)
     }
 
-    pub fn len(&self) -> usize {
-        self.workspaces.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.workspaces.is_empty()
-    }
-
     /// True while any workspace is mid-turn (drives elapsed-timer repaints).
     pub fn any_busy(&self) -> bool {
         self.workspaces
@@ -231,14 +223,6 @@ impl Supervisor {
                 }
             })
             .collect()
-    }
-
-    /// How many workspaces are blocked waiting for user input.
-    pub fn waiting_count(&self) -> usize {
-        self.workspaces
-            .values()
-            .filter(|w| w.status == InstanceStatus::WaitingForInput)
-            .count()
     }
 }
 

@@ -100,8 +100,8 @@ impl Tokens {
 /// egui side uses (mid-gray fallback; a theme typo must never crash the app).
 /// Also used for the Den's relay-assigned owner colors.
 pub(crate) fn hex(s: &str) -> Rgba {
-    let c = parse_hex(s).unwrap_or(eframe::egui::Color32::GRAY);
-    gpui::rgb(((c.r() as u32) << 16) | ((c.g() as u32) << 8) | c.b() as u32)
+    let (r, g, b) = parse_hex(s).unwrap_or((0xa0, 0xa0, 0xa0));
+    gpui::rgb(((r as u32) << 16) | ((g as u32) << 8) | b as u32)
 }
 
 #[cfg(test)]

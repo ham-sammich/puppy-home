@@ -3,7 +3,6 @@
 
 use std::path::PathBuf;
 
-use eframe::egui;
 use serde_json::Value;
 
 use crate::backend::BackendMessage;
@@ -33,19 +32,6 @@ impl InstanceStatus {
             InstanceStatus::WaitingForInput => "waiting for input",
             InstanceStatus::Paused => "paused",
             InstanceStatus::Dead => "dead",
-        }
-    }
-
-    pub fn color(self) -> egui::Color32 {
-        match self {
-            InstanceStatus::Starting => egui::Color32::from_rgb(150, 150, 150),
-            InstanceStatus::Idle => egui::Color32::from_rgb(110, 116, 128),
-            InstanceStatus::Running => egui::Color32::from_rgb(90, 160, 255),
-            InstanceStatus::Thinking => egui::Color32::from_rgb(116, 208, 216),
-            InstanceStatus::ToolCalling => egui::Color32::from_rgb(232, 192, 106),
-            InstanceStatus::WaitingForInput => egui::Color32::from_rgb(215, 156, 220),
-            InstanceStatus::Paused => egui::Color32::from_rgb(220, 190, 110),
-            InstanceStatus::Dead => egui::Color32::from_rgb(240, 128, 128),
         }
     }
 }
@@ -141,25 +127,6 @@ pub(crate) struct FileBuffer {
     pub(crate) save_error: Option<String>,
 }
 
-/// A pending rename of a tree path, edited in a modal.
-pub(crate) struct PendingRename {
-    pub(crate) path: PathBuf,
-    pub(crate) name: String,
-    pub(crate) error: Option<String>,
-    /// One-shot: focus the name field the first frame the modal shows.
-    pub(crate) focus: bool,
-}
-
-/// A pending "new file/folder" inside `parent`, edited in a modal.
-pub(crate) struct PendingNew {
-    pub(crate) parent: PathBuf,
-    pub(crate) is_dir: bool,
-    pub(crate) name: String,
-    pub(crate) error: Option<String>,
-    /// One-shot: focus the name field the first frame the modal shows.
-    pub(crate) focus: bool,
-}
-
 /// Which authenticated network op a [`GitCredsPrompt`] will retry.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GitAuthOp {
@@ -190,23 +157,11 @@ pub(crate) struct GitCredsPrompt {
     pub(crate) focus: bool,
 }
 
-/// Where the editor area (files / git / browser) sits relative to the chat.
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum EditorSide {
-    /// Stacked: editor on top, chat in a bottom panel (the default).
-    #[default]
-    Bottom,
-    /// Side by side: editor on the right, chat fills the left.
-    Right,
-}
-
 /// A tab in the workspace's editor area (above the chat).
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) enum EditorItem {
     Changes,
     File(PathBuf),
-    /// An embedded browser tab (the browser plugin), living in this workspace.
-    Browser(crate::browser::BrowserId),
     /// The Source Control / Git page (branch, staging, history).
     Git,
     /// A single commit's patch (opened from the history list).
@@ -227,22 +182,6 @@ pub(crate) struct GitView {
     pub(crate) unstaged: Vec<crate::git::GitStatusEntry>,
     pub(crate) log: Vec<crate::git::Commit>,
 }
-
-/// Directories never shown in the file tree (noisy / huge).
-pub(crate) const TREE_IGNORE: &[&str] = &[
-    ".git",
-    "target",
-    "node_modules",
-    "__pycache__",
-    ".venv",
-    "venv",
-    ".mypy_cache",
-    ".pytest_cache",
-    "dist",
-    "build",
-    ".idea",
-    ".vscode",
-];
 
 pub(crate) fn parse_pending(msg: &BackendMessage) -> Option<Pending> {
     let p = &msg.payload;

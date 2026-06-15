@@ -12,7 +12,7 @@ use crate::backend::{BackendMessage, UiEvent};
 use super::Workspace;
 use super::ask::AskState;
 use super::diff::parse_diff;
-use super::render::short_session;
+use super::short_session;
 use super::state::{Entry, InstanceStatus, parse_pending, tool_label};
 
 impl Workspace {

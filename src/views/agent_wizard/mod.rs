@@ -5,13 +5,10 @@
 //! Both funnel through the same [`AgentConfigDraft`] -> `save_agent_config`.
 //! The per-step renderers live in the `steps` child module.
 
-mod steps;
-
-use eframe::egui;
 use serde_json::Value;
 
 use crate::backend::{AgentConfigDetail, AgentConfigDraft};
-use crate::views::common::{EditMode, mode_toggle, validate_name};
+use crate::views::common::{EditMode, validate_name};
 
 /// Where an agent JSON file is saved (mirrors the sidecar's save scopes).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -72,7 +69,6 @@ pub struct Wizard {
     pub mcp_servers: Vec<String>,
     pub scope: Scope,
     /// Tool-list filter (basics-step ergonomics; not persisted).
-    pub(crate) tool_filter: String,
     /// `true` when opened from "Edit" (changes title and button wording).
     pub(crate) editing: bool,
     pub(crate) error: Option<String>,
@@ -95,7 +91,6 @@ impl Wizard {
             tools: Vec::new(),
             mcp_servers: Vec::new(),
             scope: Scope::User,
-            tool_filter: String::new(),
             editing: false,
             error: None,
             mode: EditMode::Form,
@@ -116,7 +111,6 @@ impl Wizard {
             tools: detail.tools.clone(),
             mcp_servers: detail.mcp_servers.clone(),
             scope: scope_for_source(&detail.source),
-            tool_filter: String::new(),
             editing: true,
             error: None,
             mode: EditMode::Form,
@@ -165,15 +159,6 @@ impl Wizard {
         self.mcp_servers = p.mcp_servers;
         Ok(())
     }
-}
-
-/// What the manager should do after this frame's wizard render.
-#[derive(PartialEq, Eq)]
-pub enum WizardAction {
-    KeepOpen,
-    Cancel,
-    /// The user confirmed: send `save_agent_config` and close.
-    Save,
 }
 
 // ---------------------------------------------------------------------------
@@ -309,153 +294,6 @@ pub(crate) fn validate_basics(w: &Wizard) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
-
-/// Render the modal; Esc cancels. The caller owns the open/close lifecycle and
-/// supplies the available tool/MCP catalogs for the selection step.
-pub fn show(
-    ctx: &egui::Context,
-    wizard: &mut Wizard,
-    tool_catalog: &[String],
-    mcp_catalog: &[String],
-) -> WizardAction {
-    let mut action = WizardAction::KeepOpen;
-
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-        action = WizardAction::Cancel;
-    }
-
-    egui::Window::new(wizard.title())
-        .id(egui::Id::new("agent-wizard"))
-        .collapsible(false)
-        .resizable(false)
-        .anchor(egui::Align2::LEFT_TOP, [16.0, 48.0])
-        .show(ctx, |ui| {
-            let screen = ui.ctx().content_rect();
-            let w = (screen.width() - 32.0).clamp(320.0, 680.0);
-            let h = (screen.height() - 96.0).clamp(240.0, 600.0);
-            ui.set_min_width(w);
-            ui.set_max_size(egui::vec2(w, h));
-
-            // Form vs. Paste mode (seed the paste buffer on the way in).
-            let next_mode = mode_toggle(ui, wizard.mode);
-            if next_mode != wizard.mode {
-                if next_mode == EditMode::Paste {
-                    wizard.sync_paste_from_form();
-                }
-                wizard.mode = next_mode;
-                wizard.error = None;
-            }
-            ui.separator();
-
-            match wizard.mode {
-                EditMode::Form => {
-                    let labels = ["Basics", "Prompt", "Tools", "Review"];
-                    ui.horizontal(|ui| {
-                        for (i, label) in labels.iter().enumerate() {
-                            let text = format!("{}. {label}", i + 1);
-                            if i == wizard.step {
-                                ui.strong(text);
-                            } else {
-                                ui.weak(text);
-                            }
-                            if i + 1 < labels.len() {
-                                ui.weak(">");
-                            }
-                        }
-                    });
-                    ui.separator();
-                    match wizard.step {
-                        0 => steps::step_basics(ui, wizard),
-                        1 => steps::step_prompt(ui, wizard),
-                        2 => steps::step_tools(ui, wizard, tool_catalog, mcp_catalog),
-                        _ => steps::step_review(ui, wizard),
-                    }
-                }
-                EditMode::Paste => steps::step_paste(ui, wizard),
-            }
-
-            if let Some(err) = &wizard.error {
-                ui.add_space(4.0);
-                ui.colored_label(egui::Color32::from_rgb(220, 100, 100), err);
-            }
-
-            ui.add_space(8.0);
-            ui.separator();
-            ui.horizontal(|ui| {
-                if ui.button("Cancel").clicked() {
-                    action = WizardAction::Cancel;
-                }
-                ui.with_layout(
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| match wizard.mode {
-                        EditMode::Paste => paste_footer(ui, wizard, &mut action),
-                        EditMode::Form => nav_buttons(ui, wizard, &mut action),
-                    },
-                );
-            });
-        });
-
-    action
-}
-
-/// Paste-mode footer: Save validates + writes; Format syntax-checks + tidies.
-fn paste_footer(ui: &mut egui::Ui, wizard: &mut Wizard, action: &mut WizardAction) {
-    if ui.button("Save agent").clicked() {
-        match wizard.apply_paste() {
-            Ok(()) => *action = WizardAction::Save,
-            Err(e) => wizard.error = Some(e),
-        }
-    }
-    if ui
-        .button("Format")
-        .on_hover_text("Validate the JSON and tidy it")
-        .clicked()
-    {
-        match wizard.apply_paste() {
-            Ok(()) => {
-                wizard.sync_paste_from_form();
-                wizard.error = None;
-            }
-            Err(e) => wizard.error = Some(e),
-        }
-    }
-}
-
-/// The Next/Back/Save navigation footer for the current form step.
-fn nav_buttons(ui: &mut egui::Ui, wizard: &mut Wizard, action: &mut WizardAction) {
-    match wizard.step {
-        0 => {
-            if ui.button("Next").clicked() {
-                match validate_basics(wizard) {
-                    Ok(()) => {
-                        wizard.step = 1;
-                        wizard.error = None;
-                    }
-                    Err(e) => wizard.error = Some(e),
-                }
-            }
-        }
-        1 | 2 => {
-            if ui.button("Next").clicked() {
-                wizard.step += 1;
-                wizard.error = None;
-            }
-            if ui.button("Back").clicked() {
-                wizard.step -= 1;
-                wizard.error = None;
-            }
-        }
-        _ => {
-            if ui.button("Save agent").clicked() {
-                *action = WizardAction::Save;
-            }
-            if ui.button("Back").clicked() {
-                wizard.step = 2;
-                wizard.error = None;
-            }
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

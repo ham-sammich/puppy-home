@@ -1,7 +1,6 @@
 //! Diff data types, parsing (Code Puppy `DiffMessage` + unified git output),
 //! marker/style helpers, and low-level diff rendering.
 
-use eframe::egui;
 use serde_json::Value;
 
 use crate::backend::BackendMessage;
@@ -24,35 +23,7 @@ pub(crate) struct DiffLine {
     pub(crate) content: String,
 }
 
-impl Workspace {
-    /// The Changes tab: the colored diff for the change selected in the sidebar.
-    pub fn render_diffs(&mut self, ui: &mut egui::Ui) {
-        let id = self.id.0;
-        let Some(d) = &self.current_diff else {
-            ui.centered_and_justified(|ui| {
-                ui.weak("Pick a file in the Changes panel to see its diff.");
-            });
-            return;
-        };
-        let (icon, color) = op_style(&d.operation);
-        ui.horizontal_wrapped(|ui| {
-            ui.colored_label(color, format!("{icon} {}", d.operation));
-            ui.label(egui::RichText::new(&d.path).monospace());
-            ui.label(
-                egui::RichText::new(format!("+{}  −{}", d.adds, d.dels))
-                    .weak()
-                    .small(),
-            );
-        });
-        ui.separator();
-        egui::ScrollArea::both()
-            .auto_shrink([false, false])
-            .id_salt(("diff-scroll", id))
-            .show(ui, |ui| {
-                render_diff_lines(ui, &d.lines);
-            });
-    }
-}
+impl Workspace {}
 
 pub(crate) fn parse_diff(msg: &BackendMessage) -> Option<DiffRecord> {
     let p = &msg.payload;
@@ -98,14 +69,6 @@ pub(crate) fn op_marker(operation: &str) -> char {
         "create" => 'A',
         "delete" => 'D',
         _ => 'M',
-    }
-}
-
-pub(crate) fn marker_color(marker: char) -> egui::Color32 {
-    match marker {
-        'A' | '?' => egui::Color32::from_rgb(120, 200, 130),
-        'D' => egui::Color32::from_rgb(230, 120, 120),
-        _ => egui::Color32::from_rgb(220, 180, 100),
     }
 }
 
@@ -155,38 +118,11 @@ pub(crate) fn parse_unified(text: &str) -> (Vec<DiffLine>, usize, usize) {
     (lines, adds, dels)
 }
 
-pub(crate) fn op_style(operation: &str) -> (&'static str, egui::Color32) {
-    match operation {
-        "create" => ("＋", egui::Color32::from_rgb(150, 220, 150)),
-        "delete" => ("🗑", egui::Color32::from_rgb(240, 130, 130)),
-        _ => ("✎", egui::Color32::from_rgb(220, 190, 110)),
-    }
-}
-
 pub(crate) fn file_name(path: &str) -> String {
     std::path::Path::new(path)
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string())
-}
-
-pub(crate) fn render_diff_lines(ui: &mut egui::Ui, lines: &[DiffLine]) {
-    let add = egui::Color32::from_rgb(120, 220, 140);
-    let rem = egui::Color32::from_rgb(240, 140, 140);
-    let ctx = egui::Color32::from_gray(150);
-    for l in lines {
-        let (color, sign) = match l.kind.as_str() {
-            "add" => (add, "+"),
-            "remove" => (rem, "−"),
-            _ => (ctx, " "),
-        };
-        let text = egui::RichText::new(format!("{sign} {}", l.content)).monospace();
-        ui.add(
-            egui::Label::new(text.color(color))
-                .selectable(true)
-                .wrap_mode(egui::TextWrapMode::Extend),
-        );
-    }
 }
 
 #[cfg(test)]
@@ -255,21 +191,6 @@ mod tests {
         assert_eq!(op_marker("delete"), 'D');
         assert_eq!(op_marker("modify"), 'M');
         assert_eq!(op_marker("anything-else"), 'M');
-    }
-
-    #[test]
-    fn op_style_colors_match_operation() {
-        // Icons are emoji we don't pin here; assert the color channel.
-        assert_eq!(op_style("create").1, egui::Color32::from_rgb(150, 220, 150));
-        assert_eq!(op_style("delete").1, egui::Color32::from_rgb(240, 130, 130));
-        assert_eq!(op_style("modify").1, egui::Color32::from_rgb(220, 190, 110));
-    }
-
-    #[test]
-    fn marker_color_distinguishes_kinds() {
-        assert_ne!(marker_color('A'), marker_color('D'));
-        assert_ne!(marker_color('D'), marker_color('M'));
-        assert_eq!(marker_color('?'), marker_color('A'));
     }
 
     #[test]

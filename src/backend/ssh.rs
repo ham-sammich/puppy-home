@@ -254,7 +254,10 @@ impl SshTarget {
 /// `dir` of `None` lists the login home.
 fn remote_list_line(dir: Option<&str>) -> String {
     match dir {
-        Some(d) => format!("cd {} && pwd && {{ ls -1ApL 2>/dev/null || true; }}", sh_quote(d)),
+        Some(d) => format!(
+            "cd {} && pwd && {{ ls -1ApL 2>/dev/null || true; }}",
+            sh_quote(d)
+        ),
         None => "cd && pwd && { ls -1ApL 2>/dev/null || true; }".to_string(),
     }
 }

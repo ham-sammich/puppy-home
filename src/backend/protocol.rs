@@ -58,10 +58,6 @@ pub(super) fn preview_session(name: &str, source: &str) -> Value {
     json!({ "op": "preview_session", "name": name, "source": source })
 }
 
-pub(super) fn set_puppy_name(name: &str) -> Value {
-    json!({ "op": "set_puppy_name", "name": name })
-}
-
 pub(super) fn pause() -> Value {
     json!({ "op": "pause" })
 }
@@ -243,10 +239,6 @@ mod tests {
         assert_eq!(
             set_agent("code-puppy"),
             json!({"op": "set_agent", "name": "code-puppy"})
-        );
-        assert_eq!(
-            set_puppy_name("Rufus"),
-            json!({"op": "set_puppy_name", "name": "Rufus"})
         );
     }
 

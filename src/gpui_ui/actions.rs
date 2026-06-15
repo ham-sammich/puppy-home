@@ -1112,8 +1112,8 @@ impl RootView {
                                 .add_filter(
                                     "Images",
                                     &[
-                                        "png", "jpg", "jpeg", "jfif", "webp", "gif", "bmp",
-                                        "tif", "tiff", "ico",
+                                        "png", "jpg", "jpeg", "jfif", "webp", "gif", "bmp", "tif",
+                                        "tiff", "ico",
                                     ],
                                 )
                                 .pick_file();
@@ -1121,8 +1121,7 @@ impl RootView {
                         });
                         cx.spawn(async move |this, cx| {
                             if let Ok(Some(src)) = rx.await {
-                                let stored =
-                                    crate::gpui_ui::avatars::store_photo(&src, kind);
+                                let stored = crate::gpui_ui::avatars::store_photo(&src, kind);
                                 let _ = this.update(cx, |root, cx| {
                                     match stored {
                                         Some(path) => {

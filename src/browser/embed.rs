@@ -220,7 +220,7 @@ mod imp {
 
 // On non-Windows only `focus_host` is used (as a no-op); the rest are part of
 // the uniform embed API but unused there.
-#[allow(unused_imports)]
-pub use imp::{attach, focus_host, hide, place, screen_origin, show, unparent};
 #[cfg(windows)]
 pub use imp::Gluer;
+#[allow(unused_imports)]
+pub use imp::{attach, focus_host, hide, place, screen_origin, show, unparent};

@@ -3,30 +3,12 @@
 //! Backend threads (sidecar readers, pack client, PTY reader, ...) need to
 //! nudge the UI when new data arrives, but must not depend on a particular
 //! GUI toolkit. They hold an `Arc<dyn UiWaker>` and call [`UiWaker::wake`];
-//! each frontend supplies the implementation (for egui, a `request_repaint`).
-
-use std::sync::Arc;
+//! the GPUI shell supplies the implementation ([`GpuiWaker`] in `gpui_ui`).
 
 /// Wakes the UI so it repaints and drains pending events. Implementations
 /// must be cheap, idempotent, and callable from any thread.
 pub trait UiWaker: Send + Sync {
     fn wake(&self);
-}
-
-/// The egui frontend's waker: a wake is a `request_repaint`.
-#[cfg_attr(not(feature = "egui-shell"), allow(dead_code))]
-pub struct EguiWaker(pub eframe::egui::Context);
-
-impl UiWaker for EguiWaker {
-    fn wake(&self) {
-        self.0.request_repaint();
-    }
-}
-
-/// Wrap an `egui::Context` as a shareable waker (for egui-side call sites).
-#[cfg_attr(not(feature = "egui-shell"), allow(dead_code))]
-pub fn egui_waker(ctx: &eframe::egui::Context) -> Arc<dyn UiWaker> {
-    Arc::new(EguiWaker(ctx.clone()))
 }
 
 /// A waker that does nothing — for headless tests.

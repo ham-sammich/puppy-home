@@ -1,24 +1,19 @@
 //! Theming: editable color palettes, built-in presets (Dark / Light), a library
-//! of named custom themes on disk, the terminal palette, and a live GUI editor.
+//! of named custom themes on disk, and the terminal palette.
 //!
 //! A [`ThemePalette`] is a flat bag of `#rrggbb` hex strings so it can be
 //! hand-edited in plain JSON *and* tweaked with color pickers — the same data
-//! drives both. [`ThemePalette::to_visuals`] is the single palette to egui
-//! `Visuals` bridge (DRY: nobody else pokes at `Visuals` directly).
+//! drives the GPUI shell, which parses the hex into its own color type.
 
-mod editor;
+mod library;
 mod terminal;
 
-pub use editor::editor_window;
-#[allow(unused_imports)] // consumed by the GPUI editor
-pub use editor::{ANSI_NAMES, unique_name, upsert};
-#[allow(unused_imports)] // consumed by the GPUI editor
+pub use library::{ANSI_NAMES, unique_name, upsert};
 pub use terminal::save_terminal;
-pub use terminal::{ResolvedTerminal, TerminalTheme, load_terminal, terminal_colors_id};
+pub use terminal::{TerminalTheme, load_terminal};
 
 use std::path::PathBuf;
 
-use eframe::egui;
 use serde::{Deserialize, Serialize};
 
 use crate::session::Theme;
@@ -124,47 +119,16 @@ fn d_dim_text() -> String {
     "#696977".into()
 }
 
-/// The redesign's accent/status tokens resolved to `Color32` once — views hold
-/// one of these instead of parsing hex per frame. Field names follow
-/// EGUI_GUIDE.md's `Accents` recipe.
-#[allow(dead_code)] // consumed by the redesign UI branches
-pub struct Accents {
-    pub accent: egui::Color32,
-    pub accent_2: egui::Color32,
-    pub accent_ink: egui::Color32,
-    pub run: egui::Color32,
-    pub think: egui::Color32,
-    pub wait: egui::Color32,
-    pub paused: egui::Color32,
-    pub error: egui::Color32,
-}
-
-impl Accents {
-    /// Resolve from a palette. Malformed hex falls back to mid-gray, matching
-    /// the rest of the palette's lenient parsing.
-    #[allow(dead_code)] // consumed by the redesign UI branches
-    pub fn from_palette(p: &ThemePalette) -> Self {
-        Accents {
-            accent: p.col(&p.accent),
-            accent_2: p.col(&p.accent2),
-            accent_ink: p.col(&p.accent_ink),
-            run: p.col(&p.status_run),
-            think: p.col(&p.status_think),
-            wait: p.col(&p.status_wait),
-            paused: p.col(&p.status_paused),
-            error: p.col(&p.status_error),
-        }
-    }
-}
-
 impl Default for ThemePalette {
     fn default() -> Self {
         Self::dark()
     }
 }
 
-/// Parse an `#rrggbb` (or `rrggbb`) hex string. Returns `None` if malformed.
-pub fn parse_hex(s: &str) -> Option<egui::Color32> {
+/// Parse an `#rrggbb` (or `rrggbb`) hex string into an `(r, g, b)` triple.
+/// Returns `None` if malformed. Frontend-agnostic: the GPUI shell maps the
+/// triple onto its own color type ([`gpui_ui::tokens::hex`]).
+pub fn parse_hex(s: &str) -> Option<(u8, u8, u8)> {
     let s = s.trim().trim_start_matches('#');
     if s.len() != 6 {
         return None;
@@ -172,67 +136,10 @@ pub fn parse_hex(s: &str) -> Option<egui::Color32> {
     let r = u8::from_str_radix(&s[0..2], 16).ok()?;
     let g = u8::from_str_radix(&s[2..4], 16).ok()?;
     let b = u8::from_str_radix(&s[4..6], 16).ok()?;
-    Some(egui::Color32::from_rgb(r, g, b))
-}
-
-/// Format a color as `#rrggbb`.
-pub fn to_hex(c: egui::Color32) -> String {
-    format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b())
+    Some((r, g, b))
 }
 
 impl ThemePalette {
-    /// A hex field as a `Color32`, falling back to mid-gray if hand-edited badly
-    /// (a typo in a theme file should never crash the app).
-    fn col(&self, hex: &str) -> egui::Color32 {
-        parse_hex(hex).unwrap_or(egui::Color32::GRAY)
-    }
-
-    /// Map this palette onto an egui `Visuals`. The *only* palette to egui bridge.
-    pub fn to_visuals(&self) -> egui::Visuals {
-        let mut v = if self.dark_mode {
-            egui::Visuals::dark()
-        } else {
-            egui::Visuals::light()
-        };
-        let text = self.col(&self.text);
-        let strong = self.col(&self.strong_text);
-        let stroke = egui::Stroke::new(1.0, self.col(&self.stroke));
-
-        v.dark_mode = self.dark_mode;
-        v.weak_text_color = Some(self.col(&self.weak_text));
-        v.panel_fill = self.col(&self.panel);
-        v.window_fill = self.col(&self.window);
-        v.window_stroke = stroke;
-        v.faint_bg_color = self.col(&self.faint_bg);
-        v.extreme_bg_color = self.col(&self.extreme_bg);
-        v.code_bg_color = self.col(&self.code_bg);
-        v.hyperlink_color = self.col(&self.accent);
-        v.warn_fg_color = self.col(&self.warn);
-        v.error_fg_color = self.col(&self.error);
-        v.selection.bg_fill = self.col(&self.selection);
-        v.selection.stroke = egui::Stroke::new(1.0, text);
-
-        // Widget states: text everywhere, distinct fills per interaction state.
-        let w = &mut v.widgets;
-        for ws in [&mut w.noninteractive, &mut w.inactive, &mut w.open] {
-            ws.fg_stroke.color = text;
-            ws.bg_stroke = stroke;
-        }
-        w.hovered.fg_stroke.color = text;
-        w.active.fg_stroke.color = strong; // strong/heading text reads from here
-        w.noninteractive.bg_fill = self.col(&self.panel);
-        w.inactive.weak_bg_fill = self.col(&self.widget_bg);
-        w.inactive.bg_fill = self.col(&self.widget_bg);
-        w.hovered.weak_bg_fill = self.col(&self.widget_hover);
-        w.hovered.bg_fill = self.col(&self.widget_hover);
-        w.hovered.bg_stroke = stroke;
-        w.active.weak_bg_fill = self.col(&self.widget_active);
-        w.active.bg_fill = self.col(&self.widget_active);
-        w.active.bg_stroke = egui::Stroke::new(1.0, strong);
-        w.open.weak_bg_fill = self.col(&self.widget_hover);
-        v
-    }
-
     /// The default dark preset: the redesign's amber brand on the spec's base
     /// surfaces (EGUI_GUIDE.md §1 maps them onto egui visuals; `window` doubles
     /// as the card fill).
@@ -304,8 +211,8 @@ impl ThemePalette {
 }
 
 /// Resolve the palette for a selection, looking custom themes up by name
-/// in `library`. An unknown custom name falls back to Dark. Shared by both
-/// shells (egui maps it onto Visuals, GPUI onto Tokens).
+/// in `library`. An unknown custom name falls back to Dark. The GPUI shell
+/// maps the result onto its `Tokens`.
 pub fn palette_for(theme: &Theme, library: &[ThemePalette]) -> ThemePalette {
     match theme {
         Theme::Dark => ThemePalette::dark(),
@@ -316,12 +223,6 @@ pub fn palette_for(theme: &Theme, library: &[ThemePalette]) -> ThemePalette {
             .cloned()
             .unwrap_or_else(ThemePalette::dark),
     }
-}
-
-/// Resolve the egui visuals for a selection (the palette lookup +
-/// `to_visuals`; kept as the egui shell's single entry point).
-pub fn visuals_for(theme: &Theme, library: &[ThemePalette]) -> egui::Visuals {
-    palette_for(theme, library).to_visuals()
 }
 
 /// Per-OS config path for a puppy-home file: `<config>/puppy-home/<file>`.
@@ -371,11 +272,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hex_roundtrips() {
-        let c = egui::Color32::from_rgb(0x1e, 0xa5, 0x3c);
-        assert_eq!(to_hex(c), "#1ea53c");
-        assert_eq!(parse_hex("#1ea53c"), Some(c));
-        assert_eq!(parse_hex("1ea53c"), Some(c));
+    fn hex_parses_to_rgb_tuple() {
+        assert_eq!(parse_hex("#1ea53c"), Some((0x1e, 0xa5, 0x3c)));
+        assert_eq!(parse_hex("1ea53c"), Some((0x1e, 0xa5, 0x3c)));
     }
 
     #[test]
@@ -424,8 +323,8 @@ mod tests {
     fn light_weak_text_is_dark_enough_to_read() {
         // Regression guard for the reported bug: weak text on white must not be
         // washed out. Require the weak-text luminance clearly below white.
-        let c = parse_hex(&ThemePalette::light().weak_text).unwrap();
-        let lum = 0.299 * c.r() as f32 + 0.587 * c.g() as f32 + 0.114 * c.b() as f32;
+        let (r, g, b) = parse_hex(&ThemePalette::light().weak_text).unwrap();
+        let lum = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
         assert!(lum < 150.0, "light weak-text too bright: {lum}");
     }
 
@@ -449,19 +348,6 @@ mod tests {
     }
 
     #[test]
-    fn custom_resolves_by_name() {
-        let mut p = ThemePalette::dark();
-        p.name = "Neon".into();
-        p.panel = "#100020".into();
-        let lib = vec![p];
-        let v = visuals_for(&Theme::Custom("Neon".into()), &lib);
-        assert_eq!(v.panel_fill, parse_hex("#100020").unwrap());
-        // Unknown name falls back to dark, not a crash.
-        let v2 = visuals_for(&Theme::Custom("missing".into()), &lib);
-        assert_eq!(v2.panel_fill, parse_hex("#1a1a20").unwrap());
-    }
-
-    #[test]
     fn legacy_theme_json_loads_with_token_defaults() {
         // A themes.json written before the redesign has none of the token
         // fields — serde defaults must fill them so old libraries still load.
@@ -481,10 +367,6 @@ mod tests {
         assert_eq!(p.status_paused, "#cfa54e");
         assert_eq!(p.app_bg, "#121217"); // GPUI backdrop default
         assert_eq!(p.dim_text, "#696977");
-        // And the resolved accessor parses every default.
-        let a = Accents::from_palette(&p);
-        assert_eq!(a.paused, parse_hex("#cfa54e").unwrap());
-        assert_eq!(a.run, parse_hex("#5fd190").unwrap());
     }
 
     #[test]

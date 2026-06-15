@@ -145,12 +145,6 @@ pub fn editor_area(args: &EditorArgs) -> AnyElement {
         Some(EditorItem::Commit { hash, .. }) => {
             crate::gpui_ui::gitpanel::commit_view(&args.git_args(), hash)
         }
-        Some(EditorItem::Browser(_)) => div()
-            .p_3()
-            .text_size(px(12.))
-            .text_color(t.weak)
-            .child("Browser tabs land in Phase E.")
-            .into_any_element(),
         None => div().into_any_element(),
     };
     div()
@@ -189,7 +183,6 @@ fn tab_bar(args: &EditorArgs) -> AnyElement {
                 ),
                 EditorItem::Changes => ("Changes".to_string(), false),
                 EditorItem::Git => ("Git".to_string(), false),
-                EditorItem::Browser(_) => ("Browser".to_string(), false),
                 EditorItem::Commit { .. } => ("Commit".to_string(), false),
             };
             let on = i == active;
@@ -293,20 +286,22 @@ fn file_view(args: &EditorArgs, path: &Path) -> AnyElement {
                 })
                 .into_any_element()
         }))
-        .children((args.browser_available && crate::browser::is_html(path)).then(|| {
-            // Preview a local HTML file in the browser plugin (egui parity).
-            let root = args.root.clone();
-            let url = crate::browser::file_url(path);
-            widgets::btn(&t, "\u{1f310} Open in browser")
-                .id(("editor-html-open", id.0))
-                .tooltip(widgets::text_tip(
-                    "Preview this HTML file in the in-app browser".into(),
-                ))
-                .on_click(move |_, _, cx| {
-                    let url = url.clone();
-                    root.update(cx, |r, cx| r.dispatch(DashAction::OpenDevUrl(url), cx));
-                })
-        }))
+        .children(
+            (args.browser_available && crate::browser::is_html(path)).then(|| {
+                // Preview a local HTML file in the browser plugin (egui parity).
+                let root = args.root.clone();
+                let url = crate::browser::file_url(path);
+                widgets::btn(&t, "\u{1f310} Open in browser")
+                    .id(("editor-html-open", id.0))
+                    .tooltip(widgets::text_tip(
+                        "Preview this HTML file in the in-app browser".into(),
+                    ))
+                    .on_click(move |_, _, cx| {
+                        let url = url.clone();
+                        root.update(cx, |r, cx| r.dispatch(DashAction::OpenDevUrl(url), cx));
+                    })
+            }),
+        )
         .child(
             widgets::btn(&t, "\u{1f4be} Save")
                 .id(("editor-save", id.0))

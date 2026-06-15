@@ -16,13 +16,6 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-cli
 [workspace]
 members = ["plugins/browser", "relay"]
 
-[features]
-# The legacy egui frontend. OFF by default on this branch: `main` launches the
-# GPUI shell. Build with `--features egui-shell` to run the old eframe app
-# (kept compiling so reusable logic can be extracted incrementally; the
-# egui-coupled modules are allow(dead_code) when this feature is off).
-egui-shell = []
-
 [dependencies]
 # GPUI (Zed's UI framework) — THE frontend on this branch.
 # PINNED: rev 00789bf6ee744de8ddcfad93ade1d28cf4070a24 = tag v0.199.10,
@@ -39,19 +32,11 @@ anyhow = "1"
 # Grapheme-correct cursor movement in the GPUI composer input (same crate the
 # gpui input example uses; tiny, already in the tree transitively).
 unicode-segmentation = "1"
-# Syntax highlighting for the GPUI editor tabs — DIRECT dep, pinned to the
-# exact version+features egui_extras 0.34 uses so both branches share ONE
-# syntect in the lock (5.3.0, default-fancy = pure-Rust regex engine).
+# Syntax highlighting for the GPUI editor tabs (5.3.0, default-fancy =
+# pure-Rust regex engine, no Oniguruma C dependency).
 syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
 
-# Native windowed GUI (egui in immediate mode, cross-platform, pure Rust).
-# TEMPORARY on this branch: kept so the egui-coupled modules (workspace UI,
-# views, theme::to_visuals, terminal grid) still COMPILE while their reusable
-# logic is extracted incrementally. The default binary never runs eframe.
-eframe = "0.34.3"
-egui_commonmark = "0.23"
-egui_dock = { version = "0.19.1", features = ["serde"] }
-egui_extras = { version = "0.34", features = ["syntect"] }
+# Native file/folder open dialogs (GPUI has no built-in picker).
 rfd = "0.17.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
@@ -77,7 +62,7 @@ windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Graphics_Gd
 raw-window-handle = "0.6"
 
 # macOS-only: read the host NSWindow number (to z-order the browser overlay just
-# above us) from the eframe window's NSView.
+# above us) from the GPUI window's NSView.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"
 raw-window-handle = "0.6"

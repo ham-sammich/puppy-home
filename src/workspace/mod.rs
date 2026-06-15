@@ -14,8 +14,6 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
 
-use egui_commonmark::CommonMarkCache;
-
 use crate::backend::{
     AgentInfo, CodePuppy, CommandInfo, CompletionItem, ContextBreakdown, ModelInfo, UiEvent,
 };
@@ -23,33 +21,41 @@ use crate::backend::{
 mod ask;
 mod chat;
 pub(crate) mod clipboard;
-mod composer;
 pub(crate) mod diff;
 mod editor;
 mod events;
-mod file_picker;
 pub(crate) mod fs;
 mod git_creds;
 mod git_graph;
-mod git_graph_view;
 mod git_view;
-mod pending_prompt;
-mod render;
-mod sessions;
 mod state;
 mod tree_ops;
-mod view;
 
 pub(crate) use ask::AskState;
-#[allow(unused_imports)] // consumed by the redesign UI branches
 pub(crate) use editor::language_for;
-#[allow(unused_imports)] // consumed by the redesign UI branches
 pub(crate) use git_graph::{EdgeHalf, GraphRow, compute_graph};
-#[allow(unused_imports)] // consumed by the redesign UI branches
-pub(crate) use render::short_session;
-#[allow(unused_imports)] // consumed by the redesign UI branches
 pub(crate) use state::{EditorItem, Entry, GitView, Pending, PendingKind};
 pub use state::{InstanceStatus, SPARK_SAMPLES, SparkRing};
+
+/// Humanize a Code Puppy autosave session name for display.
+/// `auto_session_20260519_174443` -> `2026-05-19 17:44`. Pure logic
+/// (previously lived in the egui `render` module, removed in G5).
+pub(crate) fn short_session(name: &str) -> String {
+    let core = name.strip_prefix("auto_session_").unwrap_or(name);
+    if core.len() == 15 && core.as_bytes().get(8) == Some(&b'_') {
+        let (d, t) = core.split_at(8);
+        format!(
+            "{}-{}-{} {}:{}",
+            &d[0..4],
+            &d[4..6],
+            &d[6..8],
+            &t[1..3],
+            &t[3..5]
+        )
+    } else {
+        core.to_string()
+    }
+}
 
 use diff::DiffRecord;
 use state::FileBuffer;
@@ -57,15 +63,6 @@ use state::FileBuffer;
 /// Stable, never-reused identity for a workspace.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct WorkspaceId(pub u64);
-
-/// An image pasted into the composer, attached to the next prompt. Holds the
-/// PNG bytes (base64, sent to the sidecar as a `BinaryContent`) plus a GPU
-/// texture for the in-composer thumbnail.
-pub(crate) struct PendingImage {
-    pub png_base64: String,
-    pub size: [usize; 2],
-    pub texture: eframe::egui::TextureHandle,
-}
 
 pub struct Workspace {
     pub id: WorkspaceId,
@@ -85,16 +82,12 @@ pub struct Workspace {
     transcript_collapsed: usize,
     /// Images pasted into the composer, attached to (and cleared by) the next
     /// prompt submit.
-    pending_images: Vec<PendingImage>,
     logs: Vec<String>,
     commands: Vec<CommandInfo>,
     agents: Vec<AgentInfo>,
     models: Vec<ModelInfo>,
-    input: String,
     pending: Option<Pending>,
     pending_ask: Option<AskState>,
-    show_logs: bool,
-    request_input_focus: bool,
 
     // inline completion
     completions: Vec<CompletionItem>,
@@ -120,17 +113,13 @@ pub struct Workspace {
     /// The puppy's name (global Code Puppy config) + a rename buffer.
     pub puppy_name: String,
     owner_name: String,
-    name_edit: Option<String>,
     // Session browser (interactive picker) + read-only conversation preview.
     sessions: Vec<crate::backend::SessionInfo>,
     sessions_current: String,
     show_sessions: bool,
     show_agent_picker: bool,
     show_model_picker: bool,
-    selected_session: Option<String>,
     session_preview: Option<(String, Vec<crate::backend::SessionEntry>)>,
-    preview_cache: CommonMarkCache,
-    sessions_filter: String,
     pub cp_version: String,
     pub cwd: String,
     pub status: InstanceStatus,
@@ -142,7 +131,6 @@ pub struct Workspace {
     pub tool_calls: u64,
     pub status_line: String,
     paused: bool,
-    steer_queue_mode: bool,
     // live run metrics (from the `status` op, polled while busy)
     pub run_stats: String,
     pub token_rate: f64,
@@ -190,7 +178,6 @@ pub struct Workspace {
     /// The most recent `agent_config` answer (the Agent tab's detail pane).
     pub agent_config_detail: Option<crate::backend::AgentConfigDetail>,
     status_req_at: Instant,
-    md_cache: CommonMarkCache,
     // changes: Code-Puppy-reported diffs (fallback for non-git folders) + the
     // currently displayed diff.
     diffs: Vec<DiffRecord>,
@@ -217,39 +204,27 @@ pub struct Workspace {
     /// later transport channels — the embedded terminal — can be opened
     /// against the same destination (B13.7).
     remote: Option<RemoteInfo>,
-    show_tree: bool,
     open_files: BTreeMap<PathBuf, FileBuffer>,
     editor_open: Vec<EditorItem>,
     editor_active: usize,
     /// Editor-area placement relative to chat (stacked vs side-by-side).
-    editor_side: crate::workspace::state::EditorSide,
     /// Last CDP endpoint written to `.puppy/browser.json` (avoids rewriting).
     browser_cdp_written: Option<String>,
     /// A file/folder pending delete confirmation (from the tree context menu).
-    pending_delete: Option<PathBuf>,
     /// Error from the most recent delete attempt (shown in the confirm modal).
-    delete_error: Option<String>,
     /// A path being renamed via the tree context menu (modal).
-    pending_rename: Option<crate::workspace::state::PendingRename>,
     /// A new file/folder being created via the tree context menu (modal).
-    pending_new: Option<crate::workspace::state::PendingNew>,
     /// Open "add a file to the chat" browser, holding the directory it shows.
-    file_browser: Option<PathBuf>,
     /// Render the full transcript instead of just the recent tail (opt-in via
     /// the "Show older" button; old entries are expensive to re-lay-out).
-    transcript_show_all: bool,
     // Git view (Source Control page + commit/blame tabs)
     git_view: Option<GitView>,
     /// All-branches commits for the graph view (newest first, with parents/refs).
     git_graph_commits: Vec<crate::git::Commit>,
     /// Whether the Git page shows the GitKraken-style graph vs. the flat list.
-    git_show_graph: bool,
     /// Active "create branch here" dialog (commit hash/short + typed name).
-    git_branch_dialog: Option<git_graph::BranchDialog>,
-    commit_msg: String,
     /// Height of the commit-message box (changed only by dragging its strip;
     /// never derived from layout, so it can't creep -- see render_git).
-    commit_box_h: f32,
     git_action_msg: Option<(bool, String)>,
     /// Active credentials modal when a remote push/pull/fetch needs HTTPS auth.
     git_creds: Option<crate::workspace::state::GitCredsPrompt>,
@@ -314,16 +289,12 @@ impl Workspace {
             rx,
             transcript: Vec::new(),
             transcript_collapsed: 0,
-            pending_images: Vec::new(),
             logs: Vec::new(),
             commands: Vec::new(),
             agents: Vec::new(),
             models: Vec::new(),
-            input: String::new(),
             pending: None,
             pending_ask: None,
-            show_logs: false,
-            request_input_focus: false,
             completions: Vec::new(),
             comp_selected: 0,
             comp_visible: false,
@@ -341,16 +312,12 @@ impl Workspace {
             autosave: String::new(),
             puppy_name: "Puppy".to_string(),
             owner_name: "Master".to_string(),
-            name_edit: None,
             sessions: Vec::new(),
             sessions_current: String::new(),
             show_sessions: false,
             show_agent_picker: false,
             show_model_picker: false,
-            selected_session: None,
             session_preview: None,
-            preview_cache: CommonMarkCache::default(),
-            sessions_filter: String::new(),
             cp_version: String::new(),
             cwd: String::new(),
             status: InstanceStatus::Starting,
@@ -362,7 +329,6 @@ impl Workspace {
             tool_calls: 0,
             status_line: "Starting Code Puppy…".to_string(),
             paused: false,
-            steer_queue_mode: false,
             run_stats: String::new(),
             token_rate: 0.0,
             sub_agents: Vec::new(),
@@ -385,7 +351,6 @@ impl Workspace {
             agent_mcp_catalog: Vec::new(),
             agent_config_detail: None,
             status_req_at: Instant::now(),
-            md_cache: CommonMarkCache::default(),
             diffs: Vec::new(),
             published_html: Vec::new(),
             current_diff: None,
@@ -397,24 +362,12 @@ impl Workspace {
             git_rx: None,
             git_refresh_at: Instant::now(),
             git_pending: false,
-            show_tree: true,
             open_files: BTreeMap::new(),
             editor_open: Vec::new(),
             editor_active: 0,
-            editor_side: crate::workspace::state::EditorSide::default(),
             browser_cdp_written: None,
-            pending_delete: None,
-            delete_error: None,
-            pending_rename: None,
-            pending_new: None,
-            file_browser: None,
-            transcript_show_all: false,
             git_view: None,
             git_graph_commits: Vec::new(),
-            git_show_graph: true,
-            git_branch_dialog: None,
-            commit_msg: String::new(),
-            commit_box_h: 74.0,
             git_action_msg: None,
             git_creds: None,
             commit_view: None,
@@ -735,10 +688,34 @@ impl Workspace {
         true
     }
 
-    #[allow(dead_code)] // consumed by the redesign UI branches
     /// Whether the embedded terminal fills the chat area.
     pub(crate) fn terminal_visible(&self) -> bool {
         self.show_terminal
+    }
+
+    /// Text to scan for dev-server URLs: the embedded terminal's screen plus
+    /// the recent transcript (the agent often prints "running at
+    /// http://localhost..."). Consumed by the GPUI browser dev-server chip.
+    pub(crate) fn dev_url_scan_text(&self) -> String {
+        let mut s = String::new();
+        if let Some(t) = &self.terminal {
+            s.push_str(&t.screen_text());
+            s.push('\n');
+        }
+        for e in self.transcript.iter().rev().take(40) {
+            match e {
+                Entry::Agent(t) | Entry::Note(t) | Entry::User(t) | Entry::Error(t) => {
+                    s.push_str(t);
+                    s.push('\n');
+                }
+                Entry::Thinking { text, .. } => {
+                    s.push_str(text);
+                    s.push('\n');
+                }
+                Entry::Message(_) => {}
+            }
+        }
+        s
     }
 
     #[allow(dead_code)] // consumed by the redesign UI branches

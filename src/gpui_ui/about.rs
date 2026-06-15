@@ -267,7 +267,12 @@ pub fn panel(
                     .text_color(t.text)
                     .child(label.to_string()),
             )
-            .child(div().text_size(px(10.5)).text_color(t.weak).child(sub.to_string()))
+            .child(
+                div()
+                    .text_size(px(10.5))
+                    .text_color(t.weak)
+                    .child(sub.to_string()),
+            )
             .child(div().text_color(t.weak).child(ver))
     };
     let mut body = div()

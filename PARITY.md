@@ -311,14 +311,26 @@ navigation, toasts, reduce-motion, session prefs (view/style/motion).
       * Legacy-shell micro-delta accepted: steer() now optimistically
         bumps queued_steers on queued steers (egui's shipped behavior;
         next status poll corrects it anyway).
-- [ ] G3. **WINDOWS SMOKE GATE (required before merge)**: gpui pin must
-      build + run on Windows (DirectX backend; `runtime_shaders` is a
-      macOS-only concern). App smoke: open folder, prompt, terminal, den.
-      ConPTY path of terminal.rs re-validated under the GPUI element.
+- [x] G3. **WINDOWS SMOKE GATE** — PASSED 15/15 on Windows 11 (Jacob's
+      hands-on run; tracker was `.puppy/gate/RESULTS.md`, local-only).
+      ConPTY terminal, WebView2 embed, DPI, ssh, den self-host all green.
 - [ ] G4. Sha-bump decision: stay at v0.199.10 or bump to current Zed
       stable; budget 1-2 days for API chase if bumping.
-- [ ] G5. egui-shell strip decision: delete the feature + egui-coupled
-      modules + eframe deps, or keep one release as a fallback toggle.
+- [x] G5. **egui-shell STRIPPED** (decision: delete, not keep-as-toggle).
+      The legacy eframe frontend is gone; `redesign/gpui` is now a single
+      GPUI codebase. Removed `src/app`, `src/shell`, `dock_layout.rs`,
+      `fonts.rs`, `theme/editor.rs`, all egui `views/*` renderers, and the
+      egui render paths in `workspace/*`; dropped eframe/egui_commonmark/
+      egui_dock/egui_extras (Cargo.lock 970 -> 828, -142). Shared logic
+      that lived in egui-named files was preserved (relocated, not
+      deleted): short_session/dev_url_scan_text -> workspace/mod.rs,
+      wizard state machines kept in views/*, theme lib helpers ->
+      theme/library.rs, parse_hex made frontend-agnostic, session.layout
+      -> opaque serde_json::Value (lossless legacy round-trip). waker.rs:
+      EguiWaker dropped, UiWaker+GpuiWaker remain. Hygiene: backend/mod.rs
+      1725 -> 1440 via backend/types.rs DTO extraction (wire+driver left
+      cohesive). build/test/clippy/fmt all green (197 app + 19 relay),
+      app launches to Ready. One kept allow(dead_code): WorkspaceFs::is_dir.
 - [ ] G6. Merge to master (after G3 passes and the humans sign off).
 
 ## Cosmetic ledger (small, known, deliberate — fix opportunistically)

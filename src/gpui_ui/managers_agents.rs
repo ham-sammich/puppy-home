@@ -32,14 +32,11 @@ impl RootView {
                 // Root the hidden session at the serving workspace's folder
                 // when there is one, else the home dir — so it has a real cwd
                 // without inventing a stray top-level workspace.
-                let root = self
-                    .serving_ws()
-                    .map(|w| w.root.clone())
-                    .or_else(|| {
-                        std::env::var_os("HOME")
-                            .or_else(|| std::env::var_os("USERPROFILE"))
-                            .map(std::path::PathBuf::from)
-                    });
+                let root = self.serving_ws().map(|w| w.root.clone()).or_else(|| {
+                    std::env::var_os("HOME")
+                        .or_else(|| std::env::var_os("USERPROFILE"))
+                        .map(std::path::PathBuf::from)
+                });
                 let Some(root) = root else {
                     self.last_error = Some("No home directory found".into());
                     return;

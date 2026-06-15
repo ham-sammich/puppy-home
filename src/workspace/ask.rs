@@ -1,7 +1,5 @@
 //! The interactive `ask_user_question` modal + its state.
 
-use eframe::egui;
-
 use crate::backend::{AskAnswer, AskOption, AskQuestion};
 
 use super::Workspace;
@@ -142,65 +140,5 @@ impl Workspace {
         self.transcript
             .push(Entry::Note("cancelled question".to_string()));
         self.set_status(InstanceStatus::Running);
-    }
-
-    pub(crate) fn render_ask_modal(&mut self, ctx: &egui::Context) {
-        let title = format!("🐶 Code Puppy asks — {}", self.name);
-        // 0 = nothing, 1 = submit, 2 = cancel.
-        let mut action = 0u8;
-        {
-            let Some(ask) = self.pending_ask.as_mut() else {
-                return;
-            };
-            egui::Window::new(title)
-                .id(egui::Id::new(("ask-modal", ask.id.as_str())))
-                .collapsible(false)
-                .resizable(true)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.set_max_width(560.0);
-                    for q in &mut ask.questions {
-                        ui.label(egui::RichText::new(&q.header).strong());
-                        ui.label(&q.question);
-                        ui.add_space(2.0);
-                        for i in 0..q.options.len() {
-                            let opt_label = q.options[i].label.clone();
-                            let opt_desc = q.options[i].description.clone();
-                            if q.multi_select {
-                                ui.checkbox(&mut q.selected[i], &opt_label)
-                                    .on_hover_text(&opt_desc);
-                            } else if ui
-                                .radio(q.selected[i], &opt_label)
-                                .on_hover_text(&opt_desc)
-                                .clicked()
-                            {
-                                for s in &mut q.selected {
-                                    *s = false;
-                                }
-                                q.selected[i] = true;
-                            }
-                        }
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Other:").weak());
-                            ui.text_edit_singleline(&mut q.other);
-                        });
-                        ui.separator();
-                    }
-                    ui.horizontal(|ui| {
-                        if ui.button("Submit").clicked() {
-                            action = 1;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            action = 2;
-                        }
-                    });
-                });
-        }
-
-        match action {
-            1 => self.ask_submit(),
-            2 => self.ask_cancel(),
-            _ => {}
-        }
     }
 }
