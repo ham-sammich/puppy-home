@@ -33,6 +33,10 @@ pub struct MgrArgs<'a> {
     pub agent_delete_confirm: Option<&'a str>,
     /// Agent wizard: the model dropdown is open.
     pub agent_model_menu: bool,
+    /// Judge builder state + the model dropdown / delete-confirm flags.
+    pub judge_wizard: Option<&'a crate::gpui_ui::managers_judges::JudgeWizard>,
+    pub judge_delete_confirm: Option<&'a str>,
+    pub judge_model_menu: bool,
     /// Models manager: the extra_models.json editor is open (QW4).
     pub models_editor: bool,
     /// Config manager: parsed puppy.cfg entries + the row being edited (QW5).
@@ -278,6 +282,7 @@ pub fn overlay(args: &MgrArgs) -> AnyElement {
         MgrKind::Mcp => args.mcp_wizard.is_some(),
         MgrKind::Skills => args.skills_wizard.is_some(),
         MgrKind::Agents => args.agent_wizard.is_some(),
+        MgrKind::Judges => args.judge_wizard.is_some(),
         MgrKind::Models => args.models_editor,
         MgrKind::Config => false,
     };
@@ -297,6 +302,7 @@ pub fn overlay(args: &MgrArgs) -> AnyElement {
                 MgrKind::Mcp => super::managers_mcp::body(args, ws),
                 MgrKind::Skills => super::managers_skills::body(args, ws),
                 MgrKind::Agents => super::managers_agents::body(args, ws),
+                MgrKind::Judges => super::managers_judges::body(args, ws),
                 MgrKind::Models => super::managers_models::body(args, ws),
                 MgrKind::Config => unreachable!("handled above"),
             },
@@ -343,6 +349,19 @@ pub fn overlay(args: &MgrArgs) -> AnyElement {
                     )
                     .child(create)
                     .into_any_element()
+            }
+            MgrKind::Judges => {
+                // Gate "Create judge" until the roster has loaded (mirrors the
+                // agents create gate) — the model dropdown reads the catalog.
+                let have = args.ws.is_some_and(|ws| ws.judges.is_some());
+                if have {
+                    widgets::primary_btn(&t, "\u{ff0b} Create judge")
+                        .id("mgr-add")
+                        .on_click(act(&args.root, MgrAction::JudgeWizardOpen(false)))
+                        .into_any_element()
+                } else {
+                    disabled_btn(&t, "\u{ff0b} Create judge").into_any_element()
+                }
             }
             MgrKind::Models => widgets::primary_btn(&t, "\u{270e} Edit extra_models.json")
                 .id("mgr-add")

@@ -41,6 +41,7 @@ pub enum MgrKind {
     Mcp,
     Skills,
     Agents,
+    Judges,
     Models,
     Config,
 }
@@ -51,6 +52,7 @@ impl MgrKind {
             MgrKind::Mcp => "MCP Servers",
             MgrKind::Skills => "Skills",
             MgrKind::Agents => "Agents",
+            MgrKind::Judges => "Judges",
             MgrKind::Models => "Models",
             MgrKind::Config => "Puppy Config",
         }
@@ -62,6 +64,7 @@ impl MgrKind {
             MgrKind::Mcp => "global Code Puppy config",
             MgrKind::Skills => "user + project skills",
             MgrKind::Agents => "JSON + built-in agents",
+            MgrKind::Judges => "goal-mode verifiers",
             MgrKind::Models => "sidecar catalog + extra_models.json",
             MgrKind::Config => "puppy.cfg \u{2014} global settings",
         }
@@ -122,6 +125,19 @@ pub enum MgrAction {
     /// Close the Agent Creator modal: kill the ephemeral session and return
     /// to the agents list (F8).
     AgentCreatorClose,
+    // judges (goal-mode verifiers)
+    JudgeSelect(String),
+    JudgeToggle(String),
+    JudgeDelete(String),
+    JudgeDeleteConfirm,
+    JudgeDeleteCancel,
+    JudgeWizardOpen(bool), // edit current selection?
+    JudgeWizardCancel,
+    JudgeModelMenu,
+    JudgeSetModel(String),
+    /// Flip the builder's enabled flag.
+    JudgeToggleEnabled,
+    JudgeSubmit,
     // models (QW4)
     ModelSetActive(String),
     ModelsEditorOpen,
@@ -266,6 +282,8 @@ impl RootView {
                 self.mcp_wizard = None;
                 self.skills_wizard = None;
                 self.agent_wizard = None;
+                self.judge_wizard = None;
+                self.judge_delete_confirm = None;
                 self.mgr_seen = None;
                 self.mgr_last_request = None;
                 self.mgr_pending.clear();
@@ -277,6 +295,7 @@ impl RootView {
                 self.mcp_wizard = None;
                 self.skills_wizard = None;
                 self.agent_wizard = None;
+                self.judge_wizard = None;
             }
             Refresh => {
                 if self.manager_open == Some(MgrKind::Config) {
@@ -291,6 +310,9 @@ impl RootView {
             | SkillMode(_) | SkillStep(_) | SkillScope(_) | SkillFormat | SkillSubmit) => {
                 self.dispatch_skills(a, cx)
             }
+            a @ (JudgeSelect(_) | JudgeToggle(_) | JudgeDelete(_) | JudgeDeleteConfirm
+            | JudgeDeleteCancel | JudgeWizardOpen(_) | JudgeWizardCancel | JudgeModelMenu
+            | JudgeSetModel(_) | JudgeToggleEnabled | JudgeSubmit) => self.dispatch_judges(a, cx),
             a @ (ModelSetActive(_) | ModelsEditorOpen | ModelsEditorCancel | ModelsEditorSave
             | ModelRemove(_)) => self.dispatch_models(a, cx),
             a @ (CfgEdit(_) | CfgEditCancel | CfgEditSave) => self.dispatch_config(a, cx),
@@ -319,6 +341,7 @@ impl RootView {
                 ws.agent_configs_generation,
                 ws.agent_configs.is_some(),
             ),
+            MgrKind::Judges => (ws.id, ws.judges_generation, ws.judges.is_some()),
             MgrKind::Models | MgrKind::Config => unreachable!("early-returned above"),
         }) else {
             return;
@@ -333,6 +356,7 @@ impl RootView {
                 self.with_ready_backend(|b| match kind {
                     MgrKind::Skills => b.get_skill(&sel),
                     MgrKind::Agents => b.get_agent_config(&sel),
+                    MgrKind::Judges => b.get_judge(&sel),
                     MgrKind::Mcp | MgrKind::Models | MgrKind::Config => {}
                 });
             }
@@ -351,6 +375,7 @@ impl RootView {
                 MgrKind::Mcp => b.list_mcp_servers(),
                 MgrKind::Skills => b.list_skills(),
                 MgrKind::Agents => b.list_agent_configs(),
+                MgrKind::Judges => b.list_judges(),
                 MgrKind::Models | MgrKind::Config => {}
             });
             self.mgr_last_request = Some(Instant::now());
