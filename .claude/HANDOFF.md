@@ -1,4 +1,92 @@
-# Handoff Notes — Device Switch
+# Handoff Notes
+
+> The section below ("=== LATEST: 2026-06-14 ===") is the CURRENT source of
+> truth. Everything under "# Handoff Notes — Device Switch (2026-06-11)" further
+> down is older history from the egui era; read it for backstory only. The
+> active branch today is `redesign/gpui` (a GPUI rewrite), NOT
+> `feature/browser-plugin`.
+
+=====================================================================
+=== LATEST: 2026-06-14  (handoff by code-puppy-3e3350, for Jacob) ===
+=====================================================================
+
+## TL;DR state
+- **Branch:** `redesign/gpui` (the live GPUI rewrite). HEAD = `5a71995`.
+- **Git remote EXISTS** (older note saying "local-only" is STALE):
+  `origin = https://github.com/ham-sammich/puppy-home`, branch tracks
+  `origin/redesign/gpui`. Push with `git push origin redesign/gpui`. As of this
+  writing everything is committed AND pushed; working tree clean.
+- **WINDOWS_GATE smoke test: 15/15 PASS.** Tracker at `.puppy/gate/RESULTS.md`
+  (NOTE: `.puppy/` is gitignored, so that file is LOCAL-ONLY — it won't travel).
+- Build/run on Windows: RELEASE builds (`cargo build --release -p puppy-home`,
+  run `target\release\puppy-home.exe`). Relay is a separate crate
+  (`-p puppy-relay`), spawned by the app when you "Host a Den".
+
+## What shipped recently (newest commits on redesign/gpui)
+- `5a71995` feat(den): **photo avatars over the relay wire** — teammates see
+  your real photo pfp, not just emoji. Sender downscales the chosen photo to a
+  <=96px PNG thumbnail (`avatars::photo_to_thumb_b64`), base64s it, sends in
+  Join; receiver decodes+caches to a temp file (`avatars::cache_remote_avatar`)
+  and renders it. Wire: `MemberInfo`/`Join`/`MemberJoined` gained
+  `user_avatar_png`/`puppy_avatar_png` (serde-default, skip-if-empty);
+  `hub.join()` now takes a `JoinAvatars` struct. Added the `image` crate (free —
+  already in tree via gpui).
+- `29673ac` fix(ssh): **symlinked dirs + Windows backslash paths**. (1) ssh fs
+  listed with `ls -1Ap`; `-p` doesn't mark symlinks-to-dirs, so they parsed as
+  files -> ENOENT on open. Fixed to `ls -1ApL` (dereference) in
+  `ssh_fallback.rs` + `ssh.rs`, tolerating a dangling symlink's non-zero exit.
+  (2) A Windows client's `PathBuf::join` inserts `\`, which a POSIX remote takes
+  literally -> ENOENT on every subpath. Normalized `\`->`/` at the send boundary
+  (`p()` in ssh_fallback, new `posix()` over all `RemoteFs` sidecar path sends).
+  Verified by the (ignored) live E2E test
+  `cargo test --bin puppy-home ssh_fallback_live_vm840 -- --ignored`.
+- Earlier same-stretch (already committed: `dens fixes`/`closer` etc.): den
+  **emoji avatars**, den **agent-visibility** fixes (relay roster-replay AFTER
+  the Joined snapshot via `hub.replay_rosters`; client `den_roster_last` reset
+  between den sessions; re-broadcast roster when the member set changes), relay
+  `hide_console()` so Windows hosts don't flash a console, git two-column view,
+  editor fixes (undo/redo, ctrl copy/paste, dirty marker, close-confirm modal),
+  and the sidecar `400` fix (`repair_tool_call_adjacency` in sidecar/sidecar.py
+  for duplicated/orphaned tool_result parts in restored autosaves).
+
+## KNOWN-OPEN threads (pick these up)
+1. **Cross-machine PHOTO avatar does not render** (emoji avatars DO). Parked.
+   Debug order (see kennel drawer ~228): does your OWN photo render in the den
+   roster? (splits render-bug vs wire-bug) -> is `*_avatar_png` non-empty in the
+   snapshot the client receives? -> did `cache_remote_avatar` write a file under
+   `%TEMP%/puppy-home/den_avatars/`? -> is `fill_parent` sizing OK inside the
+   26px roster circle? Also: the OTHER machine must be rebuilt (old client
+   ignores the new png field).
+2. **Multi-machine rule:** any RELAY/protocol change requires BOTH machines
+   rebuilt (`cargo build --release -p puppy-home -p puppy-relay`). The Mac was
+   still pending a rebuild as of this handoff — den cross-machine tests need it.
+3. Cosmetic/debt: `Cargo.toml` still pulls egui/eframe alongside gpui in the
+   release build (YAGNI candidate to remove if the egui frontend is dead on this
+   branch); `src/backend/mod.rs` (~1450) over the 600-line budget.
+
+## Useful facts for the next agent
+- **vm840** is Jacob's reachable test box: `vm840.richweb.com`, user root,
+  Debian, KEY auth (no password). Has uv+python3+git -> full-remote works;
+  to exercise ssh-FALLBACK, temporarily `mv /root/.local/bin/uv` aside (it makes
+  the app report CannotHost -> offer fallback) and restore after. Symlinked
+  webroots under `/data/www/*` -> `/storage/*` were the symlink-bug repro.
+- The den relay's orphan watchdog (relay/src/main.rs) reads
+  `PUPPY_RELAY_WATCH_PID` and self-exits when the app dies (Windows: tasklist
+  poll). Verified.
+- **Kennel memory is the deep institutional record** (repo wing
+  `repo:D:\dev\puppy-home`). Recall before starting: drawers cover the den
+  avatar/agent-visibility work, the ssh fixes, the sidecar 400 fix, and the gate.
+
+## Standing orders (unchanged)
+- Rebuild/relaunch: if the exe is locked by a running instance, force-close it
+  yourself — `taskkill /f /im puppy-home.exe`, rebuild, relaunch in background.
+  Jacob pre-authorized this. Use RELEASE builds on Windows.
+- No emoji in GUI source (emoji-guard test). Files < 600 lines. Zero warnings,
+  zero clippy, tests green before commit.
+
+---
+
+# Handoff Notes — Device Switch (2026-06-11)
 
 Date: 2026-06-11 (Phase A remote SSH FEATURE-COMPLETE: chat+fs+editor+git)
 Branch: feature/browser-plugin
