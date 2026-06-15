@@ -177,6 +177,23 @@ pub struct Workspace {
     pub agent_mcp_catalog: Vec<String>,
     /// The most recent `agent_config` answer (the Agent tab's detail pane).
     pub agent_config_detail: Option<crate::backend::AgentConfigDetail>,
+    /// Kennel-wide totals (global DB, fetched via this sidecar). `None` until
+    /// the first `kennel_stats` event.
+    pub kennel_stats: Option<crate::backend::KennelStats>,
+    /// Every kennel wing + drawer count. `None` until the first wings event.
+    pub kennel_wings: Option<Vec<crate::backend::KennelWing>>,
+    /// The most recent drawer page (recent or search results). `None` until
+    /// the first `kennel_drawers` event.
+    pub kennel_drawers: Option<Vec<crate::backend::KennelDrawer>>,
+    /// Bumped on every kennel data event so views drop optimistic/stale state.
+    pub kennel_generation: u64,
+    /// Configured judge roster (global judges.json, fetched via this sidecar).
+    /// `None` until the first `judges` event.
+    pub judges: Option<Vec<crate::backend::JudgeInfo>>,
+    /// Bumped on every `judges` event so views drop optimistic state.
+    pub judges_generation: u64,
+    /// The most recent `judge_detail` answer (the judge builder's prefill).
+    pub judge_detail: Option<crate::backend::JudgeDetail>,
     status_req_at: Instant,
     // changes: Code-Puppy-reported diffs (fallback for non-git folders) + the
     // currently displayed diff.
@@ -350,6 +367,13 @@ impl Workspace {
             agent_tool_catalog: Vec::new(),
             agent_mcp_catalog: Vec::new(),
             agent_config_detail: None,
+            kennel_stats: None,
+            kennel_wings: None,
+            kennel_drawers: None,
+            kennel_generation: 0,
+            judges: None,
+            judges_generation: 0,
+            judge_detail: None,
             status_req_at: Instant::now(),
             diffs: Vec::new(),
             published_html: Vec::new(),

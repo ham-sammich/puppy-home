@@ -26,6 +26,7 @@ pub mod managers;
 pub mod managers_agents;
 pub mod managers_agents_wizard;
 pub mod managers_config;
+pub mod managers_judges;
 pub mod managers_mcp;
 pub mod managers_models;
 pub mod managers_skills;
@@ -34,6 +35,7 @@ pub mod markdown;
 pub mod perf_ui;
 pub mod remote;
 pub mod remote_ui;
+pub mod right_sidebar;
 pub mod terminal;
 pub mod theme_editor_ui;
 pub mod theme_ui;
@@ -191,6 +193,28 @@ pub struct RootView {
     show_all_chat: HashSet<WorkspaceId>,
     /// Workspaces with the explorer hidden (default = shown).
     tree_closed: HashSet<WorkspaceId>,
+    // -- right sidebar (kennel / goals / judges) --
+    /// Whole right sidebar hidden, app-wide (default = hidden; mirrors the
+    /// Explorer toggle but on the right edge). The kennel DB + judges.json
+    /// are global, so this state is global too.
+    pub(crate) right_closed: bool,
+    /// Right-sidebar section collapse (each independently foldable).
+    pub(crate) kennel_open: bool,
+    pub(crate) goals_open: bool,
+    pub(crate) judges_open: bool,
+    /// Kennel recall scope: selected wing names (empty = all wings).
+    pub(crate) kennel_wings_sel: HashSet<String>,
+    /// Whether `kennel_wings_sel` has been seeded with the focused workspace's
+    /// default scope (repo + agent + user) yet (one-shot on first wing load).
+    pub(crate) kennel_scope_seeded: bool,
+    /// The kennel search box (FTS5). `None` until the sidebar first opens.
+    pub(crate) kennel_search_input: Option<Entity<ChatInput>>,
+    /// The drawer whose full content is peeked open (by id), if any.
+    pub(crate) kennel_expanded: Option<i64>,
+    /// Staleness gate for the kennel/judges polling (drain-driven upkeep).
+    pub(crate) kennel_last_req: Option<Instant>,
+    /// (workspace, kennel generation) the sidebar last reconciled.
+    pub(crate) kennel_seen: Option<(WorkspaceId, u64)>,
     /// Explorer hidden-entry policy, app-wide (F4; default Show).
     hidden_mode: crate::session::HiddenMode,
     expanded_dirs: HashSet<(u64, PathBuf)>,
@@ -317,6 +341,12 @@ pub struct RootView {
     pub(crate) agent_delete_confirm: Option<String>,
     /// Agent wizard: the model dropdown is open.
     pub(crate) agent_model_menu: bool,
+    // -- judge manager (goal-mode verifiers) --
+    pub(crate) judge_wizard: Option<managers_judges::JudgeWizard>,
+    /// Judge pending delete confirmation (name).
+    pub(crate) judge_delete_confirm: Option<String>,
+    /// Judge builder: the model dropdown is open.
+    pub(crate) judge_model_menu: bool,
     /// The live Agent Creator chat session (an ephemeral workspace), shown
     /// in its own modal over the agents manager. `None` = not creating (F8).
     pub(crate) agent_creator_session: Option<WorkspaceId>,
@@ -447,6 +477,16 @@ impl RootView {
             expanded_entries: HashSet::new(),
             show_all_chat: HashSet::new(),
             tree_closed: HashSet::new(),
+            right_closed: true,
+            kennel_open: true,
+            goals_open: true,
+            judges_open: true,
+            kennel_wings_sel: HashSet::new(),
+            kennel_scope_seeded: false,
+            kennel_search_input: None,
+            kennel_expanded: None,
+            kennel_last_req: None,
+            kennel_seen: None,
             hidden_mode: saved.hidden_mode,
             expanded_dirs: HashSet::new(),
             pending_focus: None,
@@ -521,6 +561,9 @@ impl RootView {
             skills_wizard: None,
             agent_wizard: None,
             agent_model_menu: false,
+            judge_wizard: None,
+            judge_delete_confirm: None,
+            judge_model_menu: false,
             agent_creator_session: None,
             agent_delete_confirm: None,
             remote: None,
@@ -1108,6 +1151,7 @@ impl RootView {
                     root.maybe_probe_manager(cx);
                     root.maybe_probe_theme_remote(cx);
                     root.mgr_upkeep();
+                    root.sidebar_upkeep(cx);
                     // Browser overlay discipline outside the render path:
                     // hide it when the host window minimizes (renders stop,
                     // so render-upkeep can't do it; the wake ticker keeps
@@ -1857,6 +1901,19 @@ impl RootView {
                     })),
             )
             .child(
+                widgets::btn(t, "Judges")
+                    .id("tb-judges")
+                    .tooltip(widgets::text_tip(
+                        "Goal-mode verifiers (wiggum judges)".into(),
+                    ))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.dispatch(
+                            DashAction::Mgr(managers::MgrAction::Open(managers::MgrKind::Judges)),
+                            cx,
+                        )
+                    })),
+            )
+            .child(
                 widgets::btn(t, "Config")
                     .id("tb-config")
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -2114,6 +2171,18 @@ impl Render for RootView {
                     term_resize: self.term_resize.clone(),
                     dev_urls: &self.detected_dev_urls,
                     browser_available: self.browser.is_available(),
+                    right: right_sidebar::RightArgs {
+                        t,
+                        root: entity.clone(),
+                        ws,
+                        closed: self.right_closed,
+                        kennel_open: self.kennel_open,
+                        goals_open: self.goals_open,
+                        judges_open: self.judges_open,
+                        wings_sel: &self.kennel_wings_sel,
+                        expanded: self.kennel_expanded,
+                        search_input: self.kennel_search_input.as_ref(),
+                    },
                     logs_open: self.logs_open.contains(&id),
                     collapsed_thinking: &self.collapsed_thinking,
                     sessions: (self.sessions_open == Some(id)).then(|| {
@@ -2189,6 +2258,9 @@ impl Render for RootView {
                     agent_wizard: self.agent_wizard.as_ref(),
                     agent_delete_confirm: self.agent_delete_confirm.as_deref(),
                     agent_model_menu: self.agent_model_menu,
+                    judge_wizard: self.judge_wizard.as_ref(),
+                    judge_delete_confirm: self.judge_delete_confirm.as_deref(),
+                    judge_model_menu: self.judge_model_menu,
                     models_editor: self.models_editor,
                     cfg_entries: &self.cfg_entries,
                     cfg_edit_key: self.cfg_edit_key.as_deref(),

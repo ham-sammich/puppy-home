@@ -115,6 +115,8 @@ pub struct ChatArgs<'a> {
     /// Whether the browser plugin is installed (gates the editor's "Open in
     /// browser" button for HTML files).
     pub browser_available: bool,
+    /// The right sidebar (kennel / goals / judges) for this workspace.
+    pub right: crate::gpui_ui::right_sidebar::RightArgs<'a>,
 }
 
 /// The whole chat screen body (below the tab strip).
@@ -208,6 +210,7 @@ pub fn chat_screen(args: &ChatArgs) -> AnyElement {
                 .child(answer)
                 .child(dock),
         )
+        .child(crate::gpui_ui::right_sidebar::right_sidebar(&args.right))
         .children(args.sessions.as_ref().map(sessions::sessions_overlay))
         .child(crate::gpui_ui::gitpanel::creds_overlay(
             &crate::gpui_ui::gitpanel::CredsArgs {
@@ -330,6 +333,28 @@ fn ws_toolbar(args: &ChatArgs) -> AnyElement {
                 root.update(cx, |r, cx| r.dispatch(DashAction::ToggleLogs(id), cx));
             })
     };
+    // Right-sidebar toggle (kennel / goals / judges) — mirrors the Explorer
+    // toggle, but for the right edge.
+    let right_btn = {
+        let root = args.root.clone();
+        let on = !args.right.closed;
+        div()
+            .id(("ws-right", id.0))
+            .px_2()
+            .py_0p5()
+            .rounded(px(7.))
+            .text_size(px(11.5))
+            .text_color(if on { t.accent } else { t.weak })
+            .cursor_pointer()
+            .hover(|d| d.bg(t.well))
+            .tooltip(crate::gpui_ui::widgets::text_tip(
+                "Kennel \u{b7} Goals \u{b7} Judges sidebar".into(),
+            ))
+            .child("\u{25a5} Memory")
+            .on_click(move |_, _, cx| {
+                root.update(cx, |r, cx| r.dispatch(DashAction::ToggleRightSidebar, cx));
+            })
+    };
     div()
         .flex()
         .items_center()
@@ -402,6 +427,7 @@ fn ws_toolbar(args: &ChatArgs) -> AnyElement {
             &args.root,
         ))
         .child(div().flex_1())
+        .child(right_btn)
         .child(logs_btn)
         .into_any_element()
 }

@@ -239,6 +239,25 @@ impl Workspace {
             UiEvent::AgentConfigDetail(detail) => {
                 self.agent_config_detail = Some(detail);
             }
+            UiEvent::KennelStats(stats) => {
+                self.kennel_stats = Some(stats);
+                self.kennel_generation += 1;
+            }
+            UiEvent::KennelWings(items) => {
+                self.kennel_wings = Some(items);
+                self.kennel_generation += 1;
+            }
+            UiEvent::KennelDrawers(items) => {
+                self.kennel_drawers = Some(items);
+                self.kennel_generation += 1;
+            }
+            UiEvent::Judges(items) => {
+                self.judges = Some(items);
+                self.judges_generation += 1;
+            }
+            UiEvent::JudgeDetail(detail) => {
+                self.judge_detail = Some(detail);
+            }
             UiEvent::Exited { code } => {
                 self.ready = false;
                 self.running = false;

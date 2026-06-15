@@ -94,6 +94,19 @@ pub enum DashAction {
     ToggleDiff(WorkspaceId, usize),
     ShowOlder(WorkspaceId),
     ToggleTree(WorkspaceId),
+    /// Show/hide the whole right sidebar (kennel + goals + judges), app-wide
+    /// (mirrors the Explorer toggle, but for the right edge).
+    ToggleRightSidebar,
+    /// Collapse/expand one right-sidebar section (0=kennel, 1=goals, 2=judges).
+    ToggleRightSection(u8),
+    /// Toggle a kennel wing in/out of the recall scope, then re-fetch.
+    KennelWing(String),
+    /// Run the kennel search box's query (FTS5) over the selected wings.
+    KennelSearch,
+    /// Reset the kennel view to the most-recent drawers (clears the search).
+    KennelRecent,
+    /// Expand/peek (or collapse) a kennel drawer's full content by id.
+    KennelExpand(i64),
     /// Cycle the explorer's hidden-entry policy (Show -> Dim -> Hide, F4).
     CycleHidden,
     /// Open the floating tree context menu at a window-space cursor point.
@@ -420,6 +433,57 @@ impl RootView {
                 if !self.tree_closed.remove(&id) {
                     self.tree_closed.insert(id);
                 }
+            }
+            DashAction::ToggleRightSidebar => {
+                self.right_closed = !self.right_closed;
+                if !self.right_closed {
+                    // Opening: drop the staleness gate so the open section
+                    // fetches immediately on the next drain tick.
+                    self.kennel_last_req = None;
+                }
+            }
+            DashAction::ToggleRightSection(which) => {
+                match which {
+                    0 => self.kennel_open = !self.kennel_open,
+                    1 => self.goals_open = !self.goals_open,
+                    2 => self.judges_open = !self.judges_open,
+                    _ => {}
+                }
+                self.kennel_last_req = None;
+            }
+            DashAction::KennelWing(name) => {
+                if !self.kennel_wings_sel.remove(&name) {
+                    self.kennel_wings_sel.insert(name);
+                }
+                self.kennel_last_req = None;
+                self.refresh_kennel(cx);
+            }
+            DashAction::KennelSearch => {
+                let q = self
+                    .kennel_search_input
+                    .as_ref()
+                    .map(|i| i.read(cx).text().to_string())
+                    .unwrap_or_default();
+                let wings = self.kennel_selected_wings();
+                if q.trim().is_empty() {
+                    self.with_focused_backend(|b| b.kennel_recent(&wings, 60));
+                } else {
+                    self.with_focused_backend(|b| b.kennel_search(&q, &wings, 60));
+                }
+            }
+            DashAction::KennelRecent => {
+                if let Some(input) = &self.kennel_search_input {
+                    input.update(cx, |i, cx| i.set_text(String::new(), cx));
+                }
+                let wings = self.kennel_selected_wings();
+                self.with_focused_backend(|b| b.kennel_recent(&wings, 60));
+            }
+            DashAction::KennelExpand(id) => {
+                self.kennel_expanded = if self.kennel_expanded == Some(id) {
+                    None
+                } else {
+                    Some(id)
+                };
             }
             DashAction::CycleHidden => {
                 self.hidden_mode = self.hidden_mode.next();
@@ -1258,6 +1322,7 @@ impl RootView {
         let app_mgr = match text.to_lowercase().as_str() {
             "/skills" => Some(MgrKind::Skills),
             "/agents" => Some(MgrKind::Agents),
+            "/judges" => Some(MgrKind::Judges),
             "/mcp" | "/mcps" => Some(MgrKind::Mcp),
             "/models" => Some(MgrKind::Models),
             "/config" => Some(MgrKind::Config),

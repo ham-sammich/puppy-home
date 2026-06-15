@@ -773,9 +773,31 @@ Composer
       /dump_context, /clear — the set code_puppy actually ships.)
 
 More views
-- [ ] Goals/Judges: goal panel, judges' reviews panel, manage judges +
-      guided judge builder (like mcp/skills/agents wizards).
-- [ ] Kennel management/view (/kennel).
+- [~] Goals/Judges (right sidebar + Judges manager — landed 2026-06-15):
+      - [x] Judge management surface: roster (name, model pill, enabled
+            toggle, prompt preview), enable/disable toggle, delete-with-
+            confirm, and a guided builder (name validated, model picker
+            reusing the catalog, prompt multiline defaulting to the
+            standard judge prompt, enabled). Toolbar "Judges" button +
+            /judges command. Backed by sidecar list/get/save/delete/
+            toggle_judge ops over wiggum's judge_config.py.
+      - [x] JUDGES sidebar section reads the same list_judges feed +
+            a "Manage" link opening the manager.
+      - [ ] GOALS: a stub section ("Goal mode HUD — coming soon") — the
+            goal panel HUD is wired by a later task.
+      - [ ] Real-time judging stream (judges' reviews panel) — still
+            open; decision-gated, a separate task.
+- [x] Kennel management/view (right sidebar KENNEL section — landed
+      2026-06-15): read-only browser over the global kennel DB. Wing
+      list with drawer counts (focused repo/agent/user wings default-
+      selected), FTS5 search box, bounded scrollable drawer list (role,
+      relative ts, agent badge, content preview), click-to-peek full
+      content (mono, scrollable, bounded). Backed by sidecar kennel_stats
+      / kennel_list_wings / kennel_recent / kennel_search ops.
+- [x] Right collapsible sidebar shell (landed 2026-06-15): mirrors the
+      left Explorer collapse (toggle + rail, reduce-motion respected),
+      docked to the right edge, holding three individually-collapsible
+      sections (Kennel / Goals / Judges) + a workspace-toolbar toggle.
 - [ ] Ollama management (/ollama-setup).
 - [ ] Code-puppy plugins management (/plugins).
 - [ ] Wiggum view (/wiggum + related commands).
