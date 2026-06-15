@@ -211,6 +211,10 @@ pub struct RootView {
     pub(crate) kennel_search_input: Option<Entity<ChatInput>>,
     /// The drawer whose full content is peeked open (by id), if any.
     pub(crate) kennel_expanded: Option<i64>,
+    /// The GOALS HUD start input. `None` until the sidebar first opens.
+    pub(crate) goal_input: Option<Entity<ChatInput>>,
+    /// Judge verdict notes that are expanded (keyed "iteration:judge_name").
+    pub(crate) goal_notes_open: HashSet<String>,
     /// Staleness gate for the kennel/judges polling (drain-driven upkeep).
     pub(crate) kennel_last_req: Option<Instant>,
     /// (workspace, kennel generation) the sidebar last reconciled.
@@ -485,6 +489,8 @@ impl RootView {
             kennel_scope_seeded: false,
             kennel_search_input: None,
             kennel_expanded: None,
+            goal_input: None,
+            goal_notes_open: HashSet::new(),
             kennel_last_req: None,
             kennel_seen: None,
             hidden_mode: saved.hidden_mode,
@@ -2182,6 +2188,9 @@ impl Render for RootView {
                         wings_sel: &self.kennel_wings_sel,
                         expanded: self.kennel_expanded,
                         search_input: self.kennel_search_input.as_ref(),
+                        goal_input: self.goal_input.as_ref(),
+                        goal_notes_open: &self.goal_notes_open,
+                        reduce_motion: self.reduce_motion,
                     },
                     logs_open: self.logs_open.contains(&id),
                     collapsed_thinking: &self.collapsed_thinking,

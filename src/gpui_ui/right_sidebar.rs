@@ -97,20 +97,30 @@ impl RootView {
             .collect()
     }
 
-    /// Lazily create the kennel search input (entities can't spawn in render).
-    fn ensure_kennel_input(&mut self, cx: &mut gpui::Context<Self>) {
-        if self.kennel_search_input.is_some() {
-            return;
+    /// Lazily create the sidebar inputs (entities can't spawn in render).
+    fn ensure_sidebar_inputs(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.kennel_search_input.is_none() {
+            let entity = cx.new(|cx| ChatInput::new("\u{1f50e} search the kennel\u{2026}", cx));
+            let sub = cx.subscribe(&entity, |this, _, ev: &crate::gpui_ui::InputEvent, cx| {
+                if matches!(ev, crate::gpui_ui::InputEvent::Submitted) {
+                    this.dispatch(DashAction::KennelSearch, cx);
+                }
+                cx.notify();
+            });
+            self.kennel_search_input = Some(entity);
+            self.chat_subs.push(sub);
         }
-        let entity = cx.new(|cx| ChatInput::new("\u{1f50e} search the kennel\u{2026}", cx));
-        let sub = cx.subscribe(&entity, |this, _, ev: &crate::gpui_ui::InputEvent, cx| {
-            if matches!(ev, crate::gpui_ui::InputEvent::Submitted) {
-                this.dispatch(DashAction::KennelSearch, cx);
-            }
-            cx.notify();
-        });
-        self.kennel_search_input = Some(entity);
-        self.chat_subs.push(sub);
+        if self.goal_input.is_none() {
+            let entity = cx.new(|cx| ChatInput::new("describe the goal\u{2026}", cx));
+            let sub = cx.subscribe(&entity, |this, _, ev: &crate::gpui_ui::InputEvent, cx| {
+                if matches!(ev, crate::gpui_ui::InputEvent::Submitted) {
+                    this.dispatch(DashAction::GoalStart, cx);
+                }
+                cx.notify();
+            });
+            self.goal_input = Some(entity);
+            self.chat_subs.push(sub);
+        }
     }
 
     /// Drain-tick upkeep: when the right sidebar is open, keep its inputs alive
@@ -124,7 +134,7 @@ impl RootView {
         if self.right_closed && self.manager_open != Some(MgrKind::Judges) {
             return;
         }
-        self.ensure_kennel_input(cx);
+        self.ensure_sidebar_inputs(cx);
 
         let Some(ws_id) = self.focused_ws_id() else {
             return;
@@ -189,6 +199,9 @@ pub struct RightArgs<'a> {
     pub wings_sel: &'a HashSet<String>,
     pub expanded: Option<i64>,
     pub search_input: Option<&'a Entity<ChatInput>>,
+    pub goal_input: Option<&'a Entity<ChatInput>>,
+    pub goal_notes_open: &'a HashSet<String>,
+    pub reduce_motion: bool,
 }
 
 /// The right sidebar panel when open, or a slim rail with the toggle when not.
@@ -504,25 +517,164 @@ fn drawer_row(args: &RightArgs, i: usize, d: &crate::backend::KennelDrawer) -> A
         .into_any_element()
 }
 
-// --- GOALS (stub) ----------------------------------------------------------
+// --- GOALS (live HUD) ------------------------------------------------------
 
 fn goals_section(args: &RightArgs) -> AnyElement {
     let t = args.t;
-    let header = section_header(args, 1, "GOALS", args.goals_open, None);
+    let g = &args.ws.goal;
+    // A compact state pill in the header (idle / running / complete / stopped).
+    let (pill_text, pill_color) = goal_pill(g, &t);
+    let header = section_header(
+        args,
+        1,
+        "GOALS",
+        args.goals_open,
+        Some(
+            div()
+                .px_1()
+                .rounded(px(4.))
+                .bg(alpha(pill_color, 0.16))
+                .text_size(px(8.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(pill_color)
+                .child(pill_text)
+                .into_any_element(),
+        ),
+    );
     let mut col = div().flex().flex_col().gap_1().child(header);
-    if args.goals_open {
+    if !args.goals_open {
+        return col.into_any_element();
+    }
+
+    if g.is_active() {
+        // Active: prompt + loop N/max + latest remediation + Stop.
         col = col.child(
             div()
+                .flex()
+                .flex_col()
+                .gap_1()
                 .px_2()
-                .py_2()
+                .py_1p5()
                 .rounded(px(7.))
                 .bg(t.well)
-                .text_size(px(10.5))
-                .text_color(t.dim)
-                .child("Goal mode HUD \u{2014} coming soon"),
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_size(px(9.5))
+                                .text_color(t.dim)
+                                .child(format!("loop {}/{}", g.loop_count.max(1), g.max)),
+                        )
+                        .child(stop_btn(args)),
+                )
+                .child(
+                    div()
+                        .text_size(px(10.5))
+                        .text_color(t.text)
+                        .child(g.prompt.clone()),
+                )
+                .children((!g.remediation.is_empty()).then(|| {
+                    div()
+                        .id("goal-remediation")
+                        .max_h(px(120.))
+                        .overflow_y_scroll()
+                        .px_1p5()
+                        .py_1()
+                        .rounded(px(6.))
+                        .bg(t.card)
+                        .font_family("JetBrains Mono")
+                        .text_size(px(9.5))
+                        .text_color(t.weak)
+                        .child(g.remediation.clone())
+                })),
+        );
+    } else {
+        // Idle / finished: show the last result, then the start control.
+        if let Some(done) = &g.done {
+            col = col.child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .rounded(px(7.))
+                    .bg(t.well)
+                    .text_size(px(10.))
+                    .text_color(t.weak)
+                    .child(format!(
+                        "{} after {} loop(s) \u{b7} {}",
+                        if done.completed { "completed" } else { "ended" },
+                        done.loops,
+                        done.reason
+                    )),
+            );
+        }
+        col = col.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .flex_1()
+                        .px_1p5()
+                        .py_0p5()
+                        .rounded(px(6.))
+                        .bg(t.well)
+                        .border_1()
+                        .border_color(t.line_soft)
+                        .text_size(px(10.5))
+                        .children(args.goal_input.cloned()),
+                )
+                .child({
+                    let root = args.root.clone();
+                    widgets::btn(&t, "Start goal")
+                        .id("goal-start")
+                        .on_click(move |_, _, cx| {
+                            root.update(cx, |r, cx| r.dispatch(DashAction::GoalStart, cx));
+                        })
+                }),
         );
     }
     col.into_any_element()
+}
+
+fn stop_btn(args: &RightArgs) -> AnyElement {
+    let t = args.t;
+    let root = args.root.clone();
+    div()
+        .id("goal-stop")
+        .px_1p5()
+        .py_0p5()
+        .rounded(px(5.))
+        .border_1()
+        .border_color(alpha(t.error, 0.7))
+        .text_size(px(9.5))
+        .text_color(t.error)
+        .cursor_pointer()
+        .hover(|d| d.bg(t.well))
+        .child("\u{25a0} Stop")
+        .on_click(move |_, _, cx| {
+            root.update(cx, |r, cx| r.dispatch(DashAction::GoalStop, cx));
+        })
+        .into_any_element()
+}
+
+/// The GOALS header pill: idle / running / complete / stopped + its color.
+fn goal_pill(g: &crate::workspace::goal::GoalRun, t: &Tokens) -> (String, gpui::Rgba) {
+    if g.is_active() {
+        ("running".into(), t.accent)
+    } else if let Some(done) = &g.done {
+        if done.completed {
+            ("complete".into(), t.run)
+        } else {
+            ("stopped".into(), t.dim)
+        }
+    } else {
+        ("idle".into(), t.dim)
+    }
 }
 
 // --- JUDGES ----------------------------------------------------------------
@@ -556,6 +708,11 @@ fn judges_section(args: &RightArgs) -> AnyElement {
     if !args.judges_open {
         return col.into_any_element();
     }
+    // During (or after) a goal run, the real-time judging view takes over —
+    // every enabled judge as a live row resolving pending->running->verdict.
+    if ws.goal.has_activity() {
+        return col.child(judging_view(args)).into_any_element();
+    }
     match &ws.judges {
         None => col = col.child(hint(&t, "loading judges\u{2026}")),
         Some(j) if j.is_empty() => {
@@ -570,6 +727,168 @@ fn judges_section(args: &RightArgs) -> AnyElement {
         }
     }
     col.into_any_element()
+}
+
+/// The real-time judging view: the current round's live rows + a bounded
+/// scrollback of prior rounds' verdicts.
+fn judging_view(args: &RightArgs) -> AnyElement {
+    let t = args.t;
+    let g = &args.ws.goal;
+    let mut col = div().flex().flex_col().gap_1();
+
+    // Current round (live). Header shows the iteration.
+    if !g.judges.is_empty() {
+        col = col.child(div().text_size(px(9.)).text_color(t.dim).child(format!(
+            "iteration {}/{}",
+            g.iteration.max(1),
+            g.max
+        )));
+        let mut rows = div().flex().flex_col().gap_0p5();
+        for (i, row) in g.judges.iter().enumerate() {
+            rows = rows.child(live_judge_row(args, g.iteration, i, row));
+        }
+        col = col.child(rows);
+    }
+
+    // Prior rounds (newest first), bounded by GoalRun's MAX_ROUNDS.
+    for round in g.rounds.iter().rev() {
+        let verdict = if round.all_complete {
+            ("all passed", t.run)
+        } else {
+            ("incomplete", t.paused)
+        };
+        col = col.child(
+            div()
+                .mt_0p5()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(8.5))
+                        .text_color(t.dim)
+                        .child(format!("round {}", round.iteration)),
+                )
+                .child(
+                    div()
+                        .text_size(px(8.5))
+                        .text_color(verdict.1)
+                        .child(verdict.0),
+                ),
+        );
+        let mut rows = div().flex().flex_col().gap_0p5();
+        for (i, row) in round.verdicts.iter().enumerate() {
+            rows = rows.child(live_judge_row(args, round.iteration, i, row));
+        }
+        col = col.child(rows);
+    }
+    col.into_any_element()
+}
+
+/// One live judge row: status dot/label + name + model + expandable notes.
+fn live_judge_row(
+    args: &RightArgs,
+    iteration: u64,
+    i: usize,
+    row: &crate::workspace::goal::JudgeLive,
+) -> AnyElement {
+    let t = args.t;
+    let color = judge_status_color(row.status, &t);
+    let key = format!("{iteration}:{}", row.name);
+    let open = args.goal_notes_open.contains(&key);
+    let has_notes = !row.notes.trim().is_empty();
+    let running = row.status.is_running();
+
+    let head = div()
+        .id(("judge-live", (iteration * 97 + i as u64)))
+        .flex()
+        .items_center()
+        .gap_1p5()
+        .px_1p5()
+        .py_0p5()
+        .rounded(px(5.))
+        .when(has_notes, |d| d.cursor_pointer().hover(|d| d.bg(t.well)))
+        // Running rows pulse (reduce-motion collapses to a static halo).
+        .child(widgets::status_dot(
+            iteration * 97 + i as u64,
+            color,
+            running,
+            args.reduce_motion,
+        ))
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .overflow_hidden()
+                .text_ellipsis()
+                .text_size(px(10.5))
+                .text_color(t.text)
+                .child(row.name.clone()),
+        )
+        .children((!row.model.is_empty()).then(|| {
+            div()
+                .px_1()
+                .rounded(px(4.))
+                .bg(t.well)
+                .font_family("JetBrains Mono")
+                .text_size(px(8.))
+                .text_color(t.weak)
+                .child(short_model(&row.model))
+        }))
+        .child(
+            div()
+                .text_size(px(8.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(color)
+                .child(row.status.label()),
+        );
+    let head = if has_notes {
+        let root = args.root.clone();
+        head.on_click(move |_, _, cx| {
+            root.update(cx, |r, cx| {
+                r.dispatch(DashAction::GoalNotes(key.clone()), cx)
+            });
+        })
+    } else {
+        head
+    };
+
+    let mut wrap = div().flex().flex_col().child(head);
+    if open && has_notes {
+        wrap = wrap.child(
+            div()
+                .id(("judge-notes", iteration * 97 + i as u64))
+                .max_h(px(160.))
+                .overflow_y_scroll()
+                .mx_1p5()
+                .mb_0p5()
+                .px_1p5()
+                .py_1()
+                .rounded(px(6.))
+                .bg(t.well)
+                .font_family("JetBrains Mono")
+                .text_size(px(9.5))
+                .text_color(t.weak)
+                .child(row.notes.clone()),
+        );
+    }
+    wrap.into_any_element()
+}
+
+fn judge_status_color(status: crate::workspace::goal::JudgeStatus, t: &Tokens) -> gpui::Rgba {
+    use crate::workspace::goal::JudgeStatus;
+    match status {
+        JudgeStatus::Pending | JudgeStatus::Running => t.think,
+        JudgeStatus::Pass => t.run,
+        JudgeStatus::Fail => t.error,
+        JudgeStatus::Abstain => t.dim,
+    }
+}
+
+/// Shorten a model id for the narrow pill (keep the last segment).
+fn short_model(model: &str) -> String {
+    model.rsplit(['/', '-']).next().unwrap_or(model).to_string()
 }
 
 fn judge_row(args: &RightArgs, i: usize, j: &crate::backend::JudgeInfo) -> AnyElement {

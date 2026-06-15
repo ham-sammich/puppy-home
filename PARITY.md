@@ -773,7 +773,8 @@ Composer
       /dump_context, /clear — the set code_puppy actually ships.)
 
 More views
-- [~] Goals/Judges (right sidebar + Judges manager — landed 2026-06-15):
+- [x] Goals/Judges (right sidebar + Judges manager — judging stream
+      landed 2026-06-15):
       - [x] Judge management surface: roster (name, model pill, enabled
             toggle, prompt preview), enable/disable toggle, delete-with-
             confirm, and a guided builder (name validated, model picker
@@ -783,10 +784,27 @@ More views
             toggle_judge ops over wiggum's judge_config.py.
       - [x] JUDGES sidebar section reads the same list_judges feed +
             a "Manage" link opening the manager.
-      - [ ] GOALS: a stub section ("Goal mode HUD — coming soon") — the
-            goal panel HUD is wired by a later task.
-      - [ ] Real-time judging stream (judges' reviews panel) — still
-            open; decision-gated, a separate task.
+      - [x] GOALS live HUD (replaces the stub): active goal prompt,
+            loop N/max, latest remediation notes, a state pill
+            (idle/running/complete/stopped), a Start input + Stop button.
+            /goal <prompt> typed in chat drives the same HUD (CLI parity).
+      - [x] REAL-TIME JUDGING stream: during a goal run every enabled
+            judge shows as a live row (name, model, status) resolving
+            pending -> running -> PASS/FAIL/ABSTAIN as judge_verdict
+            events arrive, with expandable notes, the current iteration,
+            and a bounded scrollback of prior rounds. Status colors +
+            a reduce-motion-gated running pulse.
+      - CAVEAT (loop emulation): code_puppy only runs judges via its CLI
+            interactive_turn_end callback (which the sidecar's run_with_mcp
+            path never fires) and prints verdicts to raw stdout. So the
+            SIDECAR drives the loop itself and emits structured events,
+            REUSING wiggum's own functions for all judge behavior
+            (judge_goal, get_enabled_judges_or_default, the remediation
+            formatter, the goal_max_iterations cap, WiggumState). Only the
+            driver + a per-judge streaming fan-out are sidecar-side.
+            Per-judge running granularity is started->verdict; live
+            per-judge TOOL activity stays suppressed (subagent_context)
+            and is a follow-up if wanted.
 - [x] Kennel management/view (right sidebar KENNEL section — landed
       2026-06-15): read-only browser over the global kennel DB. Wing
       list with drawer counts (focused repo/agent/user wings default-

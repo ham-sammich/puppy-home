@@ -107,6 +107,12 @@ pub enum DashAction {
     KennelRecent,
     /// Expand/peek (or collapse) a kennel drawer's full content by id.
     KennelExpand(i64),
+    /// Start goal mode from the GOALS HUD input (sends goal_start).
+    GoalStart,
+    /// Stop the running goal loop (sends goal_stop).
+    GoalStop,
+    /// Toggle a judge verdict's notes open/closed (keyed "iteration:name").
+    GoalNotes(String),
     /// Cycle the explorer's hidden-entry policy (Show -> Dim -> Hide, F4).
     CycleHidden,
     /// Open the floating tree context menu at a window-space cursor point.
@@ -484,6 +490,32 @@ impl RootView {
                 } else {
                     Some(id)
                 };
+            }
+            DashAction::GoalStart => {
+                let prompt = self
+                    .goal_input
+                    .as_ref()
+                    .map(|i| i.read(cx).text().trim().to_string())
+                    .unwrap_or_default();
+                if prompt.is_empty() {
+                    return;
+                }
+                self.with_focused_backend(|b| b.goal_start(&prompt));
+                if let Some(input) = &self.goal_input {
+                    input.update(cx, |i, cx| i.set_text(String::new(), cx));
+                }
+                let accent = self.tokens.accent;
+                self.toast("Goal started \u{1f3af}".into(), accent);
+            }
+            DashAction::GoalStop => {
+                self.with_focused_backend(|b| b.goal_stop());
+                let accent = self.tokens.accent;
+                self.toast("Goal stopped".into(), accent);
+            }
+            DashAction::GoalNotes(key) => {
+                if !self.goal_notes_open.remove(&key) {
+                    self.goal_notes_open.insert(key);
+                }
             }
             DashAction::CycleHidden => {
                 self.hidden_mode = self.hidden_mode.next();
@@ -1331,6 +1363,24 @@ impl RootView {
         if let Some(kind) = app_mgr {
             input.update(cx, |i, cx| i.clear(cx));
             self.dispatch(DashAction::Mgr(MgrAction::Open(kind)), cx);
+            return;
+        }
+        // CLI parity: `/goal <prompt>` starts goal mode through the sidecar's
+        // emulated loop (code_puppy's own /goal needs its CLI turn-end
+        // callback, which our run path never fires) — reflected in the HUD.
+        if text == "/goal" || text.starts_with("/goal ") {
+            let prompt = text["/goal".len()..].trim();
+            if prompt.is_empty() {
+                self.toast("Usage: /goal <prompt>".into(), self.tokens.accent);
+            } else {
+                if let Some(backend) = self.supervisor.get(id).and_then(|w| w.backend.as_ref()) {
+                    backend.goal_start(prompt);
+                }
+                self.right_closed = false;
+                self.goals_open = true;
+                self.toast("Goal started \u{1f3af}".into(), self.tokens.accent);
+            }
+            input.update(cx, |i, cx| i.clear(cx));
             return;
         }
         let accent = self.tokens.accent;
