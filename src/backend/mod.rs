@@ -145,6 +145,16 @@ pub enum UiEvent {
     },
     /// One agent's full config (answer to `get_agent_config`).
     AgentConfigDetail(AgentConfigDetail),
+    /// Kennel-wide totals (answer to `kennel_stats`).
+    KennelStats(KennelStats),
+    /// Every kennel wing + drawer count (answer to `kennel_list_wings`).
+    KennelWings(Vec<KennelWing>),
+    /// A page of remembered drawers (answer to `kennel_recent`/`kennel_search`).
+    KennelDrawers(Vec<KennelDrawer>),
+    /// The configured judge roster (answer to `list_judges`).
+    Judges(Vec<JudgeInfo>),
+    /// One judge's full config (answer to `get_judge`).
+    JudgeDetail(JudgeDetail),
     /// The sidecar process exited.
     Exited { code: Option<i32> },
 }
@@ -342,6 +352,36 @@ enum Wire {
         #[serde(default)]
         content: String,
     },
+    KennelStats {
+        #[serde(default)]
+        drawers: u64,
+        #[serde(default)]
+        wings: u64,
+        #[serde(default)]
+        bytes: u64,
+    },
+    KennelWings {
+        #[serde(default)]
+        items: Vec<KennelWing>,
+    },
+    KennelDrawers {
+        #[serde(default)]
+        items: Vec<KennelDrawer>,
+    },
+    Judges {
+        #[serde(default)]
+        items: Vec<JudgeInfo>,
+    },
+    JudgeDetail {
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        model: String,
+        #[serde(default)]
+        prompt: String,
+        #[serde(default)]
+        enabled: bool,
+    },
 }
 
 impl From<Wire> for UiEvent {
@@ -488,6 +528,29 @@ impl From<Wire> for UiEvent {
                 source,
                 path,
                 content,
+            }),
+            Wire::KennelStats {
+                drawers,
+                wings,
+                bytes,
+            } => UiEvent::KennelStats(KennelStats {
+                drawers,
+                wings,
+                bytes,
+            }),
+            Wire::KennelWings { items } => UiEvent::KennelWings(items),
+            Wire::KennelDrawers { items } => UiEvent::KennelDrawers(items),
+            Wire::Judges { items } => UiEvent::Judges(items),
+            Wire::JudgeDetail {
+                name,
+                model,
+                prompt,
+                enabled,
+            } => UiEvent::JudgeDetail(JudgeDetail {
+                name,
+                model,
+                prompt,
+                enabled,
             }),
         }
     }
@@ -921,6 +984,51 @@ impl CodePuppy {
     /// Clone an agent into an editable user JSON copy; the sidecar re-lists.
     pub fn clone_agent_config(&self, name: &str) {
         self.write(protocol::clone_agent_config(name));
+    }
+
+    /// Ask for kennel-wide totals (`KennelStats` event).
+    pub fn kennel_stats(&self) {
+        self.write(protocol::kennel_stats());
+    }
+
+    /// Ask for every wing + drawer count (`KennelWings` event).
+    pub fn kennel_list_wings(&self) {
+        self.write(protocol::kennel_list_wings());
+    }
+
+    /// Ask for the most recent drawers across `wings` (`KennelDrawers` event).
+    pub fn kennel_recent(&self, wings: &[String], limit: u64) {
+        self.write(protocol::kennel_recent(wings, limit));
+    }
+
+    /// FTS5 search across `wings` (`KennelDrawers` event).
+    pub fn kennel_search(&self, query: &str, wings: &[String], limit: u64) {
+        self.write(protocol::kennel_search(query, wings, limit));
+    }
+
+    /// Ask for the judge roster (`Judges` event).
+    pub fn list_judges(&self) {
+        self.write(protocol::list_judges());
+    }
+
+    /// Ask for one judge's full config (`JudgeDetail` event).
+    pub fn get_judge(&self, name: &str) {
+        self.write(protocol::get_judge(name));
+    }
+
+    /// Create or update a judge; the sidecar re-lists (or emits `Error`).
+    pub fn save_judge(&self, draft: &JudgeDraft) {
+        self.write(protocol::save_judge(draft));
+    }
+
+    /// Delete a judge; the sidecar re-lists (or emits `Error`).
+    pub fn delete_judge(&self, name: &str) {
+        self.write(protocol::delete_judge(name));
+    }
+
+    /// Flip a judge's enabled flag; the sidecar re-lists.
+    pub fn toggle_judge(&self, name: &str) {
+        self.write(protocol::toggle_judge(name));
     }
 }
 
@@ -1429,6 +1537,82 @@ mod tests {
                 assert!(d.content.starts_with("---"));
             }
             other => panic!("expected SkillDetail, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kennel_stats_event() {
+        match decode(r#"{"event":"kennel_stats","drawers":123,"wings":3,"bytes":557056}"#) {
+            UiEvent::KennelStats(s) => {
+                assert_eq!(s.drawers, 123);
+                assert_eq!(s.wings, 3);
+                assert_eq!(s.bytes, 557056);
+            }
+            other => panic!("expected KennelStats, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kennel_wings_event() {
+        match decode(
+            r#"{"event":"kennel_wings","items":[{"name":"repo:/x","count":118},{"name":"user:default"}]}"#,
+        ) {
+            UiEvent::KennelWings(items) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(items[0].name, "repo:/x");
+                assert_eq!(items[0].count, 118);
+                assert_eq!(items[1].name, "user:default");
+                assert_eq!(items[1].count, 0); // defaulted
+            }
+            other => panic!("expected KennelWings, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kennel_drawers_event_lifts_metadata() {
+        match decode(
+            r#"{"event":"kennel_drawers","items":[{"id":7,"role":"note","content":"hi","ts":"2026-06-15T17:19:57+00:00","session_id":"s1","agent":"code-puppy","cwd":"/x"}]}"#,
+        ) {
+            UiEvent::KennelDrawers(items) => {
+                assert_eq!(items.len(), 1);
+                let d = &items[0];
+                assert_eq!(d.id, 7);
+                assert_eq!(d.role, "note");
+                assert_eq!(d.content, "hi");
+                assert_eq!(d.agent, "code-puppy");
+                assert_eq!(d.cwd, "/x");
+            }
+            other => panic!("expected KennelDrawers, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn judges_event() {
+        match decode(
+            r#"{"event":"judges","items":[{"name":"tests-pass","model":"gpt-5","prompt":"check","enabled":true}]}"#,
+        ) {
+            UiEvent::Judges(items) => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].name, "tests-pass");
+                assert_eq!(items[0].model, "gpt-5");
+                assert!(items[0].enabled);
+            }
+            other => panic!("expected Judges, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn judge_detail_event() {
+        match decode(
+            r#"{"event":"judge_detail","name":"docs","model":"gpt-5","prompt":"verify docs","enabled":false}"#,
+        ) {
+            UiEvent::JudgeDetail(d) => {
+                assert_eq!(d.name, "docs");
+                assert_eq!(d.model, "gpt-5");
+                assert_eq!(d.prompt, "verify docs");
+                assert!(!d.enabled);
+            }
+            other => panic!("expected JudgeDetail, got {other:?}"),
         }
     }
 

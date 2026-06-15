@@ -208,6 +208,84 @@ pub struct AgentConfigDraft {
     pub scope: String,
 }
 
+/// Kennel-wide totals (answer to `kennel_stats`): drawer + wing counts and
+/// the on-disk SQLite size in bytes. All global — the kennel DB is shared.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct KennelStats {
+    #[serde(default)]
+    pub drawers: u64,
+    #[serde(default)]
+    pub wings: u64,
+    #[serde(default)]
+    pub bytes: u64,
+}
+
+/// One kennel wing with its drawer count (answer to `kennel_list_wings`).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct KennelWing {
+    pub name: String,
+    #[serde(default)]
+    pub count: u64,
+}
+
+/// A single remembered drawer (answer rows of `kennel_recent`/`kennel_search`).
+/// `agent`/`cwd` are lifted from the drawer metadata (mirrors
+/// `tools._drawer_to_model`). Read-only in the GUI.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct KennelDrawer {
+    pub id: i64,
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub ts: String,
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub agent: String,
+    #[serde(default)]
+    pub cwd: String,
+}
+
+/// One configured goal-mode judge (answer rows of `list_judges`).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct JudgeInfo {
+    pub name: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// One judge's full config (answer to `get_judge`). Same shape as `JudgeInfo`
+/// today, kept distinct so the detail event can grow independently.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct JudgeDetail {
+    pub name: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// A draft the judge builder sends to `save_judge`. `is_new` adds a judge;
+/// otherwise `name` is updated in place (`new_name` renames). An empty prompt
+/// is replaced with the standard goal-judge prompt by the sidecar.
+#[derive(Debug, Clone, Default)]
+pub struct JudgeDraft {
+    pub name: String,
+    pub new_name: String,
+    pub model: String,
+    pub prompt: String,
+    pub enabled: bool,
+    pub is_new: bool,
+}
+
 /// A concurrent sub-agent Code Puppy spawned via `invoke_agent` (dashboard row).
 #[derive(Debug, Clone, Deserialize)]
 pub struct SubAgentInfo {

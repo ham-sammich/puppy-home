@@ -30,6 +30,16 @@ Protocol (newline-delimited JSON, UTF-8):
     {"op": "set_skill_enabled", "name": "...", "enabled": true}
     {"op": "save_skill", "name": "...", "description": "...", "content": "...",
         "scope": "user"|"project"}                   # create/overwrite SKILL.md
+    {"op": "kennel_stats"}                           # -> kennel_stats event
+    {"op": "kennel_list_wings"}                      # -> kennel_wings event
+    {"op": "kennel_recent", "wings": [...]?, "limit": <int>}   # -> kennel_drawers
+    {"op": "kennel_search", "query": "...", "wings": [...]?, "limit": <int>}  # -> kennel_drawers
+    {"op": "list_judges"}                            # -> judges event
+    {"op": "get_judge", "name": "..."}               # -> judge_detail event
+    {"op": "save_judge", "name": "...", "new_name": "..."?, "model": "...",
+        "prompt": "...", "enabled": true, "is_new": bool}   # -> judges
+    {"op": "delete_judge", "name": "..."}            # -> judges
+    {"op": "toggle_judge", "name": "..."}            # -> judges
     {"op": "fs_list_dir", "id": <int>, "path": "..."}  # -> fs_result (remote file tree)
 {"op": "fs_read_file", "id": <int>, "path": "..."} # -> fs_result (remote editor)
 {"op": "git_run", "id": <int>, "root": "...", "args": [...]}  # -> git_result (remote git)
@@ -1453,6 +1463,208 @@ class Bridge:
             log(traceback.format_exc())
         self.emit_agent_configs()
 
+    # --- Puppy Kennel (memory browser; read-only) ---------------------------
+
+    @staticmethod
+    def _drawer_payload(d: Any) -> dict:
+        """One kennel Drawer -> wire dict (mirrors tools._drawer_to_model).
+
+        ``agent`` and ``cwd`` are lifted out of the drawer's metadata blob so
+        the GUI can show an agent badge / origin without a second lookup.
+        """
+        meta = getattr(d, "metadata", None) or {}
+        return {
+            "id": d.id,
+            "role": d.role or "",
+            "content": d.content,
+            "ts": d.ts,
+            "session_id": d.session_id or "",
+            "agent": meta.get("agent") or "",
+            "cwd": meta.get("cwd") or "",
+        }
+
+    def emit_kennel_stats(self) -> None:
+        """Kennel-wide totals: drawer count, wing count, db size in bytes."""
+        drawers = 0
+        wings = 0
+        nbytes = 0
+        try:
+            from code_puppy.plugins.puppy_kennel import kennel
+            from code_puppy.plugins.puppy_kennel.config import DB_PATH
+            drawers = kennel.count_drawers()
+            wings = len(kennel.list_wings())
+            try:
+                nbytes = int(DB_PATH.stat().st_size)
+            except OSError:
+                nbytes = 0
+        except Exception:
+            log("kennel_stats failed:\n" + traceback.format_exc())
+        send({"event": "kennel_stats", "drawers": drawers,
+              "wings": wings, "bytes": nbytes})
+
+    def emit_kennel_wings(self) -> None:
+        """Every wing with its drawer count (name + count)."""
+        items = []
+        try:
+            from code_puppy.plugins.puppy_kennel import kennel
+            for name, count in kennel.wings_with_counts():
+                items.append({"name": name, "count": int(count)})
+        except Exception:
+            log("kennel_list_wings failed:\n" + traceback.format_exc())
+        send({"event": "kennel_wings", "items": items})
+
+    @staticmethod
+    def _kennel_wings_arg(cmd: dict) -> list[str] | None:
+        """Normalize an optional ``wings`` list; None means all wings."""
+        raw = cmd.get("wings")
+        if not isinstance(raw, list) or not raw:
+            return None
+        wings = [str(w) for w in raw if str(w).strip()]
+        return wings or None
+
+    def emit_kennel_recent(self, cmd: dict) -> None:
+        """Most recent drawers across the requested wings (kennel_drawers)."""
+        items = []
+        try:
+            from code_puppy.plugins.puppy_kennel import kennel
+            wings = self._kennel_wings_arg(cmd)
+            limit = max(1, min(int(cmd.get("limit") or 50), 500))
+            hits = kennel.recent_drawers_multi(wings, limit)
+            items = [self._drawer_payload(d) for d in hits]
+        except Exception:
+            log("kennel_recent failed:\n" + traceback.format_exc())
+        send({"event": "kennel_drawers", "items": items})
+
+    def emit_kennel_search(self, cmd: dict) -> None:
+        """FTS5 BM25 search across the requested wings (kennel_drawers)."""
+        items = []
+        try:
+            from code_puppy.plugins.puppy_kennel import kennel
+            query = str(cmd.get("query") or "")
+            wings = self._kennel_wings_arg(cmd)
+            limit = max(1, min(int(cmd.get("limit") or 50), 500))
+            hits = kennel.search_drawers_multi(query, wings, limit)
+            items = [self._drawer_payload(d) for d in hits]
+        except Exception:
+            log("kennel_search failed:\n" + traceback.format_exc())
+        send({"event": "kennel_drawers", "items": items})
+
+    # --- Wiggum judges (goal-mode verifiers; full CRUD) ---------------------
+
+    def emit_judges(self) -> None:
+        """List configured judges (name, model, prompt, enabled)."""
+        items = []
+        try:
+            from code_puppy.plugins.wiggum import judge_config
+            registry = judge_config.load_judges()
+            for j in registry.judges:
+                items.append({
+                    "name": j.name,
+                    "model": j.model,
+                    "prompt": j.prompt,
+                    "enabled": bool(j.enabled),
+                })
+        except Exception:
+            log("list_judges failed:\n" + traceback.format_exc())
+        send({"event": "judges", "items": items})
+
+    def get_judge(self, name: str) -> None:
+        """Send one judge's full config (judge_detail event)."""
+        name = str(name or "").strip()
+        try:
+            from code_puppy.plugins.wiggum import judge_config
+            judge = judge_config.load_judges().find(name)
+            if judge is None:
+                send({"event": "error", "id": None,
+                      "message": f"unknown judge: {name}"})
+                return
+            send({
+                "event": "judge_detail",
+                "name": judge.name,
+                "model": judge.model,
+                "prompt": judge.prompt,
+                "enabled": bool(judge.enabled),
+            })
+        except Exception as exc:
+            send({"event": "error", "id": None,
+                  "message": f"get_judge failed: {type(exc).__name__}: {exc}"})
+            log(traceback.format_exc())
+
+    def save_judge(self, cmd: dict) -> None:
+        """Create or update a judge, then re-list (judges event).
+
+        ``is_new`` adds a judge; otherwise we update ``name`` in place
+        (``new_name`` renames). Empty prompt falls back to the standard
+        goal-judge prompt. Name is validated by judge_config.validate_name.
+        """
+        try:
+            from code_puppy.plugins.wiggum import judge_config
+            name = str(cmd.get("name") or "").strip()
+            model = str(cmd.get("model") or "").strip()
+            prompt = str(cmd.get("prompt") or "").strip() \
+                or judge_config.DEFAULT_JUDGE_PROMPT
+            enabled = bool(cmd.get("enabled", True))
+            is_new = bool(cmd.get("is_new", False))
+            new_name = str(cmd.get("new_name") or "").strip()
+            target_name = new_name or name
+            err = judge_config.validate_name(target_name)
+            if err:
+                send({"event": "error", "id": None,
+                      "message": f"save_judge: {err}"})
+                return
+            if not model:
+                send({"event": "error", "id": None,
+                      "message": "save_judge: a model is required"})
+                return
+            if is_new:
+                judge_config.add_judge(judge_config.JudgeConfig(
+                    name=target_name, model=model,
+                    prompt=prompt, enabled=enabled))
+            else:
+                judge_config.update_judge(
+                    name,
+                    new_name=new_name or None,
+                    model=model,
+                    prompt=prompt,
+                    enabled=enabled,
+                )
+        except Exception as exc:
+            send({"event": "error", "id": None,
+                  "message": f"save_judge failed: "
+                             f"{type(exc).__name__}: {exc}"})
+            log(traceback.format_exc())
+        self.emit_judges()
+
+    def delete_judge(self, name: str) -> None:
+        """Delete a judge, then re-list."""
+        name = str(name or "").strip()
+        try:
+            from code_puppy.plugins.wiggum import judge_config
+            if not judge_config.delete_judge(name):
+                send({"event": "error", "id": None,
+                      "message": f"delete_judge: unknown judge {name!r}"})
+        except Exception as exc:
+            send({"event": "error", "id": None,
+                  "message": f"delete_judge failed: "
+                             f"{type(exc).__name__}: {exc}"})
+            log(traceback.format_exc())
+        self.emit_judges()
+
+    def toggle_judge(self, name: str) -> None:
+        """Flip a judge's enabled flag, then re-list."""
+        name = str(name or "").strip()
+        try:
+            from code_puppy.plugins.wiggum import judge_config
+            if judge_config.toggle_judge(name) is None:
+                send({"event": "error", "id": None,
+                      "message": f"toggle_judge: unknown judge {name!r}"})
+        except Exception as exc:
+            send({"event": "error", "id": None,
+                  "message": f"toggle_judge failed: "
+                             f"{type(exc).__name__}: {exc}"})
+            log(traceback.format_exc())
+        self.emit_judges()
+
     # --- Code Puppy sessions (autosave + named contexts) --------------------
 
     def set_puppy_name(self, name: str) -> None:
@@ -2404,6 +2616,24 @@ class Bridge:
             self.delete_agent_config(cmd.get("name", ""))
         elif op == "clone_agent_config":
             self.clone_agent_config(cmd.get("name", ""))
+        elif op == "kennel_stats":
+            self.emit_kennel_stats()
+        elif op == "kennel_list_wings":
+            self.emit_kennel_wings()
+        elif op == "kennel_recent":
+            self.emit_kennel_recent(cmd)
+        elif op == "kennel_search":
+            self.emit_kennel_search(cmd)
+        elif op == "list_judges":
+            self.emit_judges()
+        elif op == "get_judge":
+            self.get_judge(cmd.get("name", ""))
+        elif op == "save_judge":
+            self.save_judge(cmd)
+        elif op == "delete_judge":
+            self.delete_judge(cmd.get("name", ""))
+        elif op == "toggle_judge":
+            self.toggle_judge(cmd.get("name", ""))
         elif op == "fs_list_dir":
             self.fs_list_dir(cmd)
         elif op == "fs_read_file":

@@ -7,7 +7,7 @@
 
 use serde_json::{Value, json};
 
-use super::{AgentConfigDraft, AskAnswer};
+use super::{AgentConfigDraft, AskAnswer, JudgeDraft};
 
 pub(super) fn prompt(id: u64, text: &str, images: &[String]) -> Value {
     let mut op = json!({ "op": "prompt", "id": id, "text": text });
@@ -186,6 +186,66 @@ pub(super) fn delete_agent_config(name: &str) -> Value {
 
 pub(super) fn clone_agent_config(name: &str) -> Value {
     json!({ "op": "clone_agent_config", "name": name })
+}
+
+// --- Puppy Kennel (read-only memory browser) ------------------------------
+
+pub(super) fn kennel_stats() -> Value {
+    json!({ "op": "kennel_stats" })
+}
+
+pub(super) fn kennel_list_wings() -> Value {
+    json!({ "op": "kennel_list_wings" })
+}
+
+/// `wings` empty -> all wings. `limit` bounds the render tail.
+pub(super) fn kennel_recent(wings: &[String], limit: u64) -> Value {
+    let mut op = json!({ "op": "kennel_recent", "limit": limit });
+    if !wings.is_empty() {
+        op["wings"] = json!(wings);
+    }
+    op
+}
+
+/// FTS5 BM25 search; `wings` empty -> all wings.
+pub(super) fn kennel_search(query: &str, wings: &[String], limit: u64) -> Value {
+    let mut op = json!({ "op": "kennel_search", "query": query, "limit": limit });
+    if !wings.is_empty() {
+        op["wings"] = json!(wings);
+    }
+    op
+}
+
+// --- Wiggum judges (goal-mode verifiers; full CRUD) -----------------------
+
+pub(super) fn list_judges() -> Value {
+    json!({ "op": "list_judges" })
+}
+
+pub(super) fn get_judge(name: &str) -> Value {
+    json!({ "op": "get_judge", "name": name })
+}
+
+/// The full judge draft from the builder. An empty `prompt` is replaced by the
+/// default goal-judge prompt sidecar-side; `new_name` (when non-empty) renames.
+pub(super) fn save_judge(d: &JudgeDraft) -> Value {
+    json!({
+        "op": "save_judge",
+        "name": d.name,
+        "new_name": d.new_name,
+        "model": d.model,
+        "prompt": d.prompt,
+        "enabled": d.enabled,
+        "is_new": d.is_new,
+    })
+}
+
+pub(super) fn delete_judge(name: &str) -> Value {
+    json!({ "op": "delete_judge", "name": name })
+}
+
+pub(super) fn toggle_judge(name: &str) -> Value {
+    json!({ "op": "toggle_judge", "name": name })
 }
 
 #[cfg(test)]
@@ -377,6 +437,87 @@ mod tests {
                 "tools": ["list_files", "edit_file"],
                 "mcp_servers": ["serena"],
                 "scope": "user"
+            })
+        );
+    }
+
+    #[test]
+    fn kennel_ops() {
+        assert_eq!(kennel_stats(), json!({"op": "kennel_stats"}));
+        assert_eq!(kennel_list_wings(), json!({"op": "kennel_list_wings"}));
+        // No wings -> the `wings` key is omitted (all wings).
+        assert_eq!(
+            kennel_recent(&[], 50),
+            json!({"op": "kennel_recent", "limit": 50})
+        );
+        let wings = vec!["repo:/x".to_string(), "user:default".to_string()];
+        assert_eq!(
+            kennel_recent(&wings, 10),
+            json!({"op": "kennel_recent", "limit": 10, "wings": ["repo:/x", "user:default"]})
+        );
+        assert_eq!(
+            kennel_search("branch reorg", &[], 25),
+            json!({"op": "kennel_search", "query": "branch reorg", "limit": 25})
+        );
+        assert_eq!(
+            kennel_search("merge", &wings, 5),
+            json!({"op": "kennel_search", "query": "merge", "limit": 5, "wings": ["repo:/x", "user:default"]})
+        );
+    }
+
+    #[test]
+    fn judge_ops() {
+        assert_eq!(list_judges(), json!({"op": "list_judges"}));
+        assert_eq!(
+            get_judge("tests-pass"),
+            json!({"op": "get_judge", "name": "tests-pass"})
+        );
+        assert_eq!(
+            delete_judge("tests-pass"),
+            json!({"op": "delete_judge", "name": "tests-pass"})
+        );
+        assert_eq!(
+            toggle_judge("tests-pass"),
+            json!({"op": "toggle_judge", "name": "tests-pass"})
+        );
+        let draft = JudgeDraft {
+            name: "tests-pass".into(),
+            new_name: String::new(),
+            model: "gpt-5".into(),
+            prompt: "Check the tests pass.".into(),
+            enabled: true,
+            is_new: true,
+        };
+        assert_eq!(
+            save_judge(&draft),
+            json!({
+                "op": "save_judge",
+                "name": "tests-pass",
+                "new_name": "",
+                "model": "gpt-5",
+                "prompt": "Check the tests pass.",
+                "enabled": true,
+                "is_new": true
+            })
+        );
+        let rename = JudgeDraft {
+            name: "old".into(),
+            new_name: "new".into(),
+            model: "gpt-5".into(),
+            prompt: String::new(),
+            enabled: false,
+            is_new: false,
+        };
+        assert_eq!(
+            save_judge(&rename),
+            json!({
+                "op": "save_judge",
+                "name": "old",
+                "new_name": "new",
+                "model": "gpt-5",
+                "prompt": "",
+                "enabled": false,
+                "is_new": false
             })
         );
     }
