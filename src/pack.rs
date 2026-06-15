@@ -72,6 +72,8 @@ impl DenState {
                 puppy,
                 user_avatar,
                 puppy_avatar,
+                user_avatar_png,
+                puppy_avatar_png,
                 color,
             } => {
                 if !self.members.iter().any(|m| &m.user == user) {
@@ -80,6 +82,8 @@ impl DenState {
                         puppy: puppy.clone(),
                         user_avatar: user_avatar.clone(),
                         puppy_avatar: puppy_avatar.clone(),
+                        user_avatar_png: user_avatar_png.clone(),
+                        puppy_avatar_png: puppy_avatar_png.clone(),
                         color: color.clone(),
                         host: false,
                         presence: Presence::Active,
@@ -258,6 +262,8 @@ impl PackClient {
         puppy: &str,
         user_avatar: &str,
         puppy_avatar: &str,
+        user_avatar_png: &str,
+        puppy_avatar_png: &str,
         waker: Arc<dyn UiWaker>,
     ) -> Result<(PackClient, Receiver<PackEvent>), String> {
         let addr = if addr.contains(':') {
@@ -287,6 +293,8 @@ impl PackClient {
             puppy: puppy.to_string(),
             user_avatar: user_avatar.to_string(),
             puppy_avatar: puppy_avatar.to_string(),
+            user_avatar_png: user_avatar_png.to_string(),
+            puppy_avatar_png: puppy_avatar_png.to_string(),
             proto: PROTO_VERSION,
         });
 
@@ -450,6 +458,8 @@ mod tests {
             "Rex",
             "",
             "",
+            "",
+            "",
             Arc::new(crate::waker::NoopWaker),
         )
         .expect("connect+join");
@@ -496,6 +506,8 @@ mod tests {
             puppy: "Rex".into(),
             user_avatar: String::new(),
             puppy_avatar: String::new(),
+            user_avatar_png: String::new(),
+            puppy_avatar_png: String::new(),
             color: "#abc".into(),
         });
         st.apply(&ServerMsg::Activity {

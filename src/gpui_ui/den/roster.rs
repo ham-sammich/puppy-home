@@ -38,6 +38,14 @@ pub fn roster_panel(args: &DenArgs) -> AnyElement {
             } else {
                 m.puppy_avatar.as_str()
             };
+            // Remote members' PHOTO pfps arrive as base64 PNG -> decode+cache to
+            // a temp file we can render (our own photo is just the local path).
+            let user_photo = (!me && !m.user_avatar_png.is_empty())
+                .then(|| avatars::cache_remote_avatar(&m.user_avatar_png))
+                .flatten();
+            let puppy_photo = (!me && !m.puppy_avatar_png.is_empty())
+                .then(|| avatars::cache_remote_avatar(&m.puppy_avatar_png))
+                .flatten();
             let agents = args
                 .den
                 .state
@@ -72,10 +80,10 @@ pub fn roster_panel(args: &DenArgs) -> AnyElement {
                                 .overflow_hidden()
                                 .text_size(px(13.))
                                 .child(if me {
-                                    // Our own card: render our real avatar
-                                    // (photo or emoji); remote members only
-                                    // ever sent an emoji.
+                                    // Our own card: render our real avatar (photo or emoji).
                                     avatars::fill_parent(args.user_avatar.as_str(), 13., 13.)
+                                } else if let Some(p) = &user_photo {
+                                    avatars::fill_parent(&p.to_string_lossy(), 13., 13.)
                                 } else {
                                     div().child(user_av.to_string()).into_any_element()
                                 }),
@@ -91,18 +99,19 @@ pub fn roster_panel(args: &DenArgs) -> AnyElement {
                         .children(m.host.then(|| tag(&t, "host")))
                         .children((!m.puppy.is_empty()).then(|| {
                             // Our own puppy can be a photo; others are emoji.
-                            let glyph: AnyElement = if me && avatars::is_photo(&args.puppy_avatar) {
+                            let photo_box = |path: String| {
                                 div()
                                     .size(px(14.))
                                     .flex_none()
                                     .rounded(px(3.))
                                     .overflow_hidden()
-                                    .child(avatars::fill_parent(
-                                        args.puppy_avatar.as_str(),
-                                        11.,
-                                        3.,
-                                    ))
+                                    .child(avatars::fill_parent(&path, 11., 3.))
                                     .into_any_element()
+                            };
+                            let glyph: AnyElement = if me && avatars::is_photo(&args.puppy_avatar) {
+                                photo_box(args.puppy_avatar.clone())
+                            } else if let Some(p) = &puppy_photo {
+                                photo_box(p.to_string_lossy().into_owned())
                             } else {
                                 div().child(puppy_av.to_string()).into_any_element()
                             };

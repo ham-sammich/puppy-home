@@ -5757,6 +5757,7 @@ dependencies = [
  "egui_extras",
  "futures",
  "gpui",
+ "image",
  "objc",
  "png 0.17.16",
  "portable-pty",

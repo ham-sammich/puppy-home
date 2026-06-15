@@ -150,6 +150,12 @@ pub struct MemberInfo {
     pub user_avatar: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub puppy_avatar: String,
+    /// Optional base64 PNG thumbnails when the member chose a PHOTO pfp (emoji
+    /// avatars leave these empty). Lets teammates render the real photo.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub user_avatar_png: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub puppy_avatar_png: String,
     /// Owner color (`#rrggbb`), relay-assigned from a palette by join order so
     /// colors are unique per room and clients never bikeshed them.
     #[serde(default)]
@@ -178,6 +184,11 @@ pub enum ClientMsg {
         user_avatar: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         puppy_avatar: String,
+        /// Optional base64 PNG thumbnails for PHOTO pfps (see MemberInfo).
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        user_avatar_png: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        puppy_avatar_png: String,
         #[serde(default)]
         proto: u32,
     },
@@ -280,6 +291,10 @@ pub enum ServerMsg {
         user_avatar: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         puppy_avatar: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        user_avatar_png: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        puppy_avatar_png: String,
         #[serde(default)]
         color: String,
     },
@@ -362,6 +377,8 @@ mod tests {
                 puppy: "Rufus".into(),
                 user_avatar: "\u{1f9d1}".into(),
                 puppy_avatar: "\u{1f436}".into(),
+                user_avatar_png: String::new(),
+                puppy_avatar_png: String::new(),
                 proto: PROTO_VERSION,
             },
             ClientMsg::Chat {
@@ -455,6 +472,8 @@ mod tests {
                         puppy: "Rex".into(),
                         user_avatar: String::new(),
                         puppy_avatar: String::new(),
+                        user_avatar_png: String::new(),
+                        puppy_avatar_png: String::new(),
                         color: "#e7ab4d".into(),
                         host: true,
                         presence: Presence::Active,
@@ -464,6 +483,8 @@ mod tests {
                         puppy: String::new(),
                         user_avatar: String::new(),
                         puppy_avatar: String::new(),
+                        user_avatar_png: String::new(),
+                        puppy_avatar_png: String::new(),
                         color: "#56c7c2".into(),
                         host: false,
                         presence: Presence::Idle,
@@ -498,6 +519,8 @@ mod tests {
                 puppy: "Biscuit".into(),
                 user_avatar: String::new(),
                 puppy_avatar: String::new(),
+                user_avatar_png: String::new(),
+                puppy_avatar_png: String::new(),
                 color: "#b79cff".into(),
             },
             ServerMsg::MemberLeft { user: "b".into() },
@@ -577,6 +600,8 @@ mod tests {
             puppy: "Rex".into(),
             user_avatar: String::new(),
             puppy_avatar: String::new(),
+            user_avatar_png: String::new(),
+            puppy_avatar_png: String::new(),
             proto: 2,
         };
         assert_eq!(
@@ -615,6 +640,8 @@ mod tests {
                 puppy: String::new(),
                 user_avatar: String::new(),
                 puppy_avatar: String::new(),
+                user_avatar_png: String::new(),
+                puppy_avatar_png: String::new(),
                 proto: 0
             }
         );

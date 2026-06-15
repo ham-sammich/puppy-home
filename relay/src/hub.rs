@@ -110,6 +110,8 @@ impl Room {
                 puppy: m.puppy.clone(),
                 user_avatar: m.user_avatar.clone(),
                 puppy_avatar: m.puppy_avatar.clone(),
+                user_avatar_png: m.user_avatar_png.clone(),
+                puppy_avatar_png: m.puppy_avatar_png.clone(),
                 color: m.color.clone(),
                 host: Some(m.join_seq) == host_seq,
                 presence: m.presence,
@@ -159,11 +161,23 @@ struct Member {
     puppy: String,
     user_avatar: String,
     puppy_avatar: String,
+    user_avatar_png: String,
+    puppy_avatar_png: String,
     color: String,
     presence: Presence,
     /// Position in the room's join order (host = smallest present).
     join_seq: u64,
     tx: Sender<String>,
+}
+
+/// The avatars a member supplies at join: emoji (always renderable everywhere)
+/// plus optional base64 PNG thumbnails when they chose a PHOTO pfp.
+#[derive(Default, Clone)]
+pub struct JoinAvatars {
+    pub user_emoji: String,
+    pub puppy_emoji: String,
+    pub user_png: String,
+    pub puppy_png: String,
 }
 
 /// The caller-supplied half of a feed entry (the room stamps the rest).
@@ -209,14 +223,12 @@ impl Hub {
     /// Add a member to a room (creating it on first join). Existing members
     /// are told (announcement + system feed line); the joiner gets the full
     /// den snapshot back: members, feed tail, kanban, shared plans.
-    #[allow(clippy::too_many_arguments)]
     pub fn join(
         &self,
         room: &str,
         user: &str,
         puppy: &str,
-        user_avatar: &str,
-        puppy_avatar: &str,
+        av: JoinAvatars,
         tx: Sender<String>,
     ) -> (u64, ServerMsg) {
         let mut inner = self.inner.lock().unwrap();
@@ -231,8 +243,10 @@ impl Hub {
         room_state.broadcast(&encode(&ServerMsg::MemberJoined {
             user: user.into(),
             puppy: puppy.into(),
-            user_avatar: user_avatar.to_string(),
-            puppy_avatar: puppy_avatar.to_string(),
+            user_avatar: av.user_emoji.clone(),
+            puppy_avatar: av.puppy_emoji.clone(),
+            user_avatar_png: av.user_png.clone(),
+            puppy_avatar_png: av.puppy_png.clone(),
             color: color.clone(),
         }));
         room_state.system_feed(if puppy.is_empty() {
@@ -245,8 +259,10 @@ impl Hub {
             Member {
                 user: user.to_string(),
                 puppy: puppy.to_string(),
-                user_avatar: user_avatar.to_string(),
-                puppy_avatar: puppy_avatar.to_string(),
+                user_avatar: av.user_emoji,
+                puppy_avatar: av.puppy_emoji,
+                user_avatar_png: av.user_png,
+                puppy_avatar_png: av.puppy_png,
                 color,
                 presence: Presence::Active,
                 join_seq,
@@ -619,7 +635,7 @@ mod tests {
         let (atx, arx) = channel();
         let (btx, brx) = channel();
 
-        let (_aid, joined_a) = hub.join("room", "alice", "Rex", "", "", atx);
+        let (_aid, joined_a) = hub.join("room", "alice", "Rex", JoinAvatars::default(), atx);
         let (members_a, feed_a, _) = snapshot(joined_a);
         assert_eq!(members_a.len(), 1);
         assert_eq!(
@@ -631,7 +647,7 @@ mod tests {
         assert_eq!(feed_a.len(), 1, "own join is narrated in the snapshot");
         assert!(drain(&arx).is_empty(), "no self-announce on join");
 
-        let (_bid, joined_b) = hub.join("room", "bob", "Biscuit", "", "", btx);
+        let (_bid, joined_b) = hub.join("room", "bob", "Biscuit", JoinAvatars::default(), btx);
         let (members_b, _, _) = snapshot(joined_b);
         let names: Vec<&str> = members_b.iter().map(|m| m.user.as_str()).collect();
         assert_eq!(names, vec!["alice", "bob"]);
@@ -657,8 +673,8 @@ mod tests {
         let hub = Hub::new();
         let (atx, arx) = channel();
         let (btx, brx) = channel();
-        let (aid, _) = hub.join("room", "alice", "", "", "", atx);
-        let (_bid, _) = hub.join("room", "bob", "", "", "", btx);
+        let (aid, _) = hub.join("room", "alice", "", JoinAvatars::default(), atx);
+        let (_bid, _) = hub.join("room", "bob", "", JoinAvatars::default(), btx);
         drain(&arx);
 
         hub.chat(aid, "hello den");
@@ -676,8 +692,8 @@ mod tests {
         let hub = Hub::new();
         let (atx, arx) = channel();
         let (btx, brx) = channel();
-        let (aid, _) = hub.join("room-one", "alice", "", "", "", atx);
-        let (_bid, _) = hub.join("room-two", "bob", "", "", "", btx);
+        let (aid, _) = hub.join("room-one", "alice", "", JoinAvatars::default(), atx);
+        let (_bid, _) = hub.join("room-two", "bob", "", JoinAvatars::default(), btx);
 
         hub.chat(aid, "secret");
         assert_eq!(drain(&arx).len(), 1);
@@ -689,8 +705,8 @@ mod tests {
         let hub = Hub::new();
         let (atx, arx) = channel();
         let (btx, _brx) = channel();
-        let (_aid, _) = hub.join("room", "alice", "", "", "", atx);
-        let (bid, _) = hub.join("room", "bob", "", "", "", btx);
+        let (_aid, _) = hub.join("room", "alice", "", JoinAvatars::default(), atx);
+        let (bid, _) = hub.join("room", "bob", "", JoinAvatars::default(), btx);
         drain(&arx);
 
         hub.leave(bid);
@@ -708,7 +724,7 @@ mod tests {
     fn claims_conflict_release_and_broadcast() {
         let hub = Hub::new();
         let (atx, arx) = channel();
-        let (_aid, _) = hub.join("room", "alice", "Rex", "", "", atx);
+        let (_aid, _) = hub.join("room", "alice", "Rex", JoinAvatars::default(), atx);
 
         // Claim succeeds, the room is told, and the list shows it.
         let r = hub.claim("room", "alice", "Rex", "src/auth.rs", "refactor");
@@ -773,7 +789,7 @@ mod tests {
     fn agent_post_reaches_members() {
         let hub = Hub::new();
         let (atx, arx) = channel();
-        let (_aid, _) = hub.join("room", "alice", "", "", "", atx);
+        let (_aid, _) = hub.join("room", "alice", "", JoinAvatars::default(), atx);
         let r = hub.post("room", "Rufus", "taking the parser");
         assert!(matches!(r, ServerMsg::PostResult { ok: true }));
         let seen = drain(&arx);
@@ -789,7 +805,7 @@ mod tests {
     fn presence_kanban_and_plans_round_trip() {
         let hub = Hub::new();
         let (atx, arx) = channel();
-        let (aid, _) = hub.join("room", "alice", "Rex", "", "", atx);
+        let (aid, _) = hub.join("room", "alice", "Rex", JoinAvatars::default(), atx);
 
         // Presence change broadcasts once; a no-op flap stays silent.
         hub.presence(aid, Presence::Idle);
@@ -828,7 +844,7 @@ mod tests {
     fn late_joiner_gets_existing_members_rosters() {
         let hub = Hub::new();
         let (atx, _arx) = channel();
-        let (aid, _) = hub.join("room", "alice", "Rex", "", "", atx);
+        let (aid, _) = hub.join("room", "alice", "Rex", JoinAvatars::default(), atx);
         // Alice reports her agents BEFORE bob joins.
         hub.roster(
             aid,
@@ -847,7 +863,7 @@ mod tests {
         );
 
         let (btx, brx) = channel();
-        let (bid, _joined) = hub.join("room", "bob", "", "", "", btx);
+        let (bid, _joined) = hub.join("room", "bob", "", JoinAvatars::default(), btx);
         hub.replay_rosters(bid); // server.rs calls this right after the snapshot
         // Bob's first messages include alice's replayed roster.
         let bob_saw = drain(&brx);
@@ -863,13 +879,13 @@ mod tests {
     fn late_joiner_gets_the_den_snapshot() {
         let hub = Hub::new();
         let (atx, _arx) = channel();
-        let (aid, _) = hub.join("room", "alice", "Rex", "", "", atx);
+        let (aid, _) = hub.join("room", "alice", "Rex", JoinAvatars::default(), atx);
         hub.chat(aid, "first!");
         hub.task_create(aid, "Webhooks", TaskColumn::InProgress, "alice", true);
         hub.plan_share(aid, "Rex", "- [ ] verify signatures");
 
         let (btx, _brx) = channel();
-        let (_bid, joined) = hub.join("room", "bob", "", "", "", btx);
+        let (_bid, joined) = hub.join("room", "bob", "", JoinAvatars::default(), btx);
         match joined {
             ServerMsg::Joined {
                 feed, tasks, plans, ..

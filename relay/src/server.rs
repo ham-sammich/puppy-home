@@ -72,15 +72,27 @@ fn handle_conn(hub: Arc<Hub>, stream: TcpStream) {
         .next()
         .and_then(|l| l.ok())
         .and_then(|l| serde_json::from_str::<ClientMsg>(&l).ok());
-    let (room, user, puppy, user_avatar, puppy_avatar, proto) = match first {
-        Some(ClientMsg::Join {
-            room,
-            user,
-            puppy,
-            user_avatar,
-            puppy_avatar,
-            proto,
-        }) => (room, user, puppy, user_avatar, puppy_avatar, proto),
+    let (room, user, puppy, user_avatar, puppy_avatar, user_avatar_png, puppy_avatar_png, proto) =
+        match first {
+            Some(ClientMsg::Join {
+                room,
+                user,
+                puppy,
+                user_avatar,
+                puppy_avatar,
+                user_avatar_png,
+                puppy_avatar_png,
+                proto,
+            }) => (
+                room,
+                user,
+                puppy,
+                user_avatar,
+                puppy_avatar,
+                user_avatar_png,
+                puppy_avatar_png,
+                proto,
+            ),
         Some(other) => {
             if let Some(reply) = coordination_reply(&hub, other) {
                 send_direct(&mut write_half, &reply);
@@ -127,8 +139,12 @@ fn handle_conn(hub: Arc<Hub>, stream: TcpStream) {
         &room,
         &user,
         puppy.trim(),
-        user_avatar.trim(),
-        puppy_avatar.trim(),
+        crate::hub::JoinAvatars {
+            user_emoji: user_avatar.trim().to_string(),
+            puppy_emoji: puppy_avatar.trim().to_string(),
+            user_png: user_avatar_png.trim().to_string(),
+            puppy_png: puppy_avatar_png.trim().to_string(),
+        },
         tx.clone(),
     );
     let _ = tx.send(serde_json::to_string(&snapshot).expect("ServerMsg serializes"));

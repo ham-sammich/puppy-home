@@ -250,6 +250,16 @@ impl RootView {
         self.den_roster_members = 0;
     }
 
+    /// Base64 PNG thumbnails of our avatars when they're PHOTOS (empty for
+    /// emoji), so den teammates can render the real photo (a local file path
+    /// is useless on their machine).
+    fn den_avatar_pngs(&self) -> (String, String) {
+        (
+            crate::gpui_ui::avatars::photo_to_thumb_b64(self.user_avatar()).unwrap_or_default(),
+            crate::gpui_ui::avatars::photo_to_thumb_b64(self.puppy_avatar()).unwrap_or_default(),
+        )
+    }
+
     /// Connect to the relay with the join form's values.
     /// Host flow: spawn the relay, then join our own den on localhost.
     fn den_host_start(&mut self, cx: &mut Context<Self>) {
@@ -273,6 +283,7 @@ impl RootView {
                     self.puppy_avatar(),
                     crate::gpui_ui::avatars::PUPPY_DEFAULT,
                 );
+                let (user_png, puppy_png) = self.den_avatar_pngs();
                 match PackClient::connect(
                     &addr,
                     &room,
@@ -280,6 +291,8 @@ impl RootView {
                     &puppy,
                     &user_av,
                     &puppy_av,
+                    &user_png,
+                    &puppy_png,
                     self.waker.clone(),
                 ) {
                     Ok((client, rx)) => {
@@ -344,6 +357,7 @@ impl RootView {
             self.puppy_avatar(),
             crate::gpui_ui::avatars::PUPPY_DEFAULT,
         );
+        let (user_png, puppy_png) = self.den_avatar_pngs();
         match PackClient::connect(
             &addr,
             &room,
@@ -351,6 +365,8 @@ impl RootView {
             &puppy,
             &user_av,
             &puppy_av,
+            &user_png,
+            &puppy_png,
             self.waker.clone(),
         ) {
             Ok((client, rx)) => {

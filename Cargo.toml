@@ -64,6 +64,10 @@ vt100 = "0.16"
 arboard = "3.4"
 png = "0.17"
 base64 = "0.22"
+# Decode + downscale a chosen photo avatar into a tiny PNG thumbnail so it can
+# travel over the den relay to teammates (a file path is local-only). Scoped
+# to common photo formats to keep compile time + binary size down.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "bmp", "webp"] }
 # Puppy Pack: share the relay's wire types (one protocol definition, both ends).
 puppy-relay = { path = "relay" }
 # Windows-only: reparent the browser plugin's native window into our window so

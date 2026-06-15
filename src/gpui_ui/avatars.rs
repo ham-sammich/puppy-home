@@ -183,6 +183,42 @@ pub fn store_photo(src: &std::path::Path, kind: AvatarKind) -> Option<String> {
     Some(dest.to_string_lossy().into_owned())
 }
 
+/// Downscale a chosen PHOTO avatar to a tiny PNG thumbnail, base64-encoded, so
+/// it can travel over the den relay to teammates (a local file path is useless
+/// on their machine). `None` for emoji/empty values or any decode failure.
+/// Rendered at <=26px, so a 96px thumbnail is plenty (a few KB on the wire).
+pub fn photo_to_thumb_b64(value: &str) -> Option<String> {
+    if value.is_empty() || !is_photo(value) {
+        return None;
+    }
+    let img = image::open(value).ok()?;
+    let thumb = img.thumbnail(96, 96).to_rgba8(); // preserves aspect, max 96px
+    let (w, h) = thumb.dimensions();
+    crate::workspace::clipboard::encode_png_base64(w as usize, h as usize, thumb.as_raw())
+}
+
+/// Decode a base64 PNG avatar received from a teammate, cache it under a temp
+/// dir, and return the file path to render. Keyed by content hash so an
+/// unchanged avatar reuses its file and a re-picked one writes a fresh one.
+pub fn cache_remote_avatar(b64: &str) -> Option<std::path::PathBuf> {
+    if b64.is_empty() {
+        return None;
+    }
+    use base64::Engine as _;
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    b64.hash(&mut h);
+    let dir = std::env::temp_dir().join("puppy-home").join("den_avatars");
+    let path = dir.join(format!("den-avatar-{:016x}.png", h.finish()));
+    if path.exists() {
+        return Some(path);
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+    std::fs::create_dir_all(&dir).ok()?;
+    std::fs::write(&path, &bytes).ok()?;
+    Some(path)
+}
+
 fn act(
     root: &Entity<RootView>,
     a: AvatarAction,
