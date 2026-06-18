@@ -23,11 +23,12 @@ use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    App, Bounds, ClipboardEntry, Context, CursorStyle, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, ImageFormat,
+    App, Bounds, ClipboardEntry, ContentMask, Context, CursorStyle, ElementId, ElementInputHandler,
+    Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, ImageFormat,
     KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
-    Pixels, Point, SharedString, Style, Subscription, TextAlign, TextRun, UTF16Selection,
-    UnderlineStyle, Window, WrappedLine, actions, div, fill, point, prelude::*, px, relative, size,
+    Pixels, Point, ScrollDelta, ScrollWheelEvent, SharedString, Style, Subscription, TextAlign,
+    TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine, actions, div, fill, point,
+    prelude::*, px, relative, size,
 };
 
 /// Caret blink half-period: solid this long, then hidden this long (~VSCode).
@@ -39,6 +40,35 @@ use super::widgets::alpha;
 
 /// Height cap, in visual rows (the mock's composer height).
 const MAX_VISIBLE_ROWS: usize = 8;
+
+/// Adjust the vertical scroll offset so the caret line stays inside the
+/// viewport, keeping a `margin` of breathing room from each edge. Pure (plain
+/// f32, no gpui types) so the offset math is unit-testable. `caret_top` and
+/// `scroll` are in content coordinates (px from the top of the laid-out text).
+fn caret_follow_offset(
+    scroll: f32,
+    caret_top: f32,
+    line_height: f32,
+    viewport: f32,
+    margin: f32,
+) -> f32 {
+    // Never let the margin eat more than the viewport (tiny boxes).
+    let margin = margin.min((viewport - line_height).max(0.0) / 2.0).max(0.0);
+    let caret_bottom = caret_top + line_height;
+    let mut s = scroll;
+    if caret_top < s + margin {
+        s = caret_top - margin; // caret above the view -> scroll up
+    } else if caret_bottom > s + viewport - margin {
+        s = caret_bottom - viewport + margin; // caret below -> scroll down
+    }
+    s.max(0.0)
+}
+
+/// Clamp a scroll offset to `[0, max(total - viewport, 0)]` — you can't scroll
+/// past the last line or above the first.
+fn clamp_scroll(scroll: f32, total: f32, viewport: f32) -> f32 {
+    scroll.clamp(0.0, (total - viewport).max(0.0))
+}
 
 actions!(
     chat_input,
@@ -219,6 +249,13 @@ pub struct ChatInput {
     last_layout: Option<std::sync::Arc<WrapLayout>>,
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
+    /// Vertical scroll within the (height-bounded) viewport, px from the top.
+    /// Always 0 in code mode (the parent scroll container handles overflow).
+    scroll_offset: Pixels,
+    /// When set, the next prepaint re-scrolls to keep the caret visible. Set
+    /// on every edit/cursor move; cleared by a manual wheel scroll so the user
+    /// can read freely until they next type/move (standard editor behavior).
+    follow_caret: bool,
     tokens: Tokens,
     /// Set by the root while the completion palette is showing: nav keys
     /// route to the palette instead of the buffer.
@@ -282,6 +319,8 @@ impl ChatInput {
             last_layout: None,
             last_bounds: None,
             is_selecting: false,
+            scroll_offset: px(0.),
+            follow_caret: true,
             tokens: Tokens::current(),
             palette_open: false,
             soft_wrap: true,
@@ -302,6 +341,9 @@ impl ChatInput {
     /// cursor moves (call wherever content or the selection changes).
     fn touch_caret(&mut self) {
         self.blink_epoch = Instant::now();
+        // Any edit or cursor move re-arms caret-follow (overriding a manual
+        // wheel scroll), so the view snaps back to track the caret.
+        self.follow_caret = true;
     }
 
     /// Is the caret in its visible half right now? Solid for the first
@@ -572,6 +614,37 @@ impl ChatInput {
         }
     }
 
+    /// Mouse-wheel scroll the bounded viewport. Code mode delegates to the
+    /// parent scroll container, so this is a no-op there. A manual scroll
+    /// drops `follow_caret` until the next edit/move (so the user can read
+    /// above the caret without the view yanking back).
+    fn on_scroll_wheel(&mut self, ev: &ScrollWheelEvent, cx: &mut Context<Self>) {
+        if !self.soft_wrap {
+            return;
+        }
+        let (Some(layout), Some(bounds)) = (self.last_layout.as_ref(), self.last_bounds.as_ref())
+        else {
+            return;
+        };
+        let line_height = f32::from(layout.line_height);
+        let dy = match ev.delta {
+            ScrollDelta::Lines(p) => p.y * line_height,
+            ScrollDelta::Pixels(p) => f32::from(p.y),
+        };
+        if dy == 0.0 {
+            return;
+        }
+        let total = f32::from(layout.total_height);
+        let viewport = f32::from(bounds.size.height);
+        // Wheel up (positive y) reveals earlier lines -> smaller offset.
+        let next = clamp_scroll(f32::from(self.scroll_offset) - dy, total, viewport);
+        if next != f32::from(self.scroll_offset) {
+            self.scroll_offset = px(next);
+            self.follow_caret = false;
+            cx.notify();
+        }
+    }
+
     fn show_character_palette(
         &mut self,
         _: &ShowCharacterPalette,
@@ -705,7 +778,12 @@ impl ChatInput {
             return 0;
         };
         layout.offset_for_point(
-            point(position.x - bounds.left(), position.y - bounds.top()),
+            // Add the scroll offset back so a click in a scrolled view maps to
+            // the right text position (the painted lines are shifted up by it).
+            point(
+                position.x - bounds.left(),
+                position.y - bounds.top() + self.scroll_offset,
+            ),
             self.content.len(),
         )
     }
@@ -721,6 +799,7 @@ impl ChatInput {
             self.selected_range = self.selected_range.end..self.selected_range.start;
         }
         self.typing_run = false; // selecting ends the current typing run
+        self.touch_caret(); // keep the caret solid + follow it while selecting
         cx.notify()
     }
 
@@ -944,9 +1023,12 @@ impl EntityInputHandler for ChatInput {
         let layout = self.last_layout.as_ref()?;
         let range = self.range_from_utf16(&range_utf16);
         let p = layout.pos_for_offset(range.start)?;
+        // Shift by the scroll offset so the IME candidate window tracks the
+        // visible caret, not the content-space position.
+        let y = bounds.top() + p.y - self.scroll_offset;
         Some(Bounds::from_corners(
-            point(bounds.left() + p.x, bounds.top() + p.y),
-            point(bounds.left() + p.x, bounds.top() + p.y + layout.line_height),
+            point(bounds.left() + p.x, y),
+            point(bounds.left() + p.x, y + layout.line_height),
         ))
     }
 
@@ -973,6 +1055,8 @@ struct PrepaintState {
     layout: Option<std::sync::Arc<WrapLayout>>,
     cursor: Option<PaintQuad>,
     selections: Vec<PaintQuad>,
+    /// Vertical scroll applied to the painted content this frame.
+    scroll: Pixels,
 }
 
 impl IntoElement for TextElement {
@@ -1068,7 +1152,16 @@ impl gpui::Element for TextElement {
                 }
                 if state.soft_wrap {
                     let layout = state.cached_layout(f32::from(avail) as i32, window);
-                    let max = line_height * MAX_VISIBLE_ROWS as f32;
+                    let row_cap = line_height * MAX_VISIBLE_ROWS as f32;
+                    // Also bound the viewport to a definite container height so a
+                    // SHORT box (e.g. a 3-row commit box) caps the visible area to
+                    // what actually fits — the rest then scrolls internally,
+                    // rather than overflowing past the box (the B1 clip bug).
+                    let height_cap = known.height.unwrap_or(match available.height {
+                        gpui::AvailableSpace::Definite(h) => h,
+                        _ => row_cap,
+                    });
+                    let max = row_cap.min(height_cap).max(line_height);
                     size(avail, layout.total_height.min(max).max(line_height))
                 } else {
                     // Code mode: width = widest line (horizontal scroll),
@@ -1103,6 +1196,9 @@ impl gpui::Element for TextElement {
         let cursor_offset = input.cursor_offset();
         let marked = input.marked_range.clone();
         let t = input.tokens;
+        let soft_wrap = input.soft_wrap;
+        let mut scroll = f32::from(input.scroll_offset);
+        let follow = input.follow_caret;
         let style = window.text_style();
 
         let placeholder = content.is_empty();
@@ -1116,7 +1212,7 @@ impl gpui::Element for TextElement {
                 window,
             ))
         } else {
-            let key = if input.soft_wrap {
+            let key = if soft_wrap {
                 f32::from(bounds.size.width) as i32
             } else {
                 -1
@@ -1124,6 +1220,28 @@ impl gpui::Element for TextElement {
             input.cached_layout(key, window)
         };
         let _ = (style, marked);
+
+        // Vertical scroll: keep the caret in view (soft-wrap only), then clamp.
+        // Code mode scrolls via the parent container, so it always stays 0.
+        let viewport = f32::from(bounds.size.height);
+        let total = f32::from(layout.total_height);
+        let line_h = f32::from(layout.line_height);
+        if soft_wrap {
+            if follow
+                && !placeholder
+                && let Some(p) = layout.pos_for_offset(cursor_offset)
+            {
+                let margin = line_h.min(viewport / 4.0);
+                scroll = caret_follow_offset(scroll, f32::from(p.y), line_h, viewport, margin);
+            }
+            scroll = clamp_scroll(scroll, total, viewport);
+        } else {
+            scroll = 0.0;
+        }
+        let scroll_px = px(scroll);
+        // Persist so paint + mouse/IME geometry all agree on this frame's offset.
+        self.input
+            .update(cx, |inp, _| inp.scroll_offset = scroll_px);
 
         let mut selections = Vec::new();
         let mut cursor = None;
@@ -1142,7 +1260,7 @@ impl gpui::Element for TextElement {
             };
             cursor = Some(fill(
                 Bounds::new(
-                    point(bounds.left() + p.x, bounds.top() + p.y),
+                    point(bounds.left() + p.x, bounds.top() + p.y - scroll_px),
                     size(px(2.), layout.line_height),
                 ),
                 t.accent,
@@ -1163,8 +1281,8 @@ impl gpui::Element for TextElement {
                 if x1 > x0 {
                     selections.push(fill(
                         Bounds::from_corners(
-                            point(bounds.left() + x0, bounds.top() + y),
-                            point(bounds.left() + x1, bounds.top() + y + lh),
+                            point(bounds.left() + x0, bounds.top() + y - scroll_px),
+                            point(bounds.left() + x1, bounds.top() + y + lh - scroll_px),
                         ),
                         sel,
                     ));
@@ -1176,6 +1294,7 @@ impl gpui::Element for TextElement {
             layout: Some(layout),
             cursor,
             selections,
+            scroll: scroll_px,
         }
     }
 
@@ -1195,29 +1314,40 @@ impl gpui::Element for TextElement {
             ElementInputHandler::new(bounds, self.input.clone()),
             cx,
         );
-        for sel in prepaint.selections.drain(..) {
-            window.paint_quad(sel);
-        }
+        let scroll = prepaint.scroll;
+        let selections = std::mem::take(&mut prepaint.selections);
         let layout = prepaint.layout.take().unwrap();
-        for (i, line) in layout.lines.iter().enumerate() {
-            let origin = point(bounds.origin.x, bounds.origin.y + layout.y_offsets[i]);
-            let _ = line.paint(
-                origin,
-                layout.line_height,
-                TextAlign::Left,
-                None,
-                window,
-                cx,
-            );
-        }
-        // Caret paints only while focused AND in the visible half of the
-        // blink cycle (a freshly-focused or actively-typing caret is solid).
-        if focus_handle.is_focused(window)
-            && self.input.read(cx).caret_on()
-            && let Some(cursor) = prepaint.cursor.take()
-        {
-            window.paint_quad(cursor);
-        }
+        // Caret paints only while focused AND in the visible half of the blink
+        // cycle (a freshly-focused or actively-typing caret is solid). Resolve
+        // it here so the mask closure doesn't need `cx` for the focus read.
+        let caret = (focus_handle.is_focused(window) && self.input.read(cx).caret_on())
+            .then(|| prepaint.cursor.take())
+            .flatten();
+        // Clip every glyph/quad to the element's viewport so the scrolled-out
+        // rows (above/below) don't bleed past the bounded box (closes the B1
+        // "content past N rows clips with no internal scroll" limitation).
+        window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            for sel in selections {
+                window.paint_quad(sel);
+            }
+            for (i, line) in layout.lines.iter().enumerate() {
+                let origin = point(
+                    bounds.origin.x,
+                    bounds.origin.y + layout.y_offsets[i] - scroll,
+                );
+                let _ = line.paint(
+                    origin,
+                    layout.line_height,
+                    TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                );
+            }
+            if let Some(cursor) = caret {
+                window.paint_quad(cursor);
+            }
+        });
         self.input.update(cx, |input, _| {
             input.last_layout = Some(layout);
             input.last_bounds = Some(bounds);
@@ -1363,6 +1493,9 @@ impl Render for ChatInput {
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
+            .on_scroll_wheel(
+                cx.listener(|this, ev: &ScrollWheelEvent, _, cx| this.on_scroll_wheel(ev, cx)),
+            )
             .text_size(px(13.))
             .child(TextElement { input: cx.entity() })
     }
@@ -1392,5 +1525,64 @@ mod tests {
         assert_eq!(next_word_boundary(s, 3), 9); // end of "cargo"
         assert_eq!(next_word_boundary(s, 18), 19);
         assert_eq!(next_word_boundary(s, 19), 19);
+    }
+
+    // Viewport 100px, 5 rows of 20px each (total 100), caret line height 20.
+    #[test]
+    fn caret_follow_scrolls_down_when_caret_below() {
+        // Caret on a line at content-y 180 (row 9), viewport 100, scroll 0.
+        // With no margin the view must show [80, 180+20=200] -> scroll 100.
+        let s = caret_follow_offset(0.0, 180.0, 20.0, 100.0, 0.0);
+        assert_eq!(s, 100.0);
+    }
+
+    #[test]
+    fn caret_follow_keeps_a_margin() {
+        // Same caret, 10px margin: bottom must clear viewport - margin.
+        // scroll = caret_bottom - viewport + margin = 200 - 100 + 10 = 110.
+        let s = caret_follow_offset(0.0, 180.0, 20.0, 100.0, 10.0);
+        assert_eq!(s, 110.0);
+    }
+
+    #[test]
+    fn caret_follow_scrolls_up_when_caret_above() {
+        // Scrolled to 100, caret jumps up to content-y 40 (row 2).
+        // caret_top(40) < scroll(100)+margin(10) -> scroll = 40 - 10 = 30.
+        let s = caret_follow_offset(100.0, 40.0, 20.0, 100.0, 10.0);
+        assert_eq!(s, 30.0);
+    }
+
+    #[test]
+    fn caret_follow_noop_when_already_visible() {
+        // Caret at y=40 (row 2), scroll 0, viewport 100 -> already in view.
+        let s = caret_follow_offset(0.0, 40.0, 20.0, 100.0, 10.0);
+        assert_eq!(s, 0.0);
+    }
+
+    #[test]
+    fn caret_follow_never_negative() {
+        // Caret near the very top can't push the offset below zero.
+        let s = caret_follow_offset(0.0, 0.0, 20.0, 100.0, 10.0);
+        assert_eq!(s, 0.0);
+    }
+
+    #[test]
+    fn caret_follow_margin_clamped_on_tiny_viewport() {
+        // Viewport barely taller than a line: the margin can't exceed half the
+        // slack, so the math stays sane (no overshoot / negative).
+        let s = caret_follow_offset(0.0, 100.0, 20.0, 24.0, 50.0);
+        // margin clamped to (24-20)/2 = 2; caret_bottom 120 > 0+24-2 ->
+        // scroll = 120 - 24 + 2 = 98.
+        assert_eq!(s, 98.0);
+    }
+
+    #[test]
+    fn clamp_scroll_bounds() {
+        // total 300, viewport 100 -> max scroll 200.
+        assert_eq!(clamp_scroll(0.0, 300.0, 100.0), 0.0);
+        assert_eq!(clamp_scroll(250.0, 300.0, 100.0), 200.0); // past the end
+        assert_eq!(clamp_scroll(-10.0, 300.0, 100.0), 0.0); // above the top
+        // Content fits -> no scroll possible.
+        assert_eq!(clamp_scroll(50.0, 80.0, 100.0), 0.0);
     }
 }
